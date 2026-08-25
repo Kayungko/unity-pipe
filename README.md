@@ -4,12 +4,17 @@
 
 **自维护的 Unity Pipeline 薄客户端 · Unity 2022 适配包分发 · AI Harness 插件包**
 
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![Deps](https://img.shields.io/badge/deps-zero%20(stdlib%20only)-success)](go.mod)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](cmd/upipe)
-[![License: MIT (code)](https://img.shields.io/badge/license-MIT%20(code%20only)-blue)](LICENSE)
-[![Repo: PRIVATE](https://img.shields.io/badge/repo-PRIVATE%20%20contains%20Unity%20package-red)](LICENSE-NOTES.md)
-[![Release](https://img.shields.io/badge/release-v0.1.0-orange)](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.0)
+[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white&style=flat-square)](https://go.dev)
+[![Deps](https://img.shields.io/badge/deps-zero%20(stdlib%20only)-success?style=flat-square)](go.mod)
+[![License: MIT (code)](https://img.shields.io/badge/license-MIT%20(code%20only)-blue?style=flat-square)](LICENSE)
+[![Repo: PRIVATE](https://img.shields.io/badge/repo-PRIVATE%20%20contains%20Unity%20package-red?style=flat-square)](LICENSE-NOTES.md)
+
+[![快速上手](https://img.shields.io/badge/快速上手-5%20分钟跑通-2563eb?style=flat-square)](#快速开始)
+[![使用流程](https://img.shields.io/badge/使用流程-安装到日常-2563eb?style=flat-square)](#使用流程)
+[![协议参考](https://img.shields.io/badge/docs-PROTOCOL.md-475569?style=flat-square)](docs/PROTOCOL.md)
+[![迁移指南](https://img.shields.io/badge/docs-MIGRATION.md-475569?style=flat-square)](docs/MIGRATION.md)
+[![适配记录](https://img.shields.io/badge/package-ADAPTATION--2022.md-475569?style=flat-square)](package/ADAPTATION-2022.md)
+[![更新日志](https://img.shields.io/badge/CHANGELOG-v0.1.1-d97706?style=flat-square)](CHANGELOG.md)
 
 </div>
 
@@ -34,19 +39,86 @@ Unity 官方 `unity` CLI 是闭源单二进制，`pipeline install` 硬性要求
 
 ```mermaid
 flowchart LR
-    U["Agent / 人"] -->|"upipe &lt;cmd&gt;"| CLI["internal/cli<br/>分发 · 信封渲染 · 退出码"]
-    CLI --> CMD["internal/commands<br/>等待策略封装"]
-    CMD -->|"纯逻辑依赖"| P["internal/protocol<br/>模型 · 端点 · 发现<br/>重试梯 · 轮询状态机<br/>（零 IO，移植边界）"]
-    P <-->|"Transport 接口"| T["internal/transport<br/>net/http keep-alive<br/>（唯一 IO 点）"]
-    T -->|"Bearer + 端口文件<br/>127.0.0.1:7800-7849"| E["Unity Editor<br/>com.unity.pipeline 包"]
+    U["Agent / 人"] -->|"upipe &lt;cmd&gt;"| CLI
 
-    style P fill:#e8f5e9,stroke:#2e7d32
-    style E fill:#e3f2fd,stroke:#1565c0
+    subgraph upipe["upipe · 本仓库（Go 单二进制）"]
+        CLI["cli<br/>分发 · 信封渲染 · 退出码"] --> CMD["commands<br/>子命令等待策略"]
+        CMD -->|"纯逻辑依赖"| P["protocol<br/>模型 · 端点 · 发现<br/>重试梯 · 轮询状态机<br/>（零 IO · 移植边界）"]
+        P <-->|"Transport 接口"| T["transport<br/>net/http keep-alive<br/>（唯一 IO 点）"]
+    end
+
+    T -->|"Bearer + 端口文件<br/>127.0.0.1:7800~7849"| E["Unity Editor<br/>com.unity.pipeline 包"]
+
+    classDef user fill:#64748b,stroke:none,color:#f8fafc
+    classDef layer fill:#1e293b,stroke:none,color:#e2e8f0
+    classDef core fill:#059669,stroke:none,color:#ecfdf5
+    classDef editor fill:#dbeafe,stroke:none,color:#1e3a8a
+    class U user
+    class CLI,CMD,T layer
+    class P core
+    class E editor
+    style upipe fill:#f8fafc,stroke:#cbd5e1,color:#475569
 ```
 
 分层单向依赖 `cli → commands → protocol ← transport` 由 [`layering_test.go`](layering_test.go)（go/parser import lint）**强制执行**；`protocol` 层零 IO，是未来 daemon 化 / 换语言移植的机械翻译边界。
 
 域重载是协议核心难点：端口与 token 会被重写、连接会断——`upipe` 的重试梯**每轮重读端口文件**自动跟随，轮询状态机容忍断连抖动。
+
+## 使用流程
+
+从零到日常使用的完整路径，按顺序走一遍即可：
+
+### ① 首次安装（一次性）
+
+```powershell
+git clone https://github.com/Kayungko/unity-pipe.git E:\unity-pipe
+cd E:\unity-pipe
+go build -o dist/upipe.exe ./cmd/upipe        # 或直接从 Release 下载 upipe.exe
+Copy-Item dist\upipe.exe C:\Users\admin\bin\   # 放进 PATH 目录（C:\Users\admin\bin 已在 PATH）
+```
+
+### ② 给 Unity 2022 工程装适配包（每工程一次性）
+
+```powershell
+go run ./package/build                                                   # 产出 dist\*.tgz（或用 Release 资产）
+upipe pkg-install --project-path E:\path\to\project --source dist\com.unity.pipeline-0.5.0-2022.1.tgz --dry-run
+# 预览 diff 计划无异议后，去掉 --dry-run 正式安装；P4 工作区会提示先 p4 edit
+```
+
+装好后**打开该工程的 Unity Editor**（包随编辑器自动启动 HTTP 服务，端口文件出现在 `Library/Pipeline/.unity-pipeline-port`）。
+
+### ③ 安装 AI Harness 技能（一次性，双 harness）
+
+```powershell
+upipe plugin install      # 在仓库目录内执行 → ~/.claude/skills + ~/.codex/skills，旧版自动备份
+```
+
+### ④ 日常使用（Agent 或手动）
+
+```powershell
+# 每次开工：确认编辑器在线并解锁后台工作
+upipe status                                        # ready 才继续
+upipe exec set_autotick --set enable=true           # 必开：防止失焦时编译/测试卡死
+
+# 改代码 → 编译 → 测试（核心循环）
+#   ... 编辑 .cs 文件 ...
+upipe recompile                                     # 自动轮询过域重载至 completed/up_to_date
+upipe test --mode editor --filter MyNamespace       # 失败退出码 20，详情在 error.data
+
+# 即席求值 / 其他命令
+upipe eval "return 2 + 2;"
+upipe commands                                      # 浏览该实例全部可用命令
+upipe exec <任意命令> --set k=v                      # 未封装命令一律直通
+```
+
+> 新建的 `.cs` 文件首次参与编译前需 `upipe eval "UnityEditor.AssetDatabase.Refresh();"` 触发导入（已知行为，详见协议陷阱 #6）。
+
+### ⑤ 适配包升级（有新版本时）
+
+```powershell
+# 改 package/com.unity.pipeline → go run ./package/build → 同 ② 安装；版本号策略见 ADAPTATION-2022.md
+upipe pkg-status --project-path <project>           # 随时对比工程内版本 vs 仓库版本
+```
 
 ## 快速开始
 
