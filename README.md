@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-  <img src="assets/logo.svg" width="400" alt="upipe · Unity Editor Pipeline">
+  <img src="assets/logo.svg" width="400" alt="UPIPE · Unity Editor Pipeline">
 </picture>
 
 **自维护的 Unity Pipeline 薄客户端 · Unity 2022 适配包分发 · AI Harness 插件包**
