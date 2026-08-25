@@ -34,6 +34,8 @@ func All() []SubCommand {
 		JobCommand(),
 		JobCancelCommand(),
 		ProgressCommand(),
+		PkgStatusCommand(),
+		PkgInstallCommand(),
 	}
 }
 

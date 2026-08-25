@@ -1,0 +1,449 @@
+diff --git a/upstream/Editor/Commands/Assets/AssetCommands.cs b/com.unity.pipeline/Editor/Commands/Assets/AssetCommands.cs
+index e31f217..6ce2473 100644
+--- a/upstream/Editor/Commands/Assets/AssetCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Assets/AssetCommands.cs
+@@ -7,6 +7,10 @@ using Unity.Pipeline.Models;
+ using UnityEditor;
+ using UnityEngine;
+ using Object = UnityEngine.Object;
++#if !UNITY_6000_0_OR_NEWER
++// Unity 2022 compatibility: PhysicMaterial was renamed to PhysicsMaterial in Unity 6.
++using PhysicsMaterial = UnityEngine.PhysicMaterial;
++#endif
+ 
+ namespace Unity.Pipeline.Editor.Commands.Assets
+ {
+diff --git a/upstream/Editor/Commands/Materials/MaterialCommands.cs b/com.unity.pipeline/Editor/Commands/Materials/MaterialCommands.cs
+index af34ff1..481b5f8 100644
+--- a/upstream/Editor/Commands/Materials/MaterialCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Materials/MaterialCommands.cs
+@@ -46,7 +46,13 @@ namespace Unity.Pipeline.Editor.Commands.Materials
+                 // rawRenderQueue is -1 when the material inherits from the shader and a positive
+                 // integer when explicitly overridden — returning the raw value preserves the
+                 // round-trip contract with set_material_properties renderQueue:-1 (inherit).
++#if UNITY_6000_0_OR_NEWER
+                 RenderQueue = mat.rawRenderQueue,
++#else
++                // Unity 2022 compatibility: rawRenderQueue is Unity 6+; renderQueue carries the same
++                // "explicit value or -1 = inherit from shader" contract on 2022.
++                RenderQueue = mat.renderQueue,
++#endif
+                 EnabledKeywords = GetEnabledKeywords(mat),
+             };
+ 
+diff --git a/upstream/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs b/com.unity.pipeline/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs
+index aefac43..2fd6edb 100644
+--- a/upstream/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs
+@@ -42,7 +42,7 @@ namespace Unity.Pipeline.Editor.Commands.ProjectSettings
+                     return ProjectSettingsResponse.Fail(Group, $"'{settings.RenderPipelineAsset}' is not a RenderPipelineAsset.");
+             }
+ 
+-            var current = GraphicsSettings.defaultRenderPipeline;
++            var current = DefaultPipeline;
+             if (current == asset)
+                 return NoChanges();
+ 
+@@ -52,7 +52,7 @@ namespace Unity.Pipeline.Editor.Commands.ProjectSettings
+ 
+             void Apply()
+             {
+-                GraphicsSettings.defaultRenderPipeline = asset;
++                DefaultPipeline = asset;
+                 AssetDatabase.SaveAssets();
+             }
+ 
+@@ -66,9 +66,31 @@ namespace Unity.Pipeline.Editor.Commands.ProjectSettings
+             return response;
+         }
+ 
++        // Unity 2022 compatibility: GraphicsSettings.renderPipelineAsset was renamed to
++        // defaultRenderPipeline in Unity 6.
++        static RenderPipelineAsset DefaultPipeline
++        {
++            get
++            {
++#if UNITY_6000_0_OR_NEWER
++                return GraphicsSettings.defaultRenderPipeline;
++#else
++                return GraphicsSettings.renderPipelineAsset;
++#endif
++            }
++            set
++            {
++#if UNITY_6000_0_OR_NEWER
++                GraphicsSettings.defaultRenderPipeline = value;
++#else
++                GraphicsSettings.renderPipelineAsset = value;
++#endif
++            }
++        }
++
+         static Dictionary<string, object> Read()
+         {
+-            var srp = GraphicsSettings.defaultRenderPipeline;
++            var srp = DefaultPipeline;
+             return new Dictionary<string, object>
+             {
+                 ["defaultRenderPipeline"] = srp != null ? srp.name : null,
+diff --git a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta
+index 1fddefb..d9a356d 100644
+--- a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta
++++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta
+@@ -2,7 +2,7 @@ fileFormatVersion: 2
+ guid: b5a1f47d969a4054bbbf0bc7cc231ee5
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints: []
+@@ -11,37 +11,46 @@ PluginImporter:
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 1
+-      settings:
+-        Exclude Editor: 0
+-        Exclude Linux64: 0
+-        Exclude OSXUniversal: 0
+-        Exclude Win: 0
+-        Exclude Win64: 0
+-    Editor:
++      settings: {}
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    Win64:
++        CPU: x86
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
++        CPU: x86_64
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+diff --git a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta
+index 38feacc..32012aa 100644
+--- a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta
++++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta
+@@ -2,7 +2,7 @@ fileFormatVersion: 2
+ guid: ff3508870465d8e4b83e5a2c71492756
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints: []
+@@ -11,37 +11,46 @@ PluginImporter:
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 1
+-      settings:
+-        Exclude Editor: 0
+-        Exclude Linux64: 0
+-        Exclude OSXUniversal: 0
+-        Exclude Win: 0
+-        Exclude Win64: 0
+-    Editor:
++      settings: {}
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    Win64:
++        CPU: x86
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
++        CPU: x86_64
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+diff --git a/upstream/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta
+index 3019523..e3e6f38 100644
+--- a/upstream/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta
++++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta
+@@ -2,7 +2,7 @@ fileFormatVersion: 2
+ guid: bedf8ea7477e57d46afe86233f846897
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints: []
+@@ -11,37 +11,46 @@ PluginImporter:
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 1
+-      settings:
+-        Exclude Editor: 0
+-        Exclude Linux64: 0
+-        Exclude OSXUniversal: 0
+-        Exclude Win: 0
+-        Exclude Win64: 0
+-    Editor:
++      settings: {}
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    Win64:
++        CPU: x86
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
++        CPU: x86_64
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+diff --git a/upstream/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta
+index ed2ffdf..5142fde 100644
+--- a/upstream/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta
++++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta
+@@ -2,7 +2,7 @@ fileFormatVersion: 2
+ guid: 7e46a81867cf8f24a859c42b98fe7138
+ PluginImporter:
+   externalObjects: {}
+-  serializedVersion: 3
++  serializedVersion: 2
+   iconMap: {}
+   executionOrder: {}
+   defineConstraints: []
+@@ -11,37 +11,46 @@ PluginImporter:
+   isExplicitlyReferenced: 0
+   validateReferences: 1
+   platformData:
+-    Any:
++  - first:
++      Any: 
++    second:
+       enabled: 1
+-      settings:
+-        Exclude Editor: 0
+-        Exclude Linux64: 0
+-        Exclude OSXUniversal: 0
+-        Exclude Win: 0
+-        Exclude Win64: 0
+-    Editor:
++      settings: {}
++  - first:
++      Editor: Editor
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+         DefaultValueInitialized: true
+         OS: AnyOS
+-    Linux64:
++  - first:
++      Standalone: Linux64
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    OSXUniversal:
++  - first:
++      Standalone: OSXUniversal
++    second:
+       enabled: 1
+       settings:
+         CPU: AnyCPU
+-    Win:
++  - first:
++      Standalone: Win
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    Win64:
++        CPU: x86
++  - first:
++      Standalone: Win64
++    second:
+       enabled: 1
+       settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
++        CPU: x86_64
++  - first:
++      Windows Store Apps: WindowsStoreApps
++    second:
+       enabled: 0
+       settings:
+         CPU: AnyCPU
+diff --git a/upstream/Runtime/Unity.Pipeline.asmdef b/com.unity.pipeline/Runtime/Unity.Pipeline.asmdef
+index c5b1a79..47d4d83 100644
+--- a/upstream/Runtime/Unity.Pipeline.asmdef
++++ b/com.unity.pipeline/Runtime/Unity.Pipeline.asmdef
+@@ -1,9 +1,7 @@
+ {
+     "name": "Unity.Pipeline",
+     "rootNamespace": "Unity.Pipeline",
+-    "references": [
+-        "Unity.InputSystem"
+-    ],
++    "references": [],
+     "includePlatforms": [],
+     "excludePlatforms": [],
+     "allowUnsafeCode": false,
+diff --git a/upstream/package.json b/com.unity.pipeline/package.json
+index 1f099f8..2188f69 100644
+--- a/upstream/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1 +1,38 @@
+-{"name":"com.unity.pipeline","displayName":"Unity Pipeline","version":"0.5.0-exp.1","unity":"6000.0","category":"Pipeline","description":"This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)","keywords":["pipeline","connected","authoring","hotreload"],"dependencies":{"com.unity.test-framework":"1.1.33","com.unity.modules.jsonserialize":"1.0.0","com.unity.nuget.newtonsoft-json":"3.0.2","com.unity.nuget.mono-cecil":"1.11.6","com.unity.modules.uielements":"1.0.0","com.unity.modules.screencapture":"1.0.0"},"samples":[{"displayName":"Hot Reload Examples","description":"In-place [HotReload] editing and override-file ([HotReloadOverrideMethod]) hot reload examples.","path":"Samples~/HotReload"}],"repository":{"revision":"17df0ac8d6533a8c22830c89dc85a24c01f30ade","type":"git","url":"https://github.cds.internal.unity3d.com/unity/com.unity.pipeline.git"},"documentationUrl":"https://docs.unity3d.com/Packages/com.unity.pipeline@0.5/manual/index.html","_upm":{"changelog":"- New `GET /api/progress` endpoint: the currently executing command's task progress, served off the main thread so it answers even while a long synchronous command has the Editor blocked. Command authors report via the new `CliProgress.Report(title, info, current, total, progress)` API (thread-safe, callable from a blocked main thread) or the `CliEditorProgress.DisplayProgressBar` drop-in wrappers around `EditorUtility.DisplayProgressBar`; running `UnityEditor.Progress` items are mirrored automatically. Consumed by the `unity` CLI to render live terminal progress bars during `unity command` / `unity run --command`. (CLI-488, coordinated with CLI-335)\n- Detached command jobs (CLI-335): `POST /api/exec` with `\"job\": true` returns a job id immediately and runs the command in the background — poll `GET /api/job?id=…` for state, live progress, and the retained result, so a client can reattach and collect the outcome after its own HTTP timeout. `POST /api/job/cancel` cancels a queued job outright and requests cooperative cancellation of a running one (long-running command/eval code can check the new public `PipelineCancellation` API). Results are retained for 1 hour / last 100 jobs; jobs do not survive domain reloads.\n- The `eval` timeout cap is raised from 30 seconds to 24 hours (CLI-335) — long evaluations are legitimate now that clients can set custom timeouts or detach and reattach.\n- The HTTP server now processes requests concurrently: an in-flight `/api/exec` command no longer blocks every other request (`/api/status` probes and `/api/progress` polls answer immediately, so a busy Editor no longer looks unreachable during a long command). Command execution itself is still strictly serialized — one `/api/exec` at a time, queued in arrival order, exactly as before. (CLI-335)\n- Hardening for the above: a command's own timeout (not a fixed 60s) now governs how long `/api/exec` waits for it, `editor_status`/`test_status` queue behind the same exec gate instead of racing an in-flight command, and progress/job state is owned per server instance so a test server can never cross-attribute progress or job cancellation with the live server. Detached jobs are capped at 100 queued/running at once — further submissions get `429` until some finish. (CLI-335)\n- Fix `executedAt` being returned as the zero-value instead of the actual execution time for `eval`/`eval_file`, `hot-reload`, and `run_tests`/`test_status`.\n- New `audit` / `audit_status` commands: start a Project Auditor static-analysis scan and poll it, producing a CSV of the reported issues (`Category, Severity, Areas, Description, RelativePath, Line, DescriptorId, Recommendation`) for a client or coding agent to act on. Project Auditor is reached by reflection, so the package still compiles and runs in Editors without it, and `--categories` works against both its deployments. An Editor whose Project Auditor has no analysis rules — in a built-in-module Editor these ship in the separate `com.unity.project-auditor-rules` package — reports `unavailable` and names the package to install, rather than an empty scan that reads as a clean project.\n- [UUM-148802] Fix `get_console_logs`/`clear_console` and `console` silently losing all console capture after exiting Play Mode (recovering only on the next recompile): re-subscribe to Unity's log callback on every play-mode transition instead of only once at domain load.\n- [UUM-148605] Persist `set_autotick`'s enabled/interval state in SessionState so it survives a domain reload instead of silently turning itself off after every recompile. Add a `persist` flag (default `true`) to opt a one-off/expensive setting (e.g. `interval_ms=0`) out of that persistence.\n- Emit a busy/settling signal while the Editor is still importing/compiling after the server starts (cold project import), instead of letting early commands fail with an opaque null-data envelope. `/api/status` reports `settling` (withholding `ready`) until the Editor is first seen idle, and `/api/exec` rejects main-thread commands during that window with HTTP 503 and a structured envelop"}}
+\ No newline at end of file
++{
++  "name": "com.unity.pipeline",
++  "displayName": "Unity Pipeline",
++  "version": "0.5.0-2022.1",
++  "unity": "2022.3",
++  "category": "Pipeline",
++  "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",
++  "keywords": [
++    "pipeline",
++    "connected",
++    "authoring",
++    "hotreload"
++  ],
++  "dependencies": {
++    "com.unity.test-framework": "1.1.33",
++    "com.unity.modules.jsonserialize": "1.0.0",
++    "com.unity.nuget.newtonsoft-json": "3.0.2",
++    "com.unity.nuget.mono-cecil": "1.11.6",
++    "com.unity.modules.uielements": "1.0.0",
++    "com.unity.modules.screencapture": "1.0.0"
++  },
++  "samples": [
++    {
++      "displayName": "Hot Reload Examples",
++      "description": "In-place [HotReload] editing and override-file ([HotReloadOverrideMethod]) hot reload examples.",
++      "path": "Samples~/HotReload"
++    }
++  ],
++  "repository": {
++    "revision": "17df0ac8d6533a8c22830c89dc85a24c01f30ade",
++    "type": "git",
++    "url": "https://github.cds.internal.unity3d.com/unity/com.unity.pipeline.git"
++  },
++  "documentationUrl": "https://docs.unity3d.com/Packages/com.unity.pipeline@0.5/manual/index.html",
++  "_upm": {
++    "changelog": "- New `GET /api/progress` endpoint: the currently executing command's task progress, served off the main thread so it answers even while a long synchronous command has the Editor blocked. Command authors report via the new `CliProgress.Report(title, info, current, total, progress)` API (thread-safe, callable from a blocked main thread) or the `CliEditorProgress.DisplayProgressBar` drop-in wrappers around `EditorUtility.DisplayProgressBar`; running `UnityEditor.Progress` items are mirrored automatically. Consumed by the `unity` CLI to render live terminal progress bars during `unity command` / `unity run --command`. (CLI-488, coordinated with CLI-335)\n- Detached command jobs (CLI-335): `POST /api/exec` with `\"job\": true` returns a job id immediately and runs the command in the background — poll `GET /api/job?id=…` for state, live progress, and the retained result, so a client can reattach and collect the outcome after its own HTTP timeout. `POST /api/job/cancel` cancels a queued job outright and requests cooperative cancellation of a running one (long-running command/eval code can check the new public `PipelineCancellation` API). Results are retained for 1 hour / last 100 jobs; jobs do not survive domain reloads.\n- The `eval` timeout cap is raised from 30 seconds to 24 hours (CLI-335) — long evaluations are legitimate now that clients can set custom timeouts or detach and reattach.\n- The HTTP server now processes requests concurrently: an in-flight `/api/exec` command no longer blocks every other request (`/api/status` probes and `/api/progress` polls answer immediately, so a busy Editor no longer looks unreachable during a long command). Command execution itself is still strictly serialized — one `/api/exec` at a time, queued in arrival order, exactly as before. (CLI-335)\n- Hardening for the above: a command's own timeout (not a fixed 60s) now governs how long `/api/exec` waits for it, `editor_status`/`test_status` queue behind the same exec gate instead of racing an in-flight command, and progress/job state is owned per server instance so a test server can never cross-attribute progress or job cancellation with the live server. Detached jobs are capped at 100 queued/running at once — further submissions get `429` until some finish. (CLI-335)\n- Fix `executedAt` being returned as the zero-value instead of the actual execution time for `eval`/`eval_file`, `hot-reload`, and `run_tests`/`test_status`.\n- New `audit` / `audit_status` commands: start a Project Auditor static-analysis scan and poll it, producing a CSV of the reported issues (`Category, Severity, Areas, Description, RelativePath, Line, DescriptorId, Recommendation`) for a client or coding agent to act on. Project Auditor is reached by reflection, so the package still compiles and runs in Editors without it, and `--categories` works against both its deployments. An Editor whose Project Auditor has no analysis rules — in a built-in-module Editor these ship in the separate `com.unity.project-auditor-rules` package — reports `unavailable` and names the package to install, rather than an empty scan that reads as a clean project.\n- [UUM-148802] Fix `get_console_logs`/`clear_console` and `console` silently losing all console capture after exiting Play Mode (recovering only on the next recompile): re-subscribe to Unity's log callback on every play-mode transition instead of only once at domain load.\n- [UUM-148605] Persist `set_autotick`'s enabled/interval state in SessionState so it survives a domain reload instead of silently turning itself off after every recompile. Add a `persist` flag (default `true`) to opt a one-off/expensive setting (e.g. `interval_ms=0`) out of that persistence.\n- Emit a busy/settling signal while the Editor is still importing/compiling after the server starts (cold project import), instead of letting early commands fail with an opaque null-data envelope. `/api/status` reports `settling` (withholding `ready`) until the Editor is first seen idle, and `/api/exec` rejects main-thread commands during that window with HTTP 503 and a structured envelop"
++  }
++}
+\ No newline at end of file

@@ -2,3 +2,6 @@
 *.png binary
 *.dll binary
 *.tgz binary
+*.p7m binary
+*.so binary
+*.dylib binary
