@@ -34,16 +34,24 @@ namespace Unity.Pipeline.Commands
         public object DefaultValue { get; }
 
         /// <summary>
+        /// Whether dict-shaped values of this parameter carry user-defined keys (e.g.
+        /// serialized field names), exempting them from the pipeline seam's legacy
+        /// "token" echo strip. See <see cref="CliArgAttribute.ArbitraryKeys"/>.
+        /// </summary>
+        public bool ArbitraryKeys { get; }
+
+        /// <summary>
         /// Create parameter information from discovery.
         /// </summary>
         public CommandParameterInfo(string name, string description, bool required,
-            Type parameterType, object defaultValue = null)
+            Type parameterType, object defaultValue = null, bool arbitraryKeys = false)
         {
             Name = name ?? throw new ArgumentNullException(nameof(name));
             Description = description ?? throw new ArgumentNullException(nameof(description));
             ParameterType = parameterType ?? throw new ArgumentNullException(nameof(parameterType));
             Required = required;
             DefaultValue = defaultValue;
+            ArbitraryKeys = arbitraryKeys;
         }
 
         public override string ToString()

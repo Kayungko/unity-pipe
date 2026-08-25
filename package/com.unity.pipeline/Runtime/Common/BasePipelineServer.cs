@@ -1686,6 +1686,16 @@ namespace Unity.Pipeline
                         Debug.LogWarning($"Failed to convert parameter '{paramName}' to {paramInfo.ParameterType.Name}: {ex.Message}");
                         // Conversion failed, will use default value
                     }
+
+                    // Same legacy-client echo, one level down: dict-shaped parameters (e.g.
+                    // set_material_properties "properties", set_import_settings "settings") can
+                    // carry a "token" key of their own; no command consumes one, so strip it.
+                    // Parameters whose keys come from a user-defined namespace (e.g.
+                    // set_component_properties "properties" — arbitrary serialized field names)
+                    // opt out via [CliArg(ArbitraryKeys = true)]: their "token" key may be
+                    // legitimate data and must pass through untouched.
+                    if (!paramInfo.ArbitraryKeys && jsonValue is JObject dict)
+                        dict.Remove("token");
                 }
 
                 // Use provided value or default value
@@ -1765,6 +1775,11 @@ namespace Unity.Pipeline
         /// </summary>
         private async Task<object> ExecuteCommandByName(CommandInfo command, JObject parametersJson, int dispatcherTimeoutMs = 60000)
         {
+            // Legacy clients (unity-tools heritage) echo the auth token into the parameter object.
+            // No command declares a "token" parameter (verified), so strip it once here at the
+            // pipeline seam instead of per-command.
+            parametersJson?.Remove("token");
+
             // Extract parameters
             var parameters = ExtractCommandParameters(command, parametersJson);
 

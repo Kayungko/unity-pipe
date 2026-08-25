@@ -129,7 +129,7 @@ namespace Unity.Pipeline.Editor.Commands.GameObjects
             Tags = new[] { "gameobjects/components" })]
         public static ComponentPropertiesResult SetComponentProperties(
             [CliArg("target", "Handle of the component, OR of the GameObject when 'type' is given.", Required = true)] ObjectRef target,
-            [CliArg("properties", "Map of serialized property name to value. Vectors/colors are arrays; object refs are handle objects.", Required = true)] JObject properties,
+            [CliArg("properties", "Map of serialized property name to value. Vectors/colors are arrays; object refs are handle objects.", Required = true, ArbitraryKeys = true)] JObject properties,
             [CliArg("type", "Component type name on the target GameObject (omit when 'target' is a component handle).")] string type = null)
         {
             if (properties == null || properties.Count == 0)

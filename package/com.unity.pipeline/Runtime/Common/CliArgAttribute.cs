@@ -38,6 +38,15 @@ namespace Unity.Pipeline.Commands
         public object DefaultValue { get; set; }
 
         /// <summary>
+        /// Whether this dict-shaped parameter carries keys from a USER-DEFINED namespace
+        /// (e.g. serialized field names of arbitrary components), where a "token" key can
+        /// be legitimate data. The pipeline seam strips echoed legacy-client "token" keys
+        /// from dict-shaped parameter values unless this is set.
+        /// Default: false (keys follow the command's fixed schema; "token" is never legitimate).
+        /// </summary>
+        public bool ArbitraryKeys { get; set; } = false;
+
+        /// <summary>
         /// Create a new CLI parameter attribute.
         /// </summary>
         /// <param name="name">Parameter name for CLI arguments</param>

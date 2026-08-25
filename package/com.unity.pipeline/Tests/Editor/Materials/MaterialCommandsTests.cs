@@ -375,5 +375,38 @@ namespace Unity.Pipeline.Tests.Editor.Materials
                 Assert.AreEqual(1f, c[0], 1e-4f);
             }
         }
+
+        [Test]
+        public void Set_ViaClient_TokenKeyInProperties_IsStrippedAtPipelineSeam()
+        {
+            var handle = CreateMaterial("TokenStrip");
+            using (var server = new PipelineTestServer())
+            {
+                // Legacy clients (unity-tools heritage) echo the auth token into parameter objects.
+                // The pipeline strips it (BasePipelineServer), so the command neither sees it nor
+                // reports it in unknown[] — the per-command defenses are gone by design.
+                var response = server.Execute("set_material_properties", new
+                {
+                    material = new { path = handle.Path },
+                    properties = new JObject
+                    {
+                        ["token"] = "leaked-auth-token",
+                        [ColorProp] = new JArray(1, 0, 0, 1),
+                    },
+                });
+
+                Assert.IsTrue(response.IsSuccess, $"set_material_properties should succeed: {response.Error}");
+
+                var result = response.GetTypedResponse<SetMaterialPropertiesResult>();
+                Assert.IsNotNull(result, "set_material_properties should return a typed result");
+                CollectionAssert.Contains(result.Applied, ColorProp);
+                Assert.IsFalse(result.Unknown.Any(u => u.Contains("token")),
+                    "the pipeline-stripped token key must not surface in unknown[]");
+
+                var read = MaterialCommands.GetMaterialProperties(handle);
+                var c = Components(Prop(read, ColorProp).Value);
+                Assert.AreEqual(1f, c[0], 1e-4f);
+            }
+        }
     }
 }

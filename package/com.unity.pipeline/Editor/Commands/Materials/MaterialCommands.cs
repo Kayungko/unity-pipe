@@ -149,9 +149,6 @@ namespace Unity.Pipeline.Editor.Commands.Materials
                 {
                     foreach (var pair in properties)
                     {
-                        if (pair.Key == "token") // injected by the server; never a material property.
-                            continue;
-
                         var name = pair.Key;
                         if (!mat.HasProperty(name))
                         {
@@ -293,9 +290,6 @@ namespace Unity.Pipeline.Editor.Commands.Materials
 
             foreach (var pair in properties)
             {
-                if (pair.Key == "token")
-                    continue;
-
                 var name = pair.Key;
                 var propType = shader != null ? GetPropertyType(shader, name) : null;
                 if (propType == null)

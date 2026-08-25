@@ -74,14 +74,9 @@ namespace Unity.Pipeline.Editor.Commands.Assets
                 Platform = canonicalPlatform
             };
 
-            // Strip the server-injected token before iterating: it is never an importer setting.
             var keys = new List<string>();
             foreach (var pair in settings)
-            {
-                if (pair.Key == "token")
-                    continue;
                 keys.Add(pair.Key);
-            }
             if (keys.Count == 0)
                 throw new ArgumentException("settings must be a non-empty JSON object.");
 

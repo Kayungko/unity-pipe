@@ -223,8 +223,9 @@ namespace Unity.Pipeline.Commands
                 var description = argAttr?.Description ?? $"Parameter: {param.Name}";
                 var required = argAttr?.Required ?? !param.HasDefaultValue;
                 var defaultValue = param.HasDefaultValue ? param.DefaultValue : argAttr?.DefaultValue;
+                var arbitraryKeys = argAttr?.ArbitraryKeys ?? false;
 
-                yield return new CommandParameterInfo(name, description, required, param.ParameterType, defaultValue);
+                yield return new CommandParameterInfo(name, description, required, param.ParameterType, defaultValue, arbitraryKeys);
             }
         }
 
