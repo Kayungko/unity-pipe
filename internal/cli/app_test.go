@@ -205,3 +205,49 @@ func TestRecompilePollingEndToEnd(t *testing.T) {
 		t.Fatalf("want status=completed after 2 polls, got %v polls=%d", data, polls)
 	}
 }
+
+func TestTestCommandPassAndFail(t *testing.T) {
+	m := newMockEditor(t)
+	// Async test run whose terminal body is the raw status-file JSON —
+	// crucially WITHOUT a top-level "success" field (real server behavior;
+	// regression for the false-failure bug).
+	m.execHandler = func(command string, params map[string]any, job bool) (int, string) {
+		switch command {
+		case "run_tests":
+			return 200, `{"success":true,"command":"run_tests","result":{"status":"running"}}`
+		case "test_status":
+			return 200, `{"success":true,"command":"test_status","result":{"status":"completed","summary":{"total":1,"passed":1,"failed":0},"results":[{"FullName":"T.Passes","Status":"Passed"}]}}`
+		default:
+			return 400, `{"error":"unknown"}`
+		}
+	}
+	code, env := runCLI(t, "--project-path", m.project, "--json", "test", "--mode", "editor", "--filter", "T")
+	if code != 0 {
+		t.Fatalf("passing run must exit 0, got %d env=%v", code, env)
+	}
+
+	// Same shape, one failure → exit 20 with structured data.
+	m.execHandler = func(command string, params map[string]any, job bool) (int, string) {
+		switch command {
+		case "run_tests":
+			return 200, `{"success":true,"command":"run_tests","result":{"status":"running"}}`
+		case "test_status":
+			return 200, `{"success":true,"command":"test_status","result":{"status":"completed","summary":{"total":1,"passed":0,"failed":1},"results":[{"FullName":"T.Fails","Status":"Failed","Message":"boom"}]}}`
+		default:
+			return 400, `{"error":"unknown"}`
+		}
+	}
+	code, env = runCLI(t, "--project-path", m.project, "--json", "test", "--mode", "editor", "--filter", "T")
+	if code != 20 {
+		t.Fatalf("failing run must exit 20, got %d", code)
+	}
+	e := env["error"].(map[string]any)
+	if e["kind"] != "CommandFailed" {
+		t.Fatalf("kind mismatch: %v", e)
+	}
+	data := e["data"].(map[string]any)
+	summary := data["summary"].(map[string]any)
+	if summary["failed"].(float64) != 1 {
+		t.Fatalf("summary must carry failure count: %v", summary)
+	}
+}

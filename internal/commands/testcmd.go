@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/Kayungko/unity-pipe/internal/protocol"
 )
@@ -50,25 +51,28 @@ func TestCommand() SubCommand {
 				return nil, err
 			}
 
-			// The terminal body of a completed async run is the full
-			// TestExecutionResponse — surface it and branch on its success flag.
+			// The terminal body of a completed async run is the raw test
+			// status file JSON — it carries NO top-level "success" field
+			// (only status/duration/summary/results), so the outcome MUST be
+			// judged by the summary counters, never by a parsed success flag
+			// (which would always read as false).
 			var final struct {
-				Success bool            `json:"success"`
 				Summary json.RawMessage `json:"summary"`
 				Results json.RawMessage `json:"results"`
 				Error   string          `json:"error"`
 			}
 			_ = json.Unmarshal(result.Body, &final)
+			var summary struct {
+				Total  int `json:"total"`
+				Passed int `json:"passed"`
+				Failed int `json:"failed"`
+			}
+			_ = json.Unmarshal(final.Summary, &summary)
 			if result.Status == "no_tests" {
 				return map[string]any{"status": "no_tests"}, nil
 			}
 			// A completed run whose filter matched nothing is not a failure
-			// (the server still reports success=false — known behavior).
-			var summary struct {
-				Total  int `json:"total"`
-				Failed int `json:"failed"`
-			}
-			_ = json.Unmarshal(final.Summary, &summary)
+			// (known server behavior).
 			if summary.Total == 0 && summary.Failed == 0 {
 				return map[string]any{
 					"status":  "completed",
@@ -76,11 +80,11 @@ func TestCommand() SubCommand {
 					"summary": final.Summary,
 				}, nil
 			}
-			if !final.Success {
+			if summary.Failed > 0 {
 				return nil, &protocol.UpipeError{
 					Code:    protocol.ExitCommandFailed,
 					Kind:    "CommandFailed",
-					Message: firstNonEmpty(final.Error, "test run finished with failures"),
+					Message: firstNonEmpty(final.Error, fmt.Sprintf("test run finished with %d failure(s)", summary.Failed)),
 					Data:    json.RawMessage(result.Body),
 				}
 			}

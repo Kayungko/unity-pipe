@@ -150,6 +150,8 @@ Editor 服务器会隐藏 Runtime-only 命令；Runtime 服务器反之。
 2. **run_tests 零匹配陷阱**：过滤器无匹配时服务端报 `success: false` 但 `summary.total == 0 && failed == 0`——这不是失败，应特判为"无匹配"。
 3. **主线程命令超时**：编辑器未聚焦时主线程不 tick，eval 等命令报 "Main thread operation timed out after 5000ms"——先 `set_autotick --enable true`。
 4. **测试失败时结果可能不透明**：`run_tests` 同步模式下失败详情可能被吞——用异步模式 + 轮询，或缩小 filter 重跑。
+5. **async 测试终态 body 没有 `success` 字段**：`test_status` 的终态 body 是原始状态文件 JSON（只有 status/duration/summary/results），**顶层无 `success`**——按 `summary.failed > 0` 判定成败，解析 success 标志恒得 false（2026-08-25 实战踩坑，upipe 修复 + 回归测试 TestTestCommandPassAndFail）。
+6. **新文件需先 Refresh**：直接写 `.cs` 到 `Assets/` 后 `recompile` 报 `up_to_date`——recompile 只编译已导入的脚本，先用 `eval "AssetDatabase.Refresh()"` 触发导入（或用 `import_asset` 命令）。
 
 ## 9. 应急直连（upipe 不可用时）
 
