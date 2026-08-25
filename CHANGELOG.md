@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-25
+
 ### Added
 
 - **`upipe plugin install --apply-rules`**：装技能的同时把路由规则模板自动追加进全局 harness 文档（`~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`），替代此前"AI 读懂 README 再手动贴模板"的非确定性步骤。本机路径占位符自动填充；`--co-use-whitelist` / `--co-use-depot` 可选参数缺省时写入 pipeline-only 安全默认；追加内容用 `unity-pipe:rules` 注释标记包裹，重复执行幂等跳过；已有文档改前自动备份（`.upipe-bak-<时间戳>`）。
@@ -45,7 +47,8 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Kayungko/unity-pipe/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Kayungko/unity-pipe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Kayungko/unity-pipe/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.0
