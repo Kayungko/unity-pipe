@@ -19,6 +19,8 @@ type mockEditor struct {
 	srv     *httptest.Server
 	project string
 	token   string
+	// execHandler lets individual tests override /api/exec behavior.
+	execHandler func(command string, params map[string]any, job bool) (int, string)
 }
 
 func newMockEditor(t *testing.T) *mockEditor {
@@ -46,6 +48,13 @@ func newMockEditor(t *testing.T) *mockEditor {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"commands":[{"name":"editor_status","description":"state","tags":["core"],"package":"Unity.Pipeline"}],"total":1,"count":1}`))
 	})
+	m.execHandler = func(command string, params map[string]any, job bool) (int, string) {
+		if command == "" {
+			return 400, `{"error":"Bad Request","errorDetails":"command required"}`
+		}
+		result, _ := json.Marshal(map[string]any{"echo": command, "params": params, "job": job})
+		return 200, `{"success":true,"command":"` + command + `","result":` + string(result) + `}`
+	}
 	mux.HandleFunc("/api/exec", func(w http.ResponseWriter, r *http.Request) {
 		m.authed(w, r)
 		body, _ := io.ReadAll(r.Body)
@@ -55,14 +64,10 @@ func newMockEditor(t *testing.T) *mockEditor {
 			Job        bool           `json:"job"`
 		}
 		_ = json.Unmarshal(body, &req)
-		if req.Command == "" {
-			w.WriteHeader(400)
-			_, _ = w.Write([]byte(`{"error":"Bad Request","errorDetails":"command required"}`))
-			return
-		}
+		status, payload := m.execHandler(req.Command, req.Parameters, req.Job)
 		w.Header().Set("Content-Type", "application/json")
-		result, _ := json.Marshal(map[string]any{"echo": req.Command, "params": req.Parameters, "job": req.Job})
-		_, _ = w.Write([]byte(`{"success":true,"command":"` + req.Command + `","result":` + string(result) + `}`))
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(payload))
 	})
 
 	m.srv = httptest.NewServer(mux)
@@ -170,5 +175,33 @@ func TestUnknownCommandExitCode(t *testing.T) {
 	code, _ := runCLI(t, "definitely-not-a-command")
 	if code != 2 {
 		t.Fatalf("want exit 2 (usage), got %d", code)
+	}
+}
+
+func TestRecompilePollingEndToEnd(t *testing.T) {
+	m := newMockEditor(t)
+	// Stateful recompile behavior: trigger → compiling → completed.
+	polls := 0
+	m.execHandler = func(command string, params map[string]any, job bool) (int, string) {
+		switch command {
+		case "recompile":
+			return 200, `{"success":true,"command":"recompile","result":{"status":"triggered"}}`
+		case "recompile_status":
+			polls++
+			if polls < 2 {
+				return 200, `{"success":true,"command":"recompile_status","result":{"status":"compiling"}}`
+			}
+			return 200, `{"success":true,"command":"recompile_status","result":{"status":"completed","failed":false,"errors":[]}}`
+		default:
+			return 400, `{"error":"unknown"}`
+		}
+	}
+	code, env := runCLI(t, "--project-path", m.project, "--json", "recompile")
+	if code != 0 {
+		t.Fatalf("exit=%d env=%v", code, env)
+	}
+	data := env["data"].(map[string]any)
+	if data["status"] != "completed" || polls != 2 {
+		t.Fatalf("want status=completed after 2 polls, got %v polls=%d", data, polls)
 	}
 }

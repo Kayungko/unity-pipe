@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"flag"
 	"io"
 	"strings"
@@ -25,8 +26,25 @@ func All() []SubCommand {
 		StatusCommand(),
 		CommandsCommand(),
 		ExecCommand(),
+		EvalCommand(),
+		EvalFileCommand(),
+		RecompileCommand(),
+		TestCommand(),
+		AuditCommand(),
+		JobCommand(),
+		JobCancelCommand(),
+		ProgressCommand(),
 	}
 }
+
+// mustMarshal is a non-failing marshal for values that are known-serializable.
+func mustMarshal(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+// jsonRaw is a trivial conversion helper for raw bodies.
+func jsonRaw(b []byte) json.RawMessage { return json.RawMessage(b) }
 
 // attachShared registers the shared option flags on a subcommand flag set.
 func attachShared(fs *flag.FlagSet, o *options.Options) {
