@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.5.0-exp.1**（Unity Registry tgz，upstream revision `17df0ac8d6533a8c22830c89dc85a24c01f30ade`），官方要求 Unity 6.0+。
 
-本仓库 vendored 版本：**0.5.0-2022.1**（适配 Unity 2022.3.23f1，已在真实工程端到端验证）。
+本仓库 vendored 版本：**0.5.1-2022.1**（适配 Unity 2022.3.23f1，已在真实工程端到端验证）。
 
 版本命名依据：semver 预发布段字典序 `"2022.1" > "exp.1"`，UPM 视 vendored 版本高于 registry 版本，不会被"升级"覆盖。
 

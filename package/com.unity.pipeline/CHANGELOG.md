@@ -5,6 +5,12 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-2022.1] - 2026-08-26
+
+- **Safety gate on `create_prefab`**: saving to a `.prefab` path that already exists now refuses by default with a clear `ArgumentException` (asset overwrite is not undoable); pass `confirm=true` to overwrite. The whole prefab command family gains a `confirm` parameter for surface parity — the other six are "reserved for parity" declarations (scene-side single-step undoable or already confined to the authoring root).
+- **Legacy `"token"` echo stripped once at the pipeline seam**: clients with unity-tools heritage echo the auth token into parameter objects. `BasePipelineServer` now strips a top-level `"token"` key (and one level down inside dict-shaped parameter values) instead of each command defending itself; the per-command workarounds in `set_material_properties` / `set_import_settings` are removed.
+- **`[CliArg(ArbitraryKeys = true)]` opt-out for user-keyed dicts**: dict-shaped parameters whose keys come from a user-defined namespace (`set_component_properties` "properties" — arbitrary serialized field names; `set_serialized_field` "value") are exempt from the seam strip, so a serialized field literally named `token` survives intact. Schema-fixed dicts keep the default strip.
+
 ## [0.5.0-exp.1] - 2026-08-10
 
 - New `GET /api/progress` endpoint: the currently executing command's task progress, served off the main thread so it answers even while a long synchronous command has the Editor blocked. Command authors report via the new `CliProgress.Report(title, info, current, total, progress)` API (thread-safe, callable from a blocked main thread) or the `CliEditorProgress.DisplayProgressBar` drop-in wrappers around `EditorUtility.DisplayProgressBar`; running `UnityEditor.Progress` items are mirrored automatically. Consumed by the `unity` CLI to render live terminal progress bars during `unity command` / `unity run --command`. (CLI-488, coordinated with CLI-335)

@@ -2,7 +2,31 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.1.7] - 2026-08-26
+
+### Fixed
+
+- **`--timeout` 单位矛盾**（正确性）：请求体 `timeout` 由按秒发送改为按毫秒发送——服务端按毫秒消费（`CommandExecutionRequest.Timeout` → `dispatcherTimeoutMs`），此前 `--timeout 60s` 实际只给主线程 60ms 预算。`docs/PROTOCOL.md` 同步固化毫秒契约。回归锁定：`TestExecSendsTimeoutInMillis`。
+- **`DefaultTimeout` 从未生效**：未设 `--timeout` 时现在真正应用 10 分钟预算作为 round-trip 上限（`protocol.DefaultRoundTripTimeout`，不依赖 options 包），不再退回 transport 默认 120s——长 eval/构建不再被静默掐断并误报为连接错误。回归锁定：`TestExecAppliesDefaultRoundTripTimeout`。
+- **重试梯耗尽丢失 busy 语义**：梯耗尽时按最后错误类型传播——持续 busy（503/429）保持 exit 13（可重试），仅连接类错误才是 exit 11；此前 ~49s 队列满被误报为 "editor unreachable"，agent 走错恢复路径。回归锁定：`TestReloadTolerantExhaustionPropagatesBusy`。
+- **`ErrBusy` 丢弃服务端信封**：503/429 响应 body 现以 `json.RawMessage` 进入 `error.data`，agent 可读到 settling/队列详情。回归锁定：`TestErrBusyCarriesServerEnvelope`。
+- **`create_prefab` 静默覆盖已存在资产**（包，破坏性安全修正）：目标 `.prefab` 已存在时默认拒绝（`ArgumentException`，消息指明需 `confirm=true`）——资产覆盖不可 Undo，此前同路径二次保存直接 `SaveAsPrefabAssetAndConnect` 覆盖。回归锁定：`CreatePrefab_ExistingPath_RefusesWithoutConfirm` / `CreatePrefab_ExistingPath_WithConfirm_Overwrites`（ViaClient + CommandDirect，SGAME 2022.3 实测）。
+- **`save_prefab_contents` confirm 参数描述与行为不符**（包，文档性）：描述暗示 false 时拒绝重写，实际从不消费——改为与其余命令一致的 "Reserved for parity" 措辞（重写已被 authoring root 约束）。
+
+### Added
+
+- **`upipe eval` / `eval-file` 新增 `--eval-timeout <毫秒>`**：直接透传服务端命令级超时（默认服务端 5000ms），消灭长 eval 必须绕道 `upipe exec eval --set timeout=<ms>` 的暗道；越界值（<0 或 >24h）客户端 exit 2 快速失败。独立命名是因为共享 `--timeout` 是 Go duration（`30s`/`2m`）语义且同时驱动 round-trip 预算。
+- **CI（GitHub Actions）**：`.github/workflows/ci.yml`——push/PR main 触发 `go build/vet/test ./...` 全量（layering 与 recipes 同步锁定测试自动纳入）。C# 侧（package/com.unity.pipeline）因无 Unity 许可暂无法 runner 编译，注释标注待 Unity GameCI 接入。
+- **CLI 自解释**：顶层 `upipe --help` 打印完整命令表；子命令 `--help` 输出真实用法与 flag 列表（此前只有一行 `flag: help requested`）。
+- **`commands --query` 生效**：客户端按 name/描述子串过滤（compact 与 `--full` 模式均支持，未知字段原样保留），删除"解析后即弃"的 M2 注释。
+- **实例登记成真**：任意命令成功执行后 best-effort 登记 `~/.upipe/projects.txt`（带去重）——`upipe instances` 的 hint 文案此前声称"跑一次即登记"但唯一调用点在 pkg-install，现在文案与实现一致。
+- **prefab 命令族 confirm 守门**（包）：7 个命令统一补 `confirm` 参数——`create_prefab` 为覆盖守门（见上），其余 6 个（instantiate/variant/apply/revert/unpack/save_prefab_contents）为 parity 声明（场景侧可单步 Undo 或已受 authoring root 约束），参数面与 material 族对齐。
+- **legacy token 回显收敛到管道接缝统一剥离**（包）：`BasePipelineServer.ExecuteCommandByName` 入口与 `ExtractCommandParameters` 字典参数两级剥离 `"token"` 键（unity-tools 血统客户端会把 auth token 回显进参数对象），删除 `set_material_properties` / `set_import_settings` 内 3 处逐命令 workaround。回归锁定：`Set_ViaClient_TokenKeyInProperties_IsStrippedAtPipelineSeam`。
+- **`[CliArg(ArbitraryKeys = true)]` 逃生口**（包）：键来自用户命名空间的字典参数豁免接缝剥离——`set_component_properties.properties`（任意组件序列化字段名）与 `set_serialized_field.value` 已声明，用户组件上名为 `token` 的字段不再被静默丢弃；schema 固定字典（material/import settings）保持默认剥离。回归锁定：`SetComponentProperties_ViaClient_TokenKey_IsPreservedForArbitraryKeys`。
+
+### Removed
+
+- 死 flag `--verbose`：注册时承诺 "human progress notes on stderr" 但全仓无消费者，直接删除。
 
 ## [0.1.6] - 2026-08-25
 
