@@ -2,15 +2,15 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-  <img src="assets/logo.svg" width="380" alt="unity-pipe">
+  <img src="assets/logo.svg" width="400" alt="upipe · Unity Editor Pipeline">
 </picture>
 
 **自维护的 Unity Pipeline 薄客户端 · Unity 2022 适配包分发 · AI Harness 插件包**
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/badges-dark.svg">
-  <img src="assets/badges.svg" width="700" alt="Go 1.23+ · deps zero · license MIT (code) · PRIVATE contains Unity pkg">
-</picture>
+[![Go 1.23+](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white)](go.mod)
+[![Unity 2022.3](https://img.shields.io/badge/Unity-2022.3-111827?style=for-the-badge&logo=unity&logoColor=white)](package/ADAPTATION-2022.md)
+[![Zero dependencies](https://img.shields.io/badge/dependencies-zero-16A34A?style=for-the-badge)](#开发)
+[![Agent ready](https://img.shields.io/badge/agent-ready-7C3AED?style=for-the-badge)](#使用流程)
 
 [快速上手](#快速开始) · [使用流程](#使用流程) · [协议参考](docs/PROTOCOL.md) · [迁移指南](docs/MIGRATION.md) · [2022 适配记录](package/ADAPTATION-2022.md) · [更新日志](CHANGELOG.md)
 
@@ -35,9 +35,36 @@ Unity 官方 `unity` CLI 是闭源单二进制，`pipeline install` 硬性要求
 
 ## 架构
 
-<p align="center">
-  <img src="assets/architecture.svg" width="840" alt="upipe 分层架构：cli → commands → protocol ← transport → Unity Editor">
-</p>
+```mermaid
+flowchart LR
+    user["Agent / 人<br/>upipe command"]
+
+    subgraph upipe["upipe · Go 单二进制"]
+        direction LR
+        cli["cli<br/>分发 · 信封 · 退出码"]
+        commands["commands<br/>子命令等待策略"]
+        protocol["protocol<br/>发现 · 重试 · 轮询<br/>零 IO · 移植边界"]
+        transport["transport<br/>net/http keep-alive<br/>唯一 IO 点"]
+
+        cli --> commands --> protocol
+        protocol <--> transport
+    end
+
+    editor["Unity Editor<br/>com.unity.pipeline"]
+
+    user -->|"upipe command"| cli
+    transport -->|"Bearer + 动态端口"| editor
+
+    classDef actor fill:#1E293B,stroke:#64748B,color:#F8FAFC,stroke-width:2px;
+    classDef client fill:#0F172A,stroke:#38BDF8,color:#F8FAFC,stroke-width:2px;
+    classDef core fill:#064E3B,stroke:#34D399,color:#ECFDF5,stroke-width:3px;
+    classDef target fill:#1E293B,stroke:#F59E0B,color:#F8FAFC,stroke-width:3px;
+
+    class user actor;
+    class cli,commands,transport client;
+    class protocol core;
+    class editor target;
+```
 
 分层单向依赖 `cli → commands → protocol ← transport` 由 [`layering_test.go`](layering_test.go)（go/parser import lint）**强制执行**；`protocol` 层零 IO，是未来 daemon 化 / 换语言移植的机械翻译边界。
 
@@ -170,6 +197,7 @@ upipe plugin install            # 仓库目录内执行；旧技能自动备份�
 ```
 
 - AI Mana 当前会话即热加载；Codex 需新会话
+- **技能 ≠ 全部**：治理规则（co-use 白名单、序列化资产红线）住在各 harness 的全局文档里，技能按名称引用——新机器装完技能后，把 [harness/rules/](harness/rules/README.md) 下的对应模板贴入 `~/.claude/CLAUDE.md` §13 与 `~/.codex/AGENTS.md` 6.4（`plugin install` 完成时会提示此步骤）
 - co-use 白名单机制、序列化资产红线、MCP 8080 契约均维持既有全局治理不变
 
 ## 目录
@@ -183,7 +211,7 @@ unity-pipe/
 │   ├── protocol/       纯逻辑协议层（零 IO，移植边界）
 │   └── transport/      net/http（唯一 IO 点）
 ├── package/            适配包：upstream 基线 + vendored + 补丁 + 构建器
-├── harness/            技能源 + install.ps1
+├── harness/            技能源 + 全局规则模板（rules/）+ install.ps1
 ├── docs/               PROTOCOL.md · MIGRATION.md
 └── layering_test.go    分层依赖 lint（强制执行）
 ```

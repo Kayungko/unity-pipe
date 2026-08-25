@@ -96,6 +96,16 @@ func PluginCommand() SubCommand {
 			result["installs"] = reports
 			if !*dryRun {
 				result["note"] = "AI Mana hot-loads skills in the current session; Codex needs a new session."
+				// Skills reference the global routing rules (co-use whitelist,
+				// serialized-asset red lines) by name; surface the template
+				// location so a fresh machine knows the deploy is not complete
+				// until the rules section lands in the global docs.
+				rules := filepath.Join(repoRoot, "harness", "rules")
+				if _, err := os.Stat(rules); err == nil {
+					result["rules_template"] = rules
+					note, _ := result["note"].(string)
+					result["note"] = note + " Routing rules (co-use whitelist etc.) are NOT installed by this command — paste harness/rules/claude.md into ~/.claude/CLAUDE.md §13 and harness/rules/agents.md into ~/.codex/AGENTS.md 6.4 (see harness/rules/README.md)."
+				}
 			}
 			return result, nil
 		},
