@@ -29,6 +29,26 @@ Run `upipe commands` to list what an instance exposes. Two servers exist:
 With `--json`, stdout is always exactly one envelope:
 `{"ok": bool, "error": {code,kind,message,retryable,data}?, "data": ...}`.
 
+## 0.5 Response-value field map & write-gates (field-tested)
+
+Exit code 0 does NOT mean the business operation happened — write commands
+gate behind `confirm`/`dry_run` and report refusal in **three different
+places**. Success = outer `ok=true` AND (`result.applied==true` or
+`result.status != "error"`):
+
+| gate style | commands | refusal looks like |
+|---|---|---|
+| inner `result.status=="error"` | `build`, `bake_*` | outer ok=true, exit 0 — check result.status! |
+| outer `ok=false`, `error.code=20` | `clear_*`, `delete_asset`, `switch_build_target` | error.message contains "confirm" |
+| inner `result.applied==false` | `set_*_settings` | message contains "Refused" |
+
+Read eval return values from `data.result.result` (the `output` field is
+always null); scene-hierarchy nodes live under `result.roots`. Asset search:
+prefer `eval` + `AssetDatabase.FindAssets` over `exec search` (full-catalog
+queries can block >2min). Full field-tested recipes — eval pitfalls (no
+`System.Tuple`, no `\n` escapes), missing-script locator, prefab census
+strategy, probe-object lifecycle — see `docs/RECIPES.md` in the repo.
+
 ## 1. Install & verify
 
 ```powershell
