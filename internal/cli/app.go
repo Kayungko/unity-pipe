@@ -124,9 +124,11 @@ type nopWriteCloser struct{ b *strings.Builder }
 
 func (w *nopWriteCloser) Write(p []byte) (int, error) { return w.b.Write(p) }
 
-// reorderForFlags hoists flag tokens (and their values for value-taking
+// reorderForFlags hoists SHARED flag tokens (and their values for value-taking
 // flags, looked up in fs) in front of the positional arguments so a single
-// flag.Parse can see them — same reordering commands.parseArgs applies.
+// flag.Parse can see them. Flags unknown to fs (subcommand-specific flags
+// like exec's --set) stay in their original position — the subcommand's own
+// flag pass handles them.
 func reorderForFlags(fs *flag.FlagSet, args []string) []string {
 	var flags, positional []string
 	for i := 0; i < len(args); i++ {
@@ -138,11 +140,19 @@ func reorderForFlags(fs *flag.FlagSet, args []string) []string {
 		if len(a) > 1 && strings.HasPrefix(a, "-") {
 			name := strings.TrimLeft(a, "-")
 			if strings.Contains(name, "=") {
-				flags = append(flags, a)
+				if fs.Lookup(name[:strings.Index(name, "=")]) != nil {
+					flags = append(flags, a)
+				} else {
+					positional = append(positional, a)
+				}
 				continue
 			}
 			fl := fs.Lookup(name)
-			if fl != nil && !isBoolFlag(fl) && i+1 < len(args) {
+			if fl == nil {
+				positional = append(positional, a) // subcommand's own flag
+				continue
+			}
+			if !isBoolFlag(fl) && i+1 < len(args) {
 				flags = append(flags, a, args[i+1])
 				i++
 				continue
