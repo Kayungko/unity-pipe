@@ -13,10 +13,10 @@ func TestRegisterProjectDedupes(t *testing.T) {
 	knownProjectsFile = func() string { return filepath.Join(dir, "projects.txt") }
 	defer func() { knownProjectsFile = orig }()
 
-	registerProject(`E:\proj\A`)
-	registerProject(`E:\proj\A`) // exact dup
-	registerProject(`e:\proj\a`) // case dup (Windows paths are case-insensitive)
-	registerProject(`E:\proj\B`)
+	RegisterProject(`E:\proj\A`)
+	RegisterProject(`E:\proj\A`) // exact dup
+	RegisterProject(`e:\proj\a`) // case dup (Windows paths are case-insensitive)
+	RegisterProject(`E:\proj\B`)
 
 	got := readKnownProjects()
 	if len(got) != 2 {
@@ -40,6 +40,6 @@ func TestRegisterProjectNoHome(t *testing.T) {
 	orig := knownProjectsFile
 	knownProjectsFile = func() string { return filepath.Join(t.TempDir(), "no", "such", "dir", "x.txt") }
 	defer func() { knownProjectsFile = orig }()
-	registerProject(`E:\proj\C`) // mkdir fails under a file path? dir exists actually
+	RegisterProject(`E:\proj\C`) // mkdir fails under a file path? dir exists actually
 	// Regardless of outcome, no panic is the contract.
 }

@@ -1,0 +1,38 @@
+# CI for unity-pipe (Go 1.23 single binary + Unity C# adapter package).
+#
+# C# note: package/com.unity.pipeline cannot be compile-verified here —
+# neither local machines nor free GitHub-hosted runners have a Unity license.
+# C# build/validation is deferred until Unity GameCI integration is added;
+# no fake C# job is defined.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go:
+    name: Build, Vet & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.23
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+        # Root-level layering_test.go and recipes_sync_test.go are part of ./...
+        # and run automatically with the rest of the package tests.

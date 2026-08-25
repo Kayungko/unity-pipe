@@ -44,7 +44,7 @@ func (f *fakeTransport) Close() error { return nil }
 
 func fixedDescriptor() *InstanceDescriptor { return &InstanceDescriptor{Port: 7802, EvalToken: "t"} }
 
-func newTestClient(ft *fakeTransport) *PipelineClient {
+func newTestClient(ft Transport) *PipelineClient {
 	return &PipelineClient{
 		Transport: ft,
 		Source:    func() (*InstanceDescriptor, error) { return fixedDescriptor(), nil },

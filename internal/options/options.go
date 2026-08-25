@@ -13,7 +13,6 @@ type Options struct {
 	ProjectPath string        // explicit --project-path; empty = auto-detect from cwd
 	JSONOut     bool          // --json: single-envelope machine output on stdout
 	Timeout     time.Duration // --timeout: per-command budget (0 = default)
-	Verbose     bool          // --verbose: human progress notes on stderr
 }
 
 // DefaultTimeout is the overall per-command budget when --timeout is unset.
@@ -31,5 +30,4 @@ func Attach(fs *flag.FlagSet, o *Options) {
 		"Unity project root (default: auto-detect by walking up from the current directory)")
 	fs.BoolVar(&o.JSONOut, "json", o.JSONOut, "machine-readable single-envelope JSON on stdout")
 	fs.DurationVar(&o.Timeout, "timeout", o.Timeout, "per-command budget (e.g. 30s, 2m)")
-	fs.BoolVar(&o.Verbose, "verbose", o.Verbose, "human progress notes on stderr")
 }

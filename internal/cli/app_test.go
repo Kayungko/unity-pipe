@@ -282,3 +282,79 @@ func TestProjectPathEqualsFormAfterSubcommand(t *testing.T) {
 		t.Fatalf("instance missing: %v", env)
 	}
 }
+
+// captureStderrCLI runs cli.Main capturing stderr; returns exit code + output.
+func captureStderrCLI(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	code := cli.Main(args)
+	os.Stderr = old
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	_ = r.Close()
+	return code, string(out)
+}
+
+// Top-level --help must show the command table, not only shared flag defaults.
+func TestTopLevelHelpShowsCommandTable(t *testing.T) {
+	code, out := captureStderrCLI(t, "--help")
+	if code != 2 {
+		t.Fatalf("want exit 2 (usage), got %d", code)
+	}
+	for _, want := range []string{
+		"Usage:\n  upipe [global flags] <command> [flags] [args]",
+		"Commands:",
+		"eval-file",   // registry entry
+		"pkg-install", // registry entry
+		"-project-path",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("top-level help missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Subcommand --help must print that command's real flag list WITHOUT a
+// running editor instance (help is read before instance resolution).
+func TestSubCommandHelpWithoutInstance(t *testing.T) {
+	code, out := captureStderrCLI(t, "eval", "--help")
+	if code != 2 {
+		t.Fatalf("want exit 2 (usage), got %d; output:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"Usage: upipe eval [flags] [args]",
+		"-eval-timeout",
+		"-project-path",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("eval --help missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Any successful command registers its project in ~/.upipe/projects.txt
+// (best-effort) so `upipe instances` can discover it — deduplicated on repeat.
+func TestSuccessfulCommandRegistersProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	m := newMockEditor(t)
+	for i := 0; i < 2; i++ { // second run must not duplicate the line
+		code, env := runCLI(t, "--project-path", m.project, "--json", "status")
+		if code != 0 {
+			t.Fatalf("run %d: exit=%d env=%v", i, code, env)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".upipe", "projects.txt"))
+	if err != nil {
+		t.Fatalf("project not registered after a successful command: %v", err)
+	}
+	if got := strings.Count(string(data), m.project); got != 1 {
+		t.Fatalf("want exactly one registry line for the project, got %d:\n%s", got, data)
+	}
+}

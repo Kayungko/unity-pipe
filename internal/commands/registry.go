@@ -3,7 +3,9 @@ package commands
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/Kayungko/unity-pipe/internal/options"
@@ -64,11 +66,55 @@ type nullWriter struct{}
 
 func (nullWriter) Write(p []byte) (int, error) { return io.Discard.Write(p) }
 
-// newFlagSet builds a silenced flag set for a subcommand.
+// newFlagSet builds a flag set for a subcommand. Parse errors (and the
+// ErrHelp triggered by --help/-h) still print nothing via the flag package's
+// own channel, but the Usage hook renders the command's real usage on stderr:
+// synopsis from the registry plus the flags actually registered below.
 func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(nullWriter{})
+	fs.Usage = func() { printSubUsage(os.Stderr, fs) }
 	return fs
+}
+
+// printSubUsage renders one subcommand's usage: the registry entry matching
+// the flag-set name (synopsis) and the flags registered on fs at call time.
+func printSubUsage(w io.Writer, fs *flag.FlagSet) {
+	name := strings.TrimPrefix(fs.Name(), "upipe ")
+	sc, ok := lookupSubCommand(name)
+	fmt.Fprintf(w, "Usage: upipe %s [flags] [args]\n", name)
+	if ok && sc.Synopsis != "" {
+		fmt.Fprintf(w, "\n%s\n", sc.Synopsis)
+	}
+	fmt.Fprint(w, "\nFlags:\n")
+	fs.SetOutput(w)
+	fs.PrintDefaults()
+}
+
+// lookupSubCommand resolves a flag-set name (e.g. "plugin install") to its
+// registry entry, falling back to the parent command name.
+func lookupSubCommand(name string) (SubCommand, bool) {
+	if sc, ok := matchSubCommand(name); ok {
+		return sc, true
+	}
+	if i := strings.IndexByte(name, ' '); i >= 0 {
+		return matchSubCommand(name[:i])
+	}
+	return SubCommand{}, false
+}
+
+func matchSubCommand(name string) (SubCommand, bool) {
+	for _, sc := range All() {
+		if sc.Name == name {
+			return sc, true
+		}
+		for _, a := range sc.Aliases {
+			if a == name {
+				return sc, true
+			}
+		}
+	}
+	return SubCommand{}, false
 }
 
 // usageErr wraps a flag/usage failure as exit code 2.

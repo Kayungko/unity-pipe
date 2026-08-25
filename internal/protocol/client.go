@@ -64,7 +64,11 @@ func (c *PipelineClient) do(method, path string, body []byte, timeout time.Durat
 		_ = json.Unmarshal(resp.Body, &env)
 		if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests {
 			msg := firstNonEmpty(env.ErrorDetails, env.Message, "server busy (settling or job queue full)")
-			return resp, ErrBusy(msg, nil)
+			var data any // server envelope body, when present
+			if len(resp.Body) > 0 {
+				data = json.RawMessage(resp.Body)
+			}
+			return resp, ErrBusy(msg, data)
 		}
 		msg := firstNonEmpty(env.ErrorDetails, env.Error, fmt.Sprintf("HTTP %d from %s", resp.StatusCode, path))
 		return resp, &UpipeError{Code: ExitCommandFailed, Kind: "CommandFailed", Message: msg,
@@ -131,10 +135,17 @@ func (c *PipelineClient) ListCommandsFull() (json.RawMessage, error) {
 	return json.RawMessage(resp.Body), nil
 }
 
+// DefaultRoundTripTimeout is the client-side round-trip ceiling for a single
+// /api/exec call when no explicit timeout was given. It mirrors
+// options.DefaultTimeout (10 minutes); it is restated here because the
+// protocol package must not depend on the CLI options package. Without it the
+// transport default (120s) would silently clip long evals.
+const DefaultRoundTripTimeout = 10 * time.Minute
+
 // ExecOptions tunes one POST /api/exec call.
 type ExecOptions struct {
 	Parameters map[string]any
-	Timeout    time.Duration // server-side command timeout hint; 0 = omit
+	Timeout    time.Duration // server-side command timeout hint (sent as ms); 0 = omit body field, client falls back to DefaultRoundTripTimeout
 	Job        bool          // submit as a detached job, returns a jobId handle
 }
 
@@ -154,23 +165,27 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 		Parameters: opts.Parameters,
 		Job:        opts.Job,
 	}
-	if opts.Timeout > 0 {
-		secs := int64(opts.Timeout.Seconds())
-		body.Timeout = &secs
+	if ms := opts.Timeout.Milliseconds(); ms > 0 {
+		body.Timeout = &ms
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, &UpipeError{Code: ExitInternal, Kind: "Internal", Message: err.Error()}
 	}
 	// The user-facing --timeout drives BOTH the server-side command timeout
-	// (request body) and the client round-trip deadline — otherwise a slow
-	// eval is clipped at the transport default (120s) and misreported as a
-	// connection error. A small margin is added so the server can deliver
-	// its own timeout envelope before the client gives up.
+	// (request body, in milliseconds — the server consumes the field as
+	// milliseconds; see CommandExecutionRequest.Timeout) and the client
+	// round-trip deadline — otherwise a slow eval is clipped at the
+	// transport default (120s) and misreported as a connection error.
+	// When --timeout is unset (0) the 10-minute default budget applies as
+	// the round-trip ceiling (transport 0 would mean its own 120s default).
+	// A small margin is added so the server can deliver its own timeout
+	// envelope before the client gives up.
 	roundTrip := opts.Timeout
-	if roundTrip > 0 {
-		roundTrip += 30 * time.Second
+	if roundTrip <= 0 {
+		roundTrip = DefaultRoundTripTimeout
 	}
+	roundTrip += 30 * time.Second
 	resp, err := c.do(http.MethodPost, "/api/exec", raw, roundTrip)
 	if err != nil {
 		return nil, err
@@ -257,6 +272,12 @@ func (c *PipelineClient) ExecReloadTolerant(command string, opts ExecOptions, ma
 	}
 	if lastErr == nil {
 		lastErr = ErrConnectionLost("retry ladder exhausted")
+	}
+	// Propagate the last error's class: a server that stayed busy through the
+	// whole ladder must surface ErrBusy (exit 13, retryable later), not be
+	// misreported as a connectivity loss (exit 11).
+	if lastErr.Code == ExitBusy {
+		return nil, ErrBusy(fmt.Sprintf("editor still busy after %d attempts: %v", maxAttempts, lastErr), lastErr.Data)
 	}
 	return nil, ErrConnectionLost(fmt.Sprintf("editor unreachable after %d attempts: %v", maxAttempts, lastErr))
 }

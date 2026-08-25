@@ -13,17 +13,17 @@ import (
 )
 
 // knownProjectsFile is the machine-local registry of Unity projects that have
-// interacted with upipe (registered by pkg-install, readable by instances).
-// It lives under the user's home (NOT inside any project) per the "no
-// project-local harness config" rule. Variable (not const func) so tests can
-// redirect it.
+// interacted with upipe (registered after any successful command — see the cli
+// layer — and by pkg-install; readable by instances). It lives under the
+// user's home (NOT inside any project) per the "no project-local harness
+// config" rule. Variable (not const func) so tests can redirect it.
 var knownProjectsFile = func() string {
 	return userHomeDir(".upipe", "projects.txt")
 }
 
-// registerProject appends a project root to the registry (deduplicated).
+// RegisterProject appends a project root to the registry (deduplicated).
 // Best-effort: a failure to persist never fails the calling command.
-func registerProject(projectPath string) {
+func RegisterProject(projectPath string) {
 	if projectPath == "" {
 		return
 	}

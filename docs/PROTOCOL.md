@@ -79,13 +79,13 @@ Editor 服务器会隐藏 Runtime-only 命令；Runtime 服务器反之。
 {
   "command": "eval",
   "parameters": { "code": "return 2 + 2;" },
-  "timeout": 30,
+  "timeout": 30000,
   "job": false
 }
 ```
 
 - `parameters`：任意 JSON 对象，服务端按命令 schema 解析
-- `timeout`：秒，正整数，可省略；**eval 的服务端超时上限 24h（包 0.5.0 起）**
+- `timeout`：**毫秒**，正整数，可省略（省略时服务端默认 60000ms = 60s）。单位契约为毫秒（服务端 `CommandExecutionRequest.Timeout` 按 `dispatcherTimeoutMs` 直接消费）；客户端 `--timeout` 接受 Go duration（如 `30s`、`2m`），发送前换算为毫秒，同时作为客户端 round-trip deadline（+30s 余量）。**eval 的服务端超时上限 24h（包 0.5.0 起）**
 - `job: true`：立即返回 `{"jobId": "…", "state": "queued"}`，后台执行，轮询 `/api/job?id=…` 收割；队列上限 100 并发，超出 429
 
 响应信封（`BaseResponse` + `CommandExecutionResponse`）：

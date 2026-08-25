@@ -8,8 +8,9 @@ import (
 // default) — mirrors GET /api/job.
 func JobCommand() SubCommand {
 	return SubCommand{
-		Name:     "job",
-		Synopsis: "inspect a detached job: upipe job <id> [--no-wait]",
+		Name: "job",
+		Synopsis: "inspect a detached job: upipe job <id> [--no-wait] " +
+			"(long builds/bakes: raise the wait budget with --timeout, e.g. --timeout 45m; default 10m)",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe job")
 			noWait := fs.Bool("no-wait", false, "single snapshot instead of waiting for terminal state")
@@ -35,8 +36,11 @@ func JobCommand() SubCommand {
 			}, protocol.PollConfig{
 				TerminalOK:   []string{"completed"},
 				TerminalFail: []string{"failed", "cancelled"},
-				// --timeout extends the poll budget for long jobs (builds,
-				// bakes); without it the wait dies at the 10min default.
+				// --timeout (a shared duration flag, e.g. 45m) extends the
+				// poll budget for long jobs (builds, bakes); without it the
+				// wait dies at the 10min default (options.DefaultTimeout).
+				// The synopsis above surfaces this so long waits are not a
+				// surprise cutoff.
 				Deadline: rt.Opts.Timeout,
 			}, nil, nil)
 			if err != nil {

@@ -84,8 +84,9 @@ func PkgInstallCommand() SubCommand {
 				return nil, protocol.AsUpipeError(err)
 			}
 			// Register the project so `upipe instances` can find it later
-			// (best-effort; never fails the install).
-			registerProject(rt.ProjectPath)
+			// (best-effort; never fails the install; the cli layer also
+			// registers after any successful command).
+			RegisterProject(rt.ProjectPath)
 			return map[string]any{
 				"source":    *source,
 				"target":    target,

@@ -9,7 +9,7 @@ var Version = "dev"
 // distributes. Single source of truth for pkg-status reporting and the
 // version command — bump it together with package/com.unity.pipeline/package.json
 // (see package/ADAPTATION-2022.md upgrade flow, step 3).
-const VendoredPkgRef = "0.5.0-2022.1"
+const VendoredPkgRef = "0.5.1-2022.1"
 
 // VendoredPkgSource is where the adapted package comes from.
 const VendoredPkgSource = "github.com/Kayungko/unity-pipe"

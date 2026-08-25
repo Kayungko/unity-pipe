@@ -25,6 +25,9 @@ func Main(argv []string) int {
 	global := flag.NewFlagSet("upipe", flag.ContinueOnError)
 	global.SetOutput(os.Stderr)
 	options.Attach(global, opts)
+	// Any usage rendering (bare `upipe`, --help, bad global flags) shows the
+	// full command table, not just the shared flag defaults.
+	global.Usage = func() { printUsage(global) }
 	if err := global.Parse(argv); err != nil {
 		return protocol.ExitUsage
 	}
@@ -45,6 +48,14 @@ func Main(argv []string) int {
 	// remain as defaults; re-specifying after the subcommand overrides them).
 	subOpts := *opts
 	rt := &commands.Runtime{Opts: &subOpts}
+
+	// `upipe <cmd> --help` short-circuits before instance resolution: the
+	// command's Run builds its real flag set, the ErrHelp path renders the
+	// usage (see newFlagSet), and no live editor is required to read help.
+	if hasHelpFlag(global.Args()[1:]) {
+		_, err := sub.Run(rt, global.Args()[1:])
+		return render(err, &subOpts)
+	}
 
 	// Pre-parse the shared flags out of the subcommand arguments BEFORE the
 	// runtime is constructed: newRuntime resolves the project from
@@ -72,7 +83,25 @@ func Main(argv []string) int {
 	if err != nil {
 		return render(err, &subOpts)
 	}
+	// A successful command proves this machine touched the project; register
+	// it (best-effort, deduplicated) so `upipe instances` can find it later.
+	// NoRuntime commands carry an empty ProjectPath and are skipped inside.
+	commands.RegisterProject(rt.ProjectPath)
 	return render(nil, &subOpts, data)
+}
+
+// hasHelpFlag reports whether args contain a help request (-h/--help) before
+// the "--" terminator — the tokens the flag package answers with ErrHelp.
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "-h" || a == "-help" || a == "--h" || a == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 func lookup(name string) (commands.SubCommand, bool) {
