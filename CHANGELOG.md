@@ -11,6 +11,7 @@
 - 场景对象写命令参数表补全（源码核对）：`rename_gameobject` 用 `target`+`name`、`set_transform` 坐标为 float 数组 `[x,y,z]`；`target` 裸字符串的六种解析优先级（globalId/assetPath/guid/instanceId/整数/hierarchyPath）。
 - 勘误：hierarchy path 解析"失败"根因是 **Git Bash MSYS 路径改写**（`/Name` → `C:/Program Files/Git/Name`），非包 bug——`MSYS_NO_PATHCONV=1` 或 `//Name` 即可；SKILL.md Gotchas 与 RECIPES.md §4.2 已记录。
 - RECIPES.md 已知限制补充：`find_gameobjects` 按 name 过滤实测未命中新建顶层对象（原因未查，eval 遍历替代）。
+- **技能自包含修复**：RECIPES.md 打包为 `harness/skills/unity-pipeline/references/RECIPES.md` 随插件分发（此前 SKILL.md 引用 `docs/RECIPES.md`，安装后断链）；新增 `recipes_sync_test.go` 锁定权威版与分发副本一致，编辑 `docs/RECIPES.md` 后未重新打包会 fail build。
 
 ## [0.1.5] - 2026-08-25
 

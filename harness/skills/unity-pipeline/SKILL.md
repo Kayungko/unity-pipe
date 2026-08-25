@@ -47,7 +47,9 @@ always null); scene-hierarchy nodes live under `result.roots`. Asset search:
 prefer `eval` + `AssetDatabase.FindAssets` over `exec search` (full-catalog
 queries can block >2min). Full field-tested recipes — eval pitfalls (no
 `System.Tuple`, no `\n` escapes), missing-script locator, prefab census
-strategy, probe-object lifecycle — see `docs/RECIPES.md` in the repo.
+strategy, probe-object lifecycle, MSYS path-mangling workaround — see
+[`references/RECIPES.md`](references/RECIPES.md) (bundled with the skill;
+source of truth: `docs/RECIPES.md` in the unity-pipe repo).
 
 ## 1. Install & verify
 
