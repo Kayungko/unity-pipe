@@ -7,7 +7,20 @@
 | AI Mana / Claude Code | `~/.claude/CLAUDE.md` | §13 Unity CLI / Pipeline 操作规范 | [`claude.md`](claude.md) |
 | Codex | `~/.codex/AGENTS.md` | 6.4 Unity CLI / Pipeline 操作规范 | [`agents.md`](agents.md) |
 
-新机器部署或分享给同事时，装完技能后把对应模板贴入全局文档的对应章节即可完成整套部署。
+## 一键应用（推荐）
+
+```bash
+upipe plugin install --apply-rules [--co-use-whitelist "E:\P4\SGAME_*"] [--co-use-depot //sgproj/trunk]
+```
+
+装技能的同时把两份模板渲染进全局文档：本机路径类占位符（仓库、upipe.exe、UNITY-GUIDE）自动填充，co-use 白名单来自 `--co-use-*` 参数（缺省写入 pipeline-only 安全默认）。行为契约：
+
+- 追加内容用 `<!-- unity-pipe:rules ... -->` 标记包裹，**重复执行自动跳过**（幂等）；
+- 已有全局文档**改前自动备份**（同目录 `<文件名>.upipe-bak-<时间戳>`）；
+- 全局文档此前已手动贴过规则（无标记）时同样按追加处理——旧内容保留在标记块之前，请自行取舍；
+- 只想预览：加 `--dry-run`。
+
+手动贴模板（老办法，适合精细控制章节位置）仍按下方变量表操作。
 
 ## 模板变量
 

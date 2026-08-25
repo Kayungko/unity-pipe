@@ -54,16 +54,19 @@
 2. 从 Releases 下载适配包 tgz，给我要装的 Unity 工程装适配包：
    先用 --dry-run 给我看安装计划，我确认后再正式安装；
    工程路径：<我的 Unity 工程路径>
-3. 安装你的 upipe 技能：upipe plugin install；
-4. 按仓库 harness/rules/README.md 的说明，把规则模板贴进你的全局配置
-   （AI Mana/Claude Code 是 CLAUDE.md，Codex 是 AGENTS.md）：
-   {{占位符}} 按我本机实际路径替换，修改前先备份原文件；
-5. 全部完成后告诉我怎么验证。
+3. 安装你的 upipe 技能和全局安全规则，一条命令：
+   upipe plugin install --apply-rules
+   （它会自动装技能，并把规则追加进你的全局配置——AI Mana/Claude Code 的
+   CLAUDE.md 与 Codex 的 AGENTS.md，改前自动备份，重复执行不会重复写入；
+   如果我有需要双信道的工程，把路径 glob 告诉 AI，例如：
+   --co-use-whitelist "E:\P4\SGAME_*" --co-use-depot //sgproj/trunk，
+   没有就省略，AI 按最保守方式工作）；
+4. 全部完成后告诉我怎么验证。
 ```
 
 过程中你只需要做两件事：**看一眼第 2 步的安装计划并确认**，以及最后**打开 Unity Editor**。下载、配 PATH、装技能、贴规则、替换占位符——全部由 AI 完成。
 
-> 💡 第 4 步别让 AI 跳过：技能是「说明书」，规则是「安全守则」。只装技能不贴规则，AI 不知道「场景 / Prefab / 材质等文件禁止直接改」这条红线，可能绕过保护改坏工程文件。
+> 💡 第 3 步的 `--apply-rules` 别让 AI 省掉：技能是「说明书」，规则是「安全守则」。只装技能不贴规则，AI 不知道「场景 / Prefab / 材质等文件禁止直接改」这条红线，可能绕过保护改坏工程文件。
 
 ### 验证
 
@@ -91,7 +94,7 @@ upipe pkg-install --project-path <project> --source <tgz路径> --dry-run   # �
 
 装好后打开该工程的 Unity Editor 即可（出现「P4 / p4 edit」提示是团队版本控制相关，个人项目忽略）。
 
-**③ 装技能 + 贴规则**：仓库目录内执行 `upipe plugin install`（旧版自动备份到 `skills-backup/`）；再按 [harness/rules/README.md](harness/rules/README.md) 把规则模板贴进全局配置——**`{{占位符}}` 必须替换成本机实际值，直接照抄会失效**；没有白名单工程就整段删掉 co-use 条目（AI 自动按最保守方式工作）。
+**③ 装技能 + 贴规则**：仓库目录内执行 `upipe plugin install --apply-rules`——一条命令装技能并把规则追加进全局配置（改前自动备份；重复执行不会重复写入）。有 co-use 白名单工程就加 `--co-use-whitelist "E:\P4\SGAME_*" --co-use-depot //sgproj/trunk`，省略则按最保守的 pipeline-only 模式写入。手动贴模板的老办法见 [harness/rules/README.md](harness/rules/README.md)。
 
 </details>
 

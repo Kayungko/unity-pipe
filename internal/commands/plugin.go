@@ -21,7 +21,7 @@ func PluginCommand() SubCommand {
 	return SubCommand{
 		Name:      "plugin",
 		Aliases:   []string{"plugin-install"},
-		Synopsis:  "install harness skills: upipe plugin install [--claude|--codex|--all] [--from <repo>]",
+		Synopsis:  "install harness skills: upipe plugin install [--claude|--codex|--all] [--from <repo>] [--apply-rules [--co-use-whitelist <glob>] [--co-use-depot <depot>]]",
 		NoRuntime: true,
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe plugin install")
@@ -29,6 +29,9 @@ func PluginCommand() SubCommand {
 			codex := fs.Bool("codex", false, "install into ~/.codex/skills (Codex)")
 			from := fs.String("from", "", "unity-pipe repo root (default: auto-detect from cwd)")
 			dryRun := fs.Bool("dry-run", false, "show the plan without writing")
+			applyRules := fs.Bool("apply-rules", false, "also append the routing rules to the global harness docs (~/.claude/CLAUDE.md / ~/.codex/AGENTS.md); idempotent, existing docs are backed up first")
+			coUseWhitelist := fs.String("co-use-whitelist", "", "co-use project path glob for --apply-rules (e.g. 'E:\\P4\\SGAME_*'); empty = pipeline-only safe default")
+			coUseDepot := fs.String("co-use-depot", "", "P4 depot of whitelisted projects for --apply-rules (e.g. //sgproj/trunk)")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
 			if err != nil {
@@ -94,17 +97,71 @@ func PluginCommand() SubCommand {
 			}
 			result["targets"] = targets
 			result["installs"] = reports
+
+			if *applyRules {
+				// Deterministic replacement for the old "paste the template
+				// yourself" step: render harness/rules/*.md with the local
+				// paths filled in and append a managed block to the global
+				// harness docs.
+				bin, _ := os.Executable()
+				if bin == "" {
+					bin = "upipe"
+				}
+				vars := ruleVars{
+					Repo:      repoRoot,
+					Bin:       bin,
+					Guide:     userHomeDir(".codex", "UNITY-GUIDE.md"),
+					Whitelist: *coUseWhitelist,
+					Depot:     *coUseDepot,
+				}
+				docs := map[string]string{}
+				if doClaude {
+					docs[userHomeDir(".claude", "CLAUDE.md")] = filepath.Join(repoRoot, "harness", "rules", "claude.md")
+				}
+				if doCodex {
+					docs[userHomeDir(".codex", "AGENTS.md")] = filepath.Join(repoRoot, "harness", "rules", "agents.md")
+				}
+				type ruleReport struct {
+					Doc     string `json:"doc"`
+					Status  string `json:"status"`
+					Backup  string `json:"backup,omitempty"`
+					Warning string `json:"warning,omitempty"`
+				}
+				var ruleReports []ruleReport
+				for _, doc := range sortedKeys(docs) {
+					tmpl := docs[doc]
+					rep := ruleReport{Doc: doc}
+					body, terr := extractRuleBody(tmpl)
+					if terr != nil {
+						rep.Status = "failed"
+						rep.Warning = terr.Error()
+						ruleReports = append(ruleReports, rep)
+						continue
+					}
+					status, backup, aerr := applyRulesDoc(doc, renderRule(body, vars), *dryRun)
+					if aerr != nil {
+						return nil, protocol.AsUpipeError(aerr)
+					}
+					rep.Status, rep.Backup = status, backup
+					ruleReports = append(ruleReports, rep)
+				}
+				result["rules_applied"] = ruleReports
+			}
+
 			if !*dryRun {
 				result["note"] = "AI Mana hot-loads skills in the current session; Codex needs a new session."
 				// Skills reference the global routing rules (co-use whitelist,
-				// serialized-asset red lines) by name; surface the template
-				// location so a fresh machine knows the deploy is not complete
-				// until the rules section lands in the global docs.
+				// serialized-asset red lines) by name; the deploy is complete
+				// once the rules section lands in the global docs.
 				rules := filepath.Join(repoRoot, "harness", "rules")
 				if _, err := os.Stat(rules); err == nil {
 					result["rules_template"] = rules
 					note, _ := result["note"].(string)
-					result["note"] = note + " Routing rules (co-use whitelist etc.) are NOT installed by this command — paste harness/rules/claude.md into ~/.claude/CLAUDE.md §13 and harness/rules/agents.md into ~/.codex/AGENTS.md 6.4 (see harness/rules/README.md)."
+					if *applyRules {
+						result["note"] = note + " Routing rules appended as a managed block (search \"unity-pipe:rules\"); re-running is a no-op. If --co-use-whitelist was not passed, the block defaults to pipeline-only — edit it to enable co-use."
+					} else {
+						result["note"] = note + " Routing rules (co-use whitelist etc.) are NOT installed by this command — re-run with --apply-rules to append them to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md (idempotent, backs up first), or paste harness/rules/*.md manually (see harness/rules/README.md)."
+					}
 				}
 			}
 			return result, nil
