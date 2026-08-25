@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 96" role="img" aria-label="unity-pipe">
+  <!-- flow-in lines: many commands converge -->
+  <line x1="4" y1="24" x2="36" y2="24" stroke="#94A3B8" stroke-width="7" stroke-linecap="round"/>
+  <line x1="0" y1="48" x2="36" y2="48" stroke="#94A3B8" stroke-width="7" stroke-linecap="round"/>
+  <line x1="4" y1="72" x2="36" y2="72" stroke="#94A3B8" stroke-width="7" stroke-linecap="round"/>
+  <!-- single thin channel: upipe -->
+  <circle cx="62" cy="48" r="15" fill="none" stroke="#00ADD8" stroke-width="7"/>
+  <circle cx="62" cy="48" r="4.5" fill="#00ADD8"/>
+  <!-- direct connect out -->
+  <line x1="84" y1="48" x2="102" y2="48" stroke="#00ADD8" stroke-width="7" stroke-linecap="round"/>
+  <polyline points="104,34 120,48 104,62" fill="none" stroke="#00ADD8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- wordmark -->
+  <text x="148" y="62" font-family="'Segoe UI',-apple-system,'Helvetica Neue',Arial,sans-serif" font-size="40" font-weight="800" letter-spacing="-0.5"><tspan fill="#E2E8F0">unity</tspan><tspan fill="#00ADD8">-pipe</tspan></text>
+</svg>

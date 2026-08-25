@@ -1,6 +1,9 @@
 <div align="center">
 
-# unity-pipe
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+  <img src="assets/logo.svg" width="380" alt="unity-pipe">
+</picture>
 
 **自维护的 Unity Pipeline 薄客户端 · Unity 2022 适配包分发 · AI Harness 插件包**
 
@@ -9,12 +12,7 @@
 [![License: MIT (code)](https://img.shields.io/badge/license-MIT%20(code%20only)-blue?style=flat-square)](LICENSE)
 [![Repo: PRIVATE](https://img.shields.io/badge/repo-PRIVATE%20%20contains%20Unity%20package-red?style=flat-square)](LICENSE-NOTES.md)
 
-[![快速上手](https://img.shields.io/badge/快速上手-5%20分钟跑通-2563eb?style=flat-square)](#快速开始)
-[![使用流程](https://img.shields.io/badge/使用流程-安装到日常-2563eb?style=flat-square)](#使用流程)
-[![协议参考](https://img.shields.io/badge/docs-PROTOCOL.md-475569?style=flat-square)](docs/PROTOCOL.md)
-[![迁移指南](https://img.shields.io/badge/docs-MIGRATION.md-475569?style=flat-square)](docs/MIGRATION.md)
-[![适配记录](https://img.shields.io/badge/package-ADAPTATION--2022.md-475569?style=flat-square)](package/ADAPTATION-2022.md)
-[![更新日志](https://img.shields.io/badge/CHANGELOG-v0.1.1-d97706?style=flat-square)](CHANGELOG.md)
+[快速上手](#快速开始) · [使用流程](#使用流程) · [协议参考](docs/PROTOCOL.md) · [迁移指南](docs/MIGRATION.md) · [2022 适配记录](package/ADAPTATION-2022.md) · [更新日志](CHANGELOG.md)
 
 </div>
 
