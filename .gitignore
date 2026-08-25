@@ -1,0 +1,14 @@
+# Build artifacts
+dist/
+*.exe
+*.test
+upipe
+upipe-*
+
+# Go
+/vendor/
+
+# Editors
+.idea/
+.vscode/
+*.swp
