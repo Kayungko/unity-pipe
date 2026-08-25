@@ -55,6 +55,13 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 ["BuildAdditionalStreamedScenes"] = BuildOptions.BuildAdditionalStreamedScenes,
                 ["CleanBuildCache"] = BuildOptions.CleanBuildCache,
                 ["DetailedBuildReport"] = BuildOptions.DetailedBuildReport,
+                // Release-oriented compression options (available in 2022.3;
+                // standard release builds use CompressWithLz4HC).
+                ["CompressWithLz4"] = BuildOptions.CompressWithLz4,
+                ["CompressWithLz4HC"] = BuildOptions.CompressWithLz4HC,
+                // Strict-mode companion flags commonly paired with LZ4HC releases.
+                ["StrictMode"] = BuildOptions.StrictMode,
+                ["CompressWithLz4HCNoChunks"] = BuildOptions.CompressWithLz4HCNoChunks,
             };
 
         static readonly object s_Lock = new object();

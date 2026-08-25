@@ -35,6 +35,9 @@ func JobCommand() SubCommand {
 			}, protocol.PollConfig{
 				TerminalOK:   []string{"completed"},
 				TerminalFail: []string{"failed", "cancelled"},
+				// --timeout extends the poll budget for long jobs (builds,
+				// bakes); without it the wait dies at the 10min default.
+				Deadline: rt.Opts.Timeout,
 			}, nil, nil)
 			if err != nil {
 				return nil, err
