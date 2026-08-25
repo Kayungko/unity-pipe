@@ -165,3 +165,7 @@ The port file is rewritten after every domain reload — always re-read it.
 - **Target a specific project** with `--project-path <root>` when cwd is elsewhere.
 - **Any command not wrapped as a subcommand** goes through `upipe exec <name> --set k=v`
   (values are JSON-scalar coerced: "true"→bool, "60"→number).
+- **Git Bash mangles leading-slash args.** `--set target=/Name` becomes
+  `C:/Program Files/Git/Name` (MSYS path conversion) and the command fails with a
+  bogus hierarchy-path error. Prefix the call with `MSYS_NO_PATHCONV=1` (or use
+  `//Name`); instanceId targets are immune. PowerShell/cmd unaffected.

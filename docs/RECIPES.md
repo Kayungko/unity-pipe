@@ -65,10 +65,34 @@ hierarchy path + 组件索引，直接对应 Lua 绑定命名。239ms / 215 节�
 
 ## 4. 资产/场景写面规则
 
-1. **场景对象写操作（rename/delete/set_transform 等）的 `target` 参数用 instanceId**——`create_gameobject` 返回的 `instanceId` 实测有效；hierarchy path 形式（`/Name`）实测解析失败（"No GameObject at hierarchy path"，疑似包端 bug，未定位根因）。
-2. **探针模式**：create → 测试 → delete → hierarchy + 磁盘双重复核残留。删除资产后连 `.meta` 一起消失（实测干净）。
-3. `get_authoring_root` 先查裸路径解析根（实测某工程为 `Assets`，未收紧）。
-4. P4 工程：upipe 永不代跑 p4；探针资产用 `__upipe_probe_*` 命名，测试完立即 `delete_asset --set confirm=true`。
+### 4.1 场景对象命令参数表（源码实测：`GameObjectCommands.cs`）
+
+| 命令 | 参数 |
+|---|---|
+| `rename_gameobject` | `target`（Required, ObjectRef）+ `name`（Required, string） |
+| `delete_gameobject` | `target`（Required, ObjectRef） |
+| `set_transform` | `target`（Required）+ `position`/`rotation`/`scale` 各为 **float 数组 `[x,y,z]`**（不是 `{"x":..}` 对象！） |
+| `set_parent` | `target` + `parent`（可省=移到场景根）+ `world_position_stays`（默认 true） |
+| `create_gameobject` | `name` + `primitive`（可省）+ `parent`（ObjectRef，可省） |
+
+`target` 是 ObjectRef，裸字符串按优先级解析：`GlobalObjectId_V1…` → `Assets/…` 资产路径 → `guid:…`/32位hex → `instanceId:…`/纯整数（含负数）→ **其余（含 `/Name`）= hierarchy path**。`create` 返回的 `instanceId` 与 `/Name` 形式均有效。
+
+### 4.2 ⚠️ Git Bash 路径改写坑（MSYS path mangling）——实测根因
+
+在 Git Bash 下传 `--set target=/Name`，MSYS 会把开头 `/` 当 POSIX 路径**自动改写**成 `C:/Program Files/Git/Name`，包端收到的是废路径（报 "No GameObject at hierarchy path 'C:/Program Files/Git/…'"）。**这不是包的 bug**。修复任选其一：
+
+```bash
+MSYS_NO_PATHCONV=1 upipe exec delete_gameobject --set target=/Name ...   # 方式1：环境变量
+upipe exec delete_gameobject --set target=//Name ...                     # 方式2：双斜杠（MSYS 转义）
+```
+
+PowerShell / cmd 无此问题。instanceId（纯数字）不受影响——这也是它在 Git Bash 下"看起来更可靠"的原因。
+
+### 4.3 写面纪律
+
+1. **探针模式**：create → 测试 → delete → hierarchy + 磁盘双重复核残留。删除资产后连 `.meta` 一起消失（实测干净）。
+2. `get_authoring_root` 先查裸路径解析根（实测某工程为 `Assets`，未收紧）。
+3. P4 工程：upipe 永不代跑 p4；探针资产用 `__upipe_probe_*` 命名，测试完立即 `delete_asset --set confirm=true`。
 
 ## 5. 大规模 prefab 普查：双轨策略（820 个实测）
 
@@ -79,5 +103,5 @@ hierarchy path + 组件索引，直接对应 Lua 绑定命名。239ms / 215 节�
 ## 6. 已知限制与未验证项
 
 - `exec search`：全库查询（`t:Canvas`）实测 >2min 阻塞；`h:` 语法无效。**资产搜索首选 `eval + AssetDatabase.FindAssets`（可限定目录，秒回）**。
-- `rename_gameobject` / `set_transform` 正确参数名未确认（回包空 `{}`）；delete 的 `target=instanceId` 已验证。
+- `find_gameobjects --set name=PathProbe` 实测未命中刚创建的顶层对象（回包 objects 为空，原因未查）——按名字找对象时 eval 遍历 `GetRootGameObjects()` 更可靠。
 - 守门三模式是从代表性命令归纳，未逐一测完 142 个命令。
