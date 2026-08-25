@@ -251,3 +251,34 @@ func TestTestCommandPassAndFail(t *testing.T) {
 		t.Fatalf("summary must carry failure count: %v", summary)
 	}
 }
+
+// Regression: shared flags AFTER the subcommand (the documented shape
+// `upipe status --project-path X`) must reach the runtime before project
+// resolution — this shape silently failed with NoInstance before v0.1.6.
+func TestStatusProjectPathAfterSubcommand(t *testing.T) {
+	m := newMockEditor(t)
+	code, env := runCLI(t, "--json", "status", "--project-path", m.project)
+	if code != 0 {
+		t.Fatalf("exit %d: %v", code, env)
+	}
+	data, ok := env["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("no data envelope: %v", env)
+	}
+	if _, ok := data["instance"]; !ok {
+		t.Fatal("no instance in status output — project-path after subcommand was ignored")
+	}
+}
+
+// Same regression for value flags with = form after the subcommand.
+func TestProjectPathEqualsFormAfterSubcommand(t *testing.T) {
+	m := newMockEditor(t)
+	code, env := runCLI(t, "--json", "status", "--project-path="+m.project)
+	if code != 0 {
+		t.Fatalf("exit %d: %v", code, env)
+	}
+	data, _ := env["data"].(map[string]any)
+	if _, ok := data["instance"]; !ok {
+		t.Fatalf("instance missing: %v", env)
+	}
+}

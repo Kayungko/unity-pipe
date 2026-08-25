@@ -45,6 +45,20 @@ func Main(argv []string) int {
 	// remain as defaults; re-specifying after the subcommand overrides them).
 	subOpts := *opts
 	rt := &commands.Runtime{Opts: &subOpts}
+
+	// Pre-parse the shared flags out of the subcommand arguments BEFORE the
+	// runtime is constructed: newRuntime resolves the project from
+	// opts.ProjectPath, so a `upipe status --project-path X` (flag after the
+	// subcommand — the documented shape) must land in subOpts first. Each
+	// command's Run re-parses its own flag set; a shared pre-parse that only
+	// consumes known shared flags keeps that path untouched.
+	preFS := flag.NewFlagSet("upipe "+name, flag.ContinueOnError)
+	preFS.SetOutput(os.Stderr)
+	options.Attach(preFS, &subOpts)
+	// Reorder so interspersed shared flags parse: hoist flags, keep the rest.
+	rest := reorderForFlags(preFS, global.Args()[1:])
+	_ = preFS.Parse(rest)
+
 	if !sub.NoRuntime {
 		r, err := newRuntime(&subOpts)
 		if err != nil {
@@ -109,3 +123,39 @@ func printUsage(fs *flag.FlagSet) {
 type nopWriteCloser struct{ b *strings.Builder }
 
 func (w *nopWriteCloser) Write(p []byte) (int, error) { return w.b.Write(p) }
+
+// reorderForFlags hoists flag tokens (and their values for value-taking
+// flags, looked up in fs) in front of the positional arguments so a single
+// flag.Parse can see them — same reordering commands.parseArgs applies.
+func reorderForFlags(fs *flag.FlagSet, args []string) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if len(a) > 1 && strings.HasPrefix(a, "-") {
+			name := strings.TrimLeft(a, "-")
+			if strings.Contains(name, "=") {
+				flags = append(flags, a)
+				continue
+			}
+			fl := fs.Lookup(name)
+			if fl != nil && !isBoolFlag(fl) && i+1 < len(args) {
+				flags = append(flags, a, args[i+1])
+				i++
+				continue
+			}
+			flags = append(flags, a)
+			continue
+		}
+		positional = append(positional, a)
+	}
+	return append(flags, positional...)
+}
+
+func isBoolFlag(fl *flag.Flag) bool {
+	bf, ok := fl.Value.(interface{ IsBoolFlag() bool })
+	return ok && bf.IsBoolFlag()
+}
