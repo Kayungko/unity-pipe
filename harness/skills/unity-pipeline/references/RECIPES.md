@@ -14,9 +14,10 @@
 | 其他 exec 命令 | `data.result`（可能是 dict 或 JSON 字符串，需二次 `json.loads`） | `get_scene_hierarchy` |
 | 写命令守门拒绝 | `result.status` / `result.applied` / 外层 `error`，见 §2 | |
 
-注意：
+注意（数组字段名逐命令核对，别猜）：
 - `eval` 回包里的 `output` 字段**恒为 null**（留给 stdout），别读它。
 - `get_scene_hierarchy` 的节点数组字段是 **`roots`**（不是 `nodes`）。
+- `find_gameobjects` 的结果数组字段是 **`gameObjects`**（+`count`）——实测正常工作（此前误报"name 过滤不命中"是调用方读错了字段名）。
 
 ## 2. 三种守门模式（写命令拒绝的判据必须三查）
 
@@ -103,5 +104,4 @@ PowerShell / cmd 无此问题。instanceId（纯数字）不受影响——这�
 ## 6. 已知限制与未验证项
 
 - `exec search`：全库查询（`t:Canvas`）实测 >2min 阻塞；`h:` 语法无效。**资产搜索首选 `eval + AssetDatabase.FindAssets`（可限定目录，秒回）**。
-- `find_gameobjects --set name=PathProbe` 实测未命中刚创建的顶层对象（回包 objects 为空，原因未查）——按名字找对象时 eval 遍历 `GetRootGameObjects()` 更可靠。
 - 守门三模式是从代表性命令归纳，未逐一测完 142 个命令。

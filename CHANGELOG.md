@@ -4,14 +4,19 @@
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-25
+
 ### Added
 
-- **`docs/RECIPES.md`**：agent 实测配方（SGAME 2022 生产工程验证）——回包判据字段表（eval 返回值在 `data.result.result`、层级树在 `result.roots`）、写面三种守门模式判据、eval 禁忌（System.Tuple 冲突 / `\n` 转义链断裂 / 2022 无 GetMonoBehavioursWithMissingScriptGUID）、LoadPrefabContents 只读拆解模板、missing script 精确定位配方、820 prefab 双轨普查策略（本地 YAML 全量 + eval 抽查权威）、Lua 字节码拼接加载对废弃反推的限制。
+- **`docs/RECIPES.md`**：agent 实测配方（SGAME 2022 生产工程验证）——回包判据字段表（eval 返回值在 `data.result.result`、层级树在 `result.roots`、find_gameobjects 结果在 `gameObjects`）、写面三种守门模式判据、eval 禁忌（System.Tuple 冲突 / `\n` 转义链断裂 / 2022 无 GetMonoBehavioursWithMissingScriptGUID）、LoadPrefabContents 只读拆解模板、missing script 精确定位配方、820 prefab 双轨普查策略（本地 YAML 全量 + eval 抽查权威）、Lua 字节码拼接加载对废弃反推的限制。
 - `unity-pipeline` SKILL.md 新增 §0.5：回包值字段映射与写面守门速查（exit 0 ≠ 业务成功），链接 RECIPES.md。
 - 场景对象写命令参数表补全（源码核对）：`rename_gameobject` 用 `target`+`name`、`set_transform` 坐标为 float 数组 `[x,y,z]`；`target` 裸字符串的六种解析优先级（globalId/assetPath/guid/instanceId/整数/hierarchyPath）。
-- 勘误：hierarchy path 解析"失败"根因是 **Git Bash MSYS 路径改写**（`/Name` → `C:/Program Files/Git/Name`），非包 bug——`MSYS_NO_PATHCONV=1` 或 `//Name` 即可；SKILL.md Gotchas 与 RECIPES.md §4.2 已记录。
-- RECIPES.md 已知限制补充：`find_gameobjects` 按 name 过滤实测未命中新建顶层对象（原因未查，eval 遍历替代）。
-- **技能自包含修复**：RECIPES.md 打包为 `harness/skills/unity-pipeline/references/RECIPES.md` 随插件分发（此前 SKILL.md 引用 `docs/RECIPES.md`，安装后断链）；新增 `recipes_sync_test.go` 锁定权威版与分发副本一致，编辑 `docs/RECIPES.md` 后未重新打包会 fail build。
+- **技能自包含**：RECIPES.md 打包为 `harness/skills/unity-pipeline/references/RECIPES.md` 随插件分发；新增 `recipes_sync_test.go` 锁定权威版与分发副本一致，编辑 `docs/RECIPES.md` 后未重新打包会 fail build。
+
+### Fixed
+
+- 勘误（文档）：hierarchy path 解析"失败"根因是 **Git Bash MSYS 路径改写**（`/Name` → `C:/Program Files/Git/Name`），非包 bug——`MSYS_NO_PATHCONV=1` 或 `//Name` 即可；SKILL.md Gotchas 与 RECIPES.md §4.2 已记录。
+- 勘误（文档）：`find_gameobjects` 按 name 过滤工作正常——此前误报"未命中"是调用方读错回包字段（正确字段 `gameObjects`，已入 §1 判据表）。
 
 ## [0.1.5] - 2026-08-25
 
