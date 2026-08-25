@@ -10,9 +10,9 @@
 [![Go 1.23+](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white)](go.mod)
 [![Unity 2022.3](https://img.shields.io/badge/Unity-2022.3-111827?style=for-the-badge&logo=unity&logoColor=white)](package/ADAPTATION-2022.md)
 [![Zero dependencies](https://img.shields.io/badge/dependencies-zero-16A34A?style=for-the-badge)](#开发)
-[![Agent ready](https://img.shields.io/badge/agent-ready-7C3AED?style=for-the-badge)](#直接跟-ai-说话)
+[![Agent ready](https://img.shields.io/badge/agent-ready-7C3AED?style=for-the-badge)](#ai-提示词大全日常这样用)
 
-[快速开始](#快速开始) · [跟 AI 说人话](#直接跟-ai-说话) · [术语表](#术语小词典) · [架构设计](docs/ARCHITECTURE.md) · [协议参考](docs/PROTOCOL.md) · [更新日志](CHANGELOG.md)
+[快速开始](#快速开始) · [AI 提示词大全](#ai-提示词大全日常这样用) · [术语表](#术语小词典) · [架构设计](docs/ARCHITECTURE.md) · [协议参考](docs/PROTOCOL.md) · [更新日志](CHANGELOG.md)
 
 </div>
 
@@ -95,9 +95,9 @@ upipe pkg-install --project-path <project> --source <tgz路径> --dry-run   # �
 
 </details>
 
-### 直接跟 AI 说话
+### AI 提示词大全（日常这样用）
 
-装完之后的使用方式就一种：**打开 AI 对话框，用大白话提需求**。下面加粗的两句现在就能直接复制发给 AI（把工程名、命名空间换成你自己的）：
+装完之后的使用方式就一种：**打开 AI 对话框，用大白话提需求**。下面加粗的句子都能直接复制发给 AI（把工程名、命名空间换成你自己的）：
 
 **例 1 · 编译测试**
 
