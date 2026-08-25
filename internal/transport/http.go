@@ -5,6 +5,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -17,8 +18,16 @@ import (
 
 const defaultTimeout = 120 * time.Second
 
+// maxTimeout caps the per-request round-trip budget. The pipeline server
+// documents a 24h eval ceiling (PROTOCOL.md §5); requests may not exceed it.
+const maxTimeout = 24 * time.Hour
+
 // HTTPTransport speaks to the pipeline server over 127.0.0.1 with keep-alive
 // connection reuse. Requests to localhost never go through a proxy.
+//
+// Per-request timeout: the client-level Timeout is left at 0 (no cap) and
+// each request gets its own deadline via context, so a long --timeout (e.g.
+// a slow eval) is not silently clipped at 120s while quick probes stay fast.
 type HTTPTransport struct {
 	client *http.Client
 }
@@ -27,7 +36,7 @@ type HTTPTransport struct {
 func New() *HTTPTransport {
 	return &HTTPTransport{
 		client: &http.Client{
-			Timeout: defaultTimeout,
+			Timeout: 0, // per-request only; see Do
 			Transport: &http.Transport{
 				Proxy: nil, // never proxy loopback traffic
 				DialContext: (&net.Dialer{
@@ -48,6 +57,9 @@ func (t *HTTPTransport) Do(req protocol.Request) (protocol.Response, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
+	if timeout > maxTimeout {
+		timeout = maxTimeout
+	}
 	url := "http://" + req.HostPort + req.Path
 	var body io.Reader
 	if len(req.Body) > 0 {
@@ -57,6 +69,9 @@ func (t *HTTPTransport) Do(req protocol.Request) (protocol.Response, error) {
 	if err != nil {
 		return protocol.Response{}, fmt.Errorf("build request: %w", err)
 	}
+	ctx, cancel := context.WithTimeout(httpReq.Context(), timeout)
+	defer cancel()
+	httpReq = httpReq.WithContext(ctx)
 	if req.AuthToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+req.AuthToken)
 	}

@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-25
+
+### Added
+
+- **`upipe version`**：自报 CLI 版本（`-ldflags` 构建注入）与 vendored 适配包版本；发版产物新增 `upipe.exe.sha256` 伴随文件（此前只有 tgz 有）。
+- **`scripts/import-from-p4`**：P4 工程紧急热修反向通道——只读 diff 工程内包与仓库 vendored 树（M/A/D 清单 + 小型行级 diff 提示），永不调 p4、永不写盘、永不 commit；对 SGAME 工程实测输出与已知状态精确吻合（94 meta + 3 签名文件差异）。
+
+### Fixed
+
+- **`--timeout` 打通客户端 HTTP 超时**：此前只映射进请求体，transport 层硬编码 120s round-trip 上限会把超 2 分钟的 eval（构建/烘焙/批量资产处理）在客户端掐断并误报为连接错误；现在 `--timeout` 同时驱动服务端命令超时与客户端 round-trip deadline（+30s 余量，上限对齐服务端 24h）。
+- **tar 路径穿越防护**：`pkg-install` 的 tar 条目名此前仅 TrimPrefix 无逃逸检查，恶意/畸形 tgz 理论上可写任意路径；现在拒绝绝对路径、`..` 引用与 Windows 盘符条目。
+
+### Changed
+
+- `pkg-status` 的 vendoredRef 由硬编码字符串改为单一常量源（`commands.VendoredPkgRef`），包版本升级不再需要手动同步两处。
+- 文档-代码落差清理：MIGRATION.md 的 daemon 条目改口「未实现」（UPIPE_DAEMON 从未在代码中留位）；`import-from-p4.py`（规划中）替换为已实现的 Go 工具。
+
+### Tests
+
+- `internal/transport`：长超时请求不被 120s 裁剪、短超时正确失败、24h 上限钳制、零超时回退默认——回归锁定 timeout 修复。
+- `internal/commands`：`pkg-install` 写盘路径（tar 分类/穿越拒绝/畸形输入/apply 幂等）与 `plugin install` 写盘路径（备份落 skills 目录外、SHA256 校验、重装落新内容）——全仓唯二文件系统写副作用命令从零测试到全覆盖。
+
 ## [0.1.3] - 2026-08-25
 
 ### Added
@@ -47,7 +69,8 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Kayungko/unity-pipe/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Kayungko/unity-pipe/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Kayungko/unity-pipe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Kayungko/unity-pipe/compare/v0.1.0...v0.1.1

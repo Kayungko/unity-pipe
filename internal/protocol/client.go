@@ -162,7 +162,16 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 	if err != nil {
 		return nil, &UpipeError{Code: ExitInternal, Kind: "Internal", Message: err.Error()}
 	}
-	resp, err := c.do(http.MethodPost, "/api/exec", raw, 0)
+	// The user-facing --timeout drives BOTH the server-side command timeout
+	// (request body) and the client round-trip deadline — otherwise a slow
+	// eval is clipped at the transport default (120s) and misreported as a
+	// connection error. A small margin is added so the server can deliver
+	// its own timeout envelope before the client gives up.
+	roundTrip := opts.Timeout
+	if roundTrip > 0 {
+		roundTrip += 30 * time.Second
+	}
+	resp, err := c.do(http.MethodPost, "/api/exec", raw, roundTrip)
 	if err != nil {
 		return nil, err
 	}

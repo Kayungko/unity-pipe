@@ -47,7 +47,7 @@ upipe pkg-install --project-path <project> --source dist\com.unity.pipeline-0.5.
 
 - P4 / Perforce 工作区：文件只读时 `pkg-install` 会**拒绝执行并提示先 p4 edit/reconcile**——upipe 永不代跑 p4
 - Git 工作区：直接执行，diff 计划仅覆盖变更文件并打印清单
-- 工程内紧急热修：用 `scripts/import-from-p4.py`（规划中）反向 diff 回仓库 vendored 树，人工 review 后 commit——**仓库永远是唯一真相源，单向分发到工程**
+- 工程内紧急热修：`go run ./scripts/import-from-p4 -project <工程路径>` 只读 diff 工程内包与仓库 vendored 树（M/A/D 清单 + 小型行级 diff 提示），人工 review 后把接受的变化拷回 vendored 树再 commit——**仓库永远是唯一真相源，单向分发到工程**；该工具永不调 p4、永不写盘
 
 ## 3. Harness 技能迁移
 
@@ -74,6 +74,6 @@ upipe plugin install          # 双侧安装（~/.claude/skills + ~/.codex/skill
 | 编辑器列表/安装/升级 | 包装 Unity Hub CLI（`--headless`）→ `upipe editor list/install` | 按需 |
 | 模块管理 | 同上 | 按需 |
 | Unity 账号认证 | **不迁**——agent 驱动编辑器不需要；Hub 自行管理 | — |
-| daemon 常驻进程 | protocol/transport 边界已留位（`UPIPE_DAEMON`） | 性能有需要时 |
+| daemon 常驻进程 | 未实现（纯文档构想；本地 HTTP 冷连接 <10ms，暂无需求） | 性能有需要时再评估 |
 
 原则：upipe 的能力面始终以「agent 驱动编辑器」为中心，官方 CLI 的"全家桶"职能不追求一一对应。

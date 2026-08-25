@@ -26,6 +26,7 @@ type SubCommand struct {
 // All returns the full subcommand registry in help order.
 func All() []SubCommand {
 	return []SubCommand{
+		VersionCommand(),
 		StatusCommand(),
 		CommandsCommand(),
 		ExecCommand(),

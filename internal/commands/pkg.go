@@ -34,7 +34,7 @@ func PkgStatusCommand() SubCommand {
 				"project":     rt.ProjectPath,
 				"package":     "com.unity.pipeline",
 				"version":     installed,
-				"vendoredRef": "0.5.0-2022.1 (github.com/Kayungko/unity-pipe)",
+				"vendoredRef": VendoredPkgRef + " (" + VendoredPkgSource + ")",
 			}, nil
 		},
 	}
@@ -157,6 +157,12 @@ func extractPlan(tgzPath, target string) (*pkgPlan, error) {
 		if name == "" || strings.HasPrefix(name, "Tests/") {
 			continue
 		}
+		// Path-traversal guard: a malicious or malformed tgz entry must never
+		// escape the install target. Reject absolute paths, parent refs, and
+		// Windows drive letters before the name ever reaches filepath.Join.
+		if isUnsafeEntryName(name) {
+			return nil, fmt.Errorf("tar entry %q escapes the package root — refusing to install", hdr.Name)
+		}
 		data, err := io.ReadAll(tr)
 		if err != nil {
 			return nil, err
@@ -178,6 +184,26 @@ func extractPlan(tgzPath, target string) (*pkgPlan, error) {
 		return nil, protocol.ErrProtocol("tgz contains no package/ entries — not a UPM package tarball?")
 	}
 	return plan, nil
+}
+
+// isUnsafeEntryName reports whether a tar entry name could escape the
+// install target: absolute paths (Unix or Windows), parent-directory refs,
+// or a Windows drive letter. Clean names like "Runtime/x.cs" are safe.
+func isUnsafeEntryName(name string) bool {
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, `\`) {
+		return true
+	}
+	// filepath.IsAbs misses "C:evil" (drive-relative); the volume-name check
+	// catches both "C:\..." and "C:...".
+	if vol := filepath.VolumeName(name); vol != "" {
+		return true
+	}
+	for _, seg := range strings.Split(name, `/`) {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func applyPlan(plan *pkgPlan) (int, error) {
