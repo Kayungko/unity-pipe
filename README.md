@@ -70,6 +70,21 @@ cli → commands → protocol ← transport
 - `harness/` — AI harness 插件包（unity-pipeline / unity-router / unity-mcp-bridge 技能 + 安装器）
 - `docs/` — 协议实测文档、2022 适配记录、迁移路径
 
+## 适配包与插件包
+
+```powershell
+# 查询工程已装的 pipeline 包版本
+upipe pkg-status --project-path E:\path\to\project
+
+# 安装/升级适配包（diff 计划，先 --dry-run 预览；P4 只读工作区会拒绝并提示 p4 操作）
+upipe pkg-install --project-path E:\path\to\project --source dist\com.unity.pipeline-0.5.0-2022.1.tgz
+
+# 安装 harness 技能到 AI Mana（~/.claude/skills）与 Codex（~/.codex/skills）
+upipe plugin install          # 在仓库目录内执行；旧技能自动备份并 SHA256 校验
+```
+
+适配包版本 `0.5.0-2022.1` 高于官方 `0.5.0-exp.1`（semver 预发布段排序），UPM 不会用 registry 版本"覆盖升级"。适配细节见 `package/ADAPTATION-2022.md`。
+
 ## 许可
 
 - upipe 代码：MIT
