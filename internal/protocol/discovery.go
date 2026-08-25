@@ -45,7 +45,7 @@ func (d *InstanceDescriptor) HostPort() string {
 // Library/Pipeline port file. `exists` is injected so the function stays pure.
 // Returns the project root and whether it was found.
 func FindProjectRoot(start string, exists func(dir string) bool) (string, bool) {
-	dir := strings.TrimRight(start, string(filepath.Separator))
+	dir := strings.TrimRight(start, `/\`)
 	if dir == "" {
 		return "", false
 	}
@@ -53,11 +53,24 @@ func FindProjectRoot(start string, exists func(dir string) bool) (string, bool) 
 		if exists(dir) {
 			return dir, true
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
+		// Cut at the last separator of EITHER style — a descriptor written by
+		// a Windows editor carries backslash paths even when read on another
+		// host, and filepath.Dir only knows the host's own separator.
+		i := strings.LastIndexAny(dir, `/\`)
+		if i < 0 {
 			return "", false
 		}
-		dir = parent
+		if i == 0 {
+			// "/x" — the filesystem root is the last candidate.
+			if exists("/") {
+				return "/", true
+			}
+			return "", false
+		}
+		dir = strings.TrimRight(dir[:i], `/\`)
+		if dir == "" {
+			return "", false
+		}
 	}
 }
 

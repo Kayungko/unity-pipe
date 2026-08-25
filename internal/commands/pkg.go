@@ -197,17 +197,24 @@ func isUnsafeEntryName(name string) bool {
 	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, `\`) {
 		return true
 	}
-	// filepath.IsAbs misses "C:evil" (drive-relative); the volume-name check
-	// catches both "C:\..." and "C:...".
-	if vol := filepath.VolumeName(name); vol != "" {
-		return true
-	}
+	// Drive letters must be rejected on EVERY platform — the tarball can be
+	// extracted under Windows path semantics regardless of the host OS, and a
+	// volume name may also lurk mid-path (package/C:/evil.cs). VolumeName()
+	// only recognizes volumes on Windows hosts, so scan each segment.
 	for _, seg := range strings.Split(name, `/`) {
 		if seg == ".." {
 			return true
 		}
+		if len(seg) >= 2 && seg[1] == ':' && isDriveLetter(seg[0]) {
+			return true
+		}
 	}
 	return false
+}
+
+// isDriveLetter reports whether c is an ASCII letter (potential volume name).
+func isDriveLetter(c byte) bool {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 func applyPlan(plan *pkgPlan) (int, error) {
