@@ -39,16 +39,23 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
     {
         /// <summary>
         /// Save a source GameObject (typically a scene object) as a prefab asset. The source becomes
-        /// a connected instance of the new prefab (interactionMode: AutomatedAction).
+        /// a connected instance of the new prefab (interactionMode: AutomatedAction). Refuses to
+        /// overwrite an existing prefab asset unless <paramref name="confirm"/> is true.
         /// </summary>
         [CliCommand("create_prefab", "Save a GameObject as a prefab asset at a project path; the source becomes a connected instance.", Tags = new[] { "prefabs" })]
         public static AuthoringResult CreatePrefab(
             [CliArg("source", "Reference to the source GameObject to save as a prefab (globalId/path/guid/instanceId/hierarchyPath).", Required = true)] ObjectRef source,
-            [CliArg("path", "Prefab asset path relative to the authoring root (the Assets/ prefix is optional and the .prefab extension is added if missing). e.g. Prefabs/Enemy or Prefabs/Enemy.prefab", Required = true)] string path)
+            [CliArg("path", "Prefab asset path relative to the authoring root (the Assets/ prefix is optional and the .prefab extension is added if missing). e.g. Prefabs/Enemy or Prefabs/Enemy.prefab", Required = true)] string path,
+            [CliArg("confirm", "Must be true to overwrite a prefab asset that already exists at the target path; without it the command refuses (destructive guard, asset overwrite is not undoable).")] bool confirm = false)
         {
             var go = ResolveGameObject(source, "source");
 
             var assetPath = ResolvePrefabPath(path);
+
+            // Destructive guard (CLI-190): never silently overwrite an existing prefab asset.
+            if (!confirm && AssetDatabase.LoadAssetAtPath<Object>(assetPath) != null)
+                throw new ArgumentException($"Refusing to overwrite existing prefab '{assetPath}'. Pass confirm=true to overwrite it (asset overwrite is not undoable via Unity's Undo).");
+
             EnsureParentFolder(assetPath);
 
             GameObject saved;
@@ -76,7 +83,8 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
         public static AuthoringResult InstantiatePrefab(
             [CliArg("prefab", "Reference to the prefab asset to instantiate (path/guid/globalId).", Required = true)] ObjectRef prefab,
             [CliArg("scene_path", "Optional path of a loaded scene to instantiate into; defaults to the active scene.")] string scenePath = null,
-            [CliArg("name", "Optional name for the created instance; defaults to the prefab name.")] string name = null)
+            [CliArg("name", "Optional name for the created instance; defaults to the prefab name.")] string name = null,
+            [CliArg("confirm", "Reserved for parity; instantiating a prefab into a scene is non-destructive and undoable as a single Editor undo step, so it is not required.")] bool confirm = false)
         {
             var prefabAsset = ResolvePrefabAsset(prefab, "prefab");
 
@@ -112,7 +120,8 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
         [CliCommand("create_prefab_variant", "Create a prefab variant asset that inherits from a base prefab.", Tags = new[] { "prefabs" })]
         public static AuthoringResult CreatePrefabVariant(
             [CliArg("base", "Reference to the base prefab asset (path/guid/globalId).", Required = true)] ObjectRef basePrefab,
-            [CliArg("path", "Variant prefab asset path relative to the authoring root (.prefab added if missing).", Required = true)] string path)
+            [CliArg("path", "Variant prefab asset path relative to the authoring root (.prefab added if missing).", Required = true)] string path,
+            [CliArg("confirm", "Reserved for parity; creating a variant writes a new asset under the authoring root and does not modify the base prefab, so it is not required.")] bool confirm = false)
         {
             var basePrefabAsset = ResolvePrefabAsset(basePrefab, "base");
 
@@ -156,7 +165,8 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
         /// </summary>
         [CliCommand("apply_prefab_overrides", "Apply a prefab instance's overrides back to its source prefab asset.", Tags = new[] { "prefabs" })]
         public static AuthoringResult ApplyPrefabOverrides(
-            [CliArg("instance", "Reference to a prefab instance GameObject in a scene (instanceId/hierarchyPath/globalId).", Required = true)] ObjectRef instance)
+            [CliArg("instance", "Reference to a prefab instance GameObject in a scene (instanceId/hierarchyPath/globalId).", Required = true)] ObjectRef instance,
+            [CliArg("confirm", "Reserved for parity; applying instance overrides is a single undoable Editor action, so it is not required.")] bool confirm = false)
         {
             var go = ResolveGameObject(instance, "instance");
             var root = PrefabUtility.GetOutermostPrefabInstanceRoot(go);
@@ -189,7 +199,8 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
         /// </summary>
         [CliCommand("revert_prefab_overrides", "Revert a prefab instance's overrides so it matches its source prefab asset.", Tags = new[] { "prefabs" })]
         public static AuthoringResult RevertPrefabOverrides(
-            [CliArg("instance", "Reference to a prefab instance GameObject in a scene (instanceId/hierarchyPath/globalId).", Required = true)] ObjectRef instance)
+            [CliArg("instance", "Reference to a prefab instance GameObject in a scene (instanceId/hierarchyPath/globalId).", Required = true)] ObjectRef instance,
+            [CliArg("confirm", "Reserved for parity; reverting instance overrides is a single undoable Editor action, so it is not required.")] bool confirm = false)
         {
             var go = ResolveGameObject(instance, "instance");
             var root = PrefabUtility.GetOutermostPrefabInstanceRoot(go);
@@ -216,7 +227,8 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
         [CliCommand("unpack_prefab", "Unpack a prefab instance into plain GameObjects (outermost level or completely).", Tags = new[] { "prefabs" })]
         public static AuthoringResult UnpackPrefab(
             [CliArg("instance", "Reference to a prefab instance GameObject in a scene (instanceId/hierarchyPath/globalId).", Required = true)] ObjectRef instance,
-            [CliArg("completely", "If true, unpack all nested prefab levels (Completely); if false, only the outermost level (OutermostRoot).", DefaultValue = false)] bool completely = false)
+            [CliArg("completely", "If true, unpack all nested prefab levels (Completely); if false, only the outermost level (OutermostRoot).", DefaultValue = false)] bool completely = false,
+            [CliArg("confirm", "Reserved for parity; unpacking a scene instance is a single undoable Editor action, so it is not required.")] bool confirm = false)
         {
             var go = ResolveGameObject(instance, "instance");
             var root = PrefabUtility.GetOutermostPrefabInstanceRoot(go);
@@ -254,7 +266,8 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
             [CliArg("rename_child", "Optional child name (relative path under the root, e.g. 'Body/Head') to rename.")] string renameChild = null,
             [CliArg("new_name", "New name for the child identified by rename_child.")] string newName = null,
             [CliArg("set_active_child", "Optional child name (relative path under the root) whose active state to set.")] string setActiveChild = null,
-            [CliArg("active", "Active state to apply when set_active_child is provided.", DefaultValue = true)] bool active = true)
+            [CliArg("active", "Active state to apply when set_active_child is provided.", DefaultValue = true)] bool active = true,
+            [CliArg("confirm", "Reserved for parity; the rewrite is already confined to the authoring root, so it is not required.")] bool confirm = false)
         {
             var prefabAsset = ResolvePrefabAsset(prefab, "prefab");
             var assetPath = AssetDatabase.GetAssetPath(prefabAsset);
