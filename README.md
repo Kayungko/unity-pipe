@@ -94,7 +94,9 @@ upipe pkg-install --project-path <project> --source <tgz路径> --dry-run   # �
 
 装好后打开该工程的 Unity Editor 即可（出现「P4 / p4 edit」提示是团队版本控制相关，个人项目忽略）。
 
-**③ 装技能 + 贴规则**：仓库目录内执行 `upipe plugin install --apply-rules`——一条命令装技能并把规则追加进全局配置（改前自动备份；重复执行不会重复写入）。有 co-use 白名单工程就加 `--co-use-whitelist "E:\P4\SGAME_*" --co-use-depot //sgproj/trunk`，省略则按最保守的 pipeline-only 模式写入。手动贴模板的老办法见 [harness/rules/README.md](harness/rules/README.md)。
+**③ 装技能 + 贴规则**：仓库目录内执行 `upipe plugin install --apply-rules`——一条命令装技能并把规则追加进全局配置（改前自动备份；重复执行不会重复写入）。有 co-use 白名单工程就加 `--co-use-whitelist "E:\P4\SGAME_*" --co-use-depot //sgproj/trunk`，省略则按最保守的 pipeline-only 模式写入。
+
+装完之后的变更——早期版本补规则、白名单事后调整、规则模板升级跟进——见 [harness/rules/README.md](harness/rules/README.md) 的「已部署机器的后续操作」；手动贴模板的老办法也在该文档。
 
 </details>
 
