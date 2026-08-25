@@ -36,66 +36,64 @@
 
 ## 快速开始
 
-从零到「AI 帮我干活」共三步安装（都只需做一次）+ 日常使用。以 Windows + PowerShell 为例（按 `Win` 键输入 `powershell` 回车即可打开蓝色命令行窗口），目录按需替换。
+### 前置条件
 
-### ① 安装 upipe（一次性）
+- 一个会动手干活的 AI 助手：**AI Mana / Claude Code** 或 **Codex**（下称 harness，AI 能跑命令、能改文件）；
+- 一个能正常打开的 Unity 2022.3 工程；
+- 本仓库的 GitHub 访问授权（私有仓库，向仓库所有者申请）。
 
-**普通用户（推荐）**：直接下载现成的 exe，不需要装任何编程工具。
+### 最快路径：安装也交给 AI（推荐）
 
-1. 到 [Releases](https://github.com/Kayungko/unity-pipe/releases) 页下载 `upipe.exe`，放进一个固定文件夹（例：`C:\Tools`）；
-2. 把该文件夹加入 PATH（PATH 是 Windows 的「找程序名单」，加入后任何地方输 `upipe` 都能找到）：
-   - `Win + I` → 搜索「**编辑账户的环境变量**」→ 环境变量 → 用户变量 `Path` → 新建 → 填 `C:\Tools` → 确定；
-3. **重新打开**一个 PowerShell 窗口，输入 `upipe status` 验证——有输出即成功（提示找不到工程是正常的，说明 upipe 已可用）。
+给 AI 服务的工具，安装配置也交给 AI——**你不需要打开命令行**。把 `<...>` 替换成实际值后，把这段话发给你的 AI 助手：
+
+```text
+请帮我安装并配置 upipe——一个让你能安全指挥 Unity Editor 的工具
+（私有仓库 github.com/Kayungko/unity-pipe，我已有访问权限）。步骤：
+1. 把仓库 clone 到本地，让 upipe 命令可用：优先从 Releases 下载 upipe.exe
+   放进 PATH 里的目录；没有合适目录就新建一个（如 C:\Tools）并加入我的 PATH；
+2. 从 Releases 下载适配包 tgz，给我要装的 Unity 工程装适配包：
+   先用 --dry-run 给我看安装计划，我确认后再正式安装；
+   工程路径：<我的 Unity 工程路径>
+3. 安装你的 upipe 技能：upipe plugin install；
+4. 按仓库 harness/rules/README.md 的说明，把规则模板贴进你的全局配置
+   （AI Mana/Claude Code 是 CLAUDE.md，Codex 是 AGENTS.md）：
+   {{占位符}} 按我本机实际路径替换，修改前先备份原文件；
+5. 全部完成后告诉我怎么验证。
+```
+
+过程中你只需要做两件事：**看一眼第 2 步的安装计划并确认**，以及最后**打开 Unity Editor**。下载、配 PATH、装技能、贴规则、替换占位符——全部由 AI 完成。
+
+> 💡 第 4 步别让 AI 跳过：技能是「说明书」，规则是「安全守则」。只装技能不贴规则，AI 不知道「场景 / Prefab / 材质等文件禁止直接改」这条红线，可能绕过保护改坏工程文件。
+
+### 验证
+
+打开工程让 Unity Editor 运行，然后把这句发给 AI：
+
+`帮我探活一下 Unity 编辑器`
+
+它调用 `upipe status` 并报告 ready，即全链路打通 ✅
+
+- 若 AI 说「不认识 upipe」：Codex 必须重开一个新对话才生效（AI Mana 当前窗口即可）；
+- 想自己确认：`C:\Users\<你>\.claude\skills`（或 `.codex\skills`）里应有 `unity-pipeline` / `unity-router` / `unity-mcp-bridge` 三个文件夹。
+
+### 想自己动手？（可选）
 
 <details>
-<summary><b>开发者：从源码构建</b>（需要 Git + Go 1.23+）</summary>
+<summary><b>手动安装三步</b>——排查问题时用得上</summary>
+
+**① 装 upipe**：到 [Releases](https://github.com/Kayungko/unity-pipe/releases) 下载 `upipe.exe` 放进固定文件夹（例 `C:\Tools`），`Win + I` 搜「编辑账户的环境变量」→ 环境变量 → 用户变量 `Path` → 新建 → 填文件夹路径；重开 PowerShell 输 `upipe status` 验证。开发者可 clone 仓库后 `go build -o dist/upipe.exe ./cmd/upipe`（需 Go 1.23+）。
+
+**② 装适配包**（每个工程一次）：从 Releases 下载 `com.unity.pipeline-*.tgz`，然后：
 
 ```powershell
-git clone https://github.com/Kayungko/unity-pipe.git <你的目录>\unity-pipe
-cd <你的目录>\unity-pipe
-go build -o dist/upipe.exe ./cmd/upipe     # 产物同样加入 PATH
+upipe pkg-install --project-path <project> --source <tgz路径> --dry-run   # 预览，无误后去掉 --dry-run
 ```
+
+装好后打开该工程的 Unity Editor 即可（出现「P4 / p4 edit」提示是团队版本控制相关，个人项目忽略）。
+
+**③ 装技能 + 贴规则**：仓库目录内执行 `upipe plugin install`（旧版自动备份到 `skills-backup/`）；再按 [harness/rules/README.md](harness/rules/README.md) 把规则模板贴进全局配置——**`{{占位符}}` 必须替换成本机实际值，直接照抄会失效**；没有白名单工程就整段删掉 co-use 条目（AI 自动按最保守方式工作）。
+
 </details>
-
-### ② 给 Unity 工程装适配包（每个工程一次）
-
-适配包是让 **Unity 2022** 老工程也能听懂指令的插件（官方只支持 Unity 6+，本仓库自制了 2022 版）。
-
-1. 从 [Releases](https://github.com/Kayungko/unity-pipe/releases) 下载 `com.unity.pipeline-*.tgz`（与 upipe 同页）；
-2. 预览安装计划（把 `<project>` 换成你的 Unity 工程文件夹路径）：
-
-```powershell
-upipe pkg-install --project-path <project> --source <下载的tgz路径> --dry-run
-```
-
-3. 预览无误后去掉 `--dry-run` 正式安装，然后**打开该工程的 Unity Editor**（工程文件夹的 `Library/Pipeline/` 下会自动生成连接文件，无需手动操作）。
-
-> 💡 提示中出现「P4 / p4 edit」是团队版本控制（Perforce）相关，个人项目直接忽略。
-
-### ③ 教会你的 AI（一次性）
-
-你的 AI 助手（**AI Mana / Claude Code** 或 **Codex**，下称 harness）出厂时并不认识 upipe。安装「技能」就是给它塞一本使用说明书——**装完你就不需要再敲任何命令**。
-
-```powershell
-# 在 unity-pipe 仓库目录内执行（或从 Release 下载的仓库副本内）
-upipe plugin install
-```
-
-这条命令会把三个技能装进 AI Mana（`~/.claude/skills`）和 Codex（`~/.codex/skills`）双侧。如果你以前装过旧版，会自动备份到旁边的 `skills-backup/` 文件夹（带完整性校验），随时可找回，不怕覆盖丢失。
-
-**技能 ≠ 全部——还差一步贴「安全守则」**：
-
-技能是「说明书」，治理规则（哪些工程允许用哪些能力、哪些文件禁止 AI 直接改）住在 AI 的全局配置文件里，安装命令不能替你改它。**只装技能不贴规则，AI 就像拿了工具但没拿到安全守则**——不知道「场景 / Prefab / 材质等文件禁止直接改、必须走正规流程」这条红线，可能绕过保护直接动手改工程文件。
-
-1. 打开 [harness/rules/](harness/rules/README.md)，AI Mana 用户取 `claude.md` 模板，Codex 用户取 `agents.md`；
-2. **把模板里所有 `{{...}}` 占位符替换成你机器的真实值**（对照变量表：仓库路径、upipe.exe 路径、白名单工程路径；没有白名单工程就整段删掉 co-use 条目，AI 会自动按最保守方式工作）——**直接照抄 `{{}}` 会让规则失效**；
-3. 用记事本打开对应全局文档（AI Mana：`C:\Users\<你>\.claude\CLAUDE.md`；Codex：`C:\Users\<你>\.codex\AGENTS.md`），把替换好的内容贴到文末（或对应章节）。
-
-**装后验证清单**：
-
-- [ ] `C:\Users\<你>\.claude\skills`（或 `.codex\skills`）里各多出 `unity-pipeline` / `unity-router` / `unity-mcp-bridge` 三个文件夹
-- [ ] 重开一个新对话（**Codex 必须重开才生效**；AI Mana 当前窗口即可）
-- [ ] 冒烟测试：把这句发给 AI——`帮我探活一下 Unity 编辑器`——它调用 `upipe status` 并报告 ready，即全链路打通 ✅
 
 ### 直接跟 AI 说话
 
