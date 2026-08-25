@@ -46,13 +46,20 @@ upipe plugin install --apply-rules [--co-use-whitelist "E:\P4\SGAME_*" --co-use-
 
 ### 场景 3：仓库规则模板升级了，已部署机器要跟进
 
-命令**不会**更新已写入的规则块（幂等跳过就是为保护你的手动修改）。升级步骤：
+一条命令（v0.1.5+）：
 
-1. 重跑命令确认 `already-managed`（无副作用，仅确认现状）；
-2. 手动删除两份全局文档中的旧标记块（从 `begin` 到 `end` 整块）；
-3. 重跑 `upipe plugin install --apply-rules ...`——按最新模板重新写入。
+```bash
+upipe plugin install --upgrade-rules          # 先加 --dry-run 预览效果
+```
 
-> 或者不删旧块：对比 [claude.md](claude.md) 模板与标记块内容，手动把变化合并进去（适合已在块内做过自定义的机器）。
+行为契约：
+
+- 与最新模板渲染做 hash 比对，**一致则跳过**（`up-to-date`）；
+- 有变化则整块替换，**改前自动备份**（`.upipe-bak-<时间戳>`）；
+- 你在旧块里做过的自定义（新模板没有的行）会在输出的 `customizedLines` 里**逐行列出**——不会静默丢弃，但也不会自动合并，需要你手动重新应用；
+- **白名单行自动保留**：未传 `--co-use-*` 时，旧块的白名单/depot 配置原样带进新块（机器自定义不被重置为 pipeline-only 默认）；想强制重设就显式传 `--co-use-whitelist`。
+
+老办法（手动删块重跑）仍然有效，适合想在升级同时手动整理内容的机器：删除全局文档中 `begin` 到 `end` 整块，再跑 `--apply-rules`。
 
 ## 模板变量
 

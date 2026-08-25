@@ -100,6 +100,20 @@ upipe pkg-install --project-path <project> --source <tgz路径> --dry-run   # �
 
 </details>
 
+### 升级 upipe（装过的人）
+
+upipe 升级只需要替换 exe——不用 clone 仓库，一条 `gh release download` 搞定（前提：目标机器 `gh auth login` 过，仓库授权同一凭据即可，无需单独配 git clone 权限）：
+
+```powershell
+gh release download v0.1.4 --repo Kayungko/unity-pipe --pattern upipe.exe --pattern upipe.exe.sha256 --output <你放 upipe.exe 的目录> --clobber
+upipe version   # 确认版本号已更新
+```
+
+- 回滚同理：把 `v0.1.4` 换成任意历史 tag 重新下载即可（Release 保留全部历史版本）；
+- 下载后可校验：`Get-FileHash upipe.exe -Algorithm SHA256` 与 `upipe.exe.sha256` 内容比对；
+- 适配包 tgz 同一个 Release 页面（`--pattern com.unity.pipeline-*.tgz`），装法见上面的 ②；
+- 规则模板有更新的机器，顺手跑 `upipe plugin install --upgrade-rules`（见 harness/rules/README.md）。
+
 ### AI 提示词大全（日常这样用）
 
 装完之后的使用方式就一种：**打开 AI 对话框，用大白话提需求**。下面加粗的句子都能直接复制发给 AI（把工程名、命名空间换成你自己的）：

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -136,4 +137,134 @@ func applyRulesDoc(docPath, rendered string, dryRun bool) (status, backup string
 		return "", "", err
 	}
 	return "appended", filepath.Base(backup), nil
+}
+
+// rulesBlockHash returns a stable hash of the managed block content (the
+// rendered body between the markers, whitespace-trimmed). Used to detect
+// whether the installed block still matches what the current templates
+// produce — i.e. whether an upgrade would change anything.
+func rulesBlockHash(rendered string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(rendered))))
+}
+
+// readManagedBlock extracts the current managed block body from a document
+// ("", false) if absent).
+func readManagedBlock(docPath string) (string, bool, error) {
+	data, err := os.ReadFile(docPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	s := string(data)
+	begin := strings.Index(s, ruleBeginMarker)
+	end := strings.LastIndex(s, ruleEndMarker)
+	if begin < 0 || end < 0 || end < begin {
+		return "", false, nil
+	}
+	body := s[begin+len(ruleBeginMarker) : end]
+	return strings.TrimSpace(body), true, nil
+}
+
+// upgradeRulesDoc replaces the managed block in a document with the freshly
+// rendered rules, PRESERVING user customizations made inside the old block:
+// any line in the old block that does not appear in the new render is
+// reported so the human can re-apply it (we do not silently merge — the
+// report is the safety net).
+//
+// Statuses: "up-to-date" (hash match, untouched), "upgraded" (replaced,
+// backup taken), "missing-block" (nothing to upgrade — run --apply-rules
+// first), "dry-run(upgrade)" / "dry-run(up-to-date)".
+func upgradeRulesDoc(docPath, rendered string, dryRun bool) (status, backup string, custom []string, err error) {
+	old, ok, rerr := readManagedBlock(docPath)
+	if rerr != nil {
+		return "", "", nil, rerr
+	}
+	if !ok {
+		return "missing-block", "", nil, nil
+	}
+	if rulesBlockHash(old) == rulesBlockHash(rendered) {
+		return "up-to-date", "", nil, nil
+	}
+	// User customizations: lines present in the old block but absent from
+	// the new render (ignoring the placeholder lines that legitimately
+	// change between machines).
+	newLines := map[string]bool{}
+	for _, l := range strings.Split(rendered, "\n") {
+		newLines[strings.TrimSpace(l)] = true
+	}
+	for _, l := range strings.Split(old, "\n") {
+		t := strings.TrimSpace(l)
+		if t != "" && !newLines[t] {
+			custom = append(custom, l)
+		}
+	}
+
+	if dryRun {
+		if len(custom) > 0 {
+			return "dry-run(upgrade)", "", custom, nil
+		}
+		return "dry-run(upgrade)", "", nil, nil
+	}
+
+	data, err := os.ReadFile(docPath)
+	if err != nil {
+		return "", "", nil, err
+	}
+	s := string(data)
+	begin := strings.Index(s, ruleBeginMarker)
+	end := strings.LastIndex(s, ruleEndMarker)
+	if begin < 0 || end < 0 || end < begin {
+		return "missing-block", "", nil, nil
+	}
+	stamp := time.Now().Format("20060102-150405")
+	backup = docPath + ".upipe-bak-" + stamp
+	if err := os.WriteFile(backup, data, 0o644); err != nil {
+		return "", "", nil, fmt.Errorf("backup %s: %w", backup, err)
+	}
+	block := ruleBeginMarker + "\n" + rendered + "\n" + ruleEndMarker
+	out := s[:begin] + block + s[end+len(ruleEndMarker):]
+	if err := os.WriteFile(docPath, []byte(out), 0o644); err != nil {
+		return "", "", nil, err
+	}
+	return "upgraded", filepath.Base(backup), custom, nil
+}
+
+// readBlockLines returns the lines of the managed block (nil if absent).
+func readBlockLines(docPath string) []string {
+	body, ok, err := readManagedBlock(docPath)
+	if err != nil || !ok {
+		return nil
+	}
+	return strings.Split(body, "\n")
+}
+
+// preserveWhitelist keeps the whitelist/depot configuration from the old
+// block when upgrading without explicit --co-use-* flags: those values are
+// machine customizations, and resetting them to the pipeline-only default
+// on a template refresh would silently change routing behavior.
+func preserveWhitelist(oldLines []string, rendered string) string {
+	var oldWL, oldDepot string
+	for _, l := range oldLines {
+		if strings.Contains(l, "当前白名单：") {
+			oldWL = strings.TrimSpace(l)
+		}
+		if strings.Contains(l, "（depot") {
+			oldDepot = strings.TrimSpace(l)
+		}
+	}
+	if oldWL == "" {
+		return rendered // no customization found in old block
+	}
+	lines := strings.Split(rendered, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "当前白名单：") && oldWL != "" {
+			lines[i] = oldWL
+		}
+		if strings.Contains(l, "（depot") && oldDepot != "" {
+			lines[i] = oldDepot
+		}
+	}
+	return strings.Join(lines, "\n")
 }

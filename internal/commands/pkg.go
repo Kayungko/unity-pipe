@@ -83,6 +83,9 @@ func PkgInstallCommand() SubCommand {
 			if err != nil {
 				return nil, protocol.AsUpipeError(err)
 			}
+			// Register the project so `upipe instances` can find it later
+			// (best-effort; never fails the install).
+			registerProject(rt.ProjectPath)
 			return map[string]any{
 				"source":    *source,
 				"target":    target,

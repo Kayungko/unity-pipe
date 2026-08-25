@@ -32,6 +32,7 @@ func PluginCommand() SubCommand {
 			applyRules := fs.Bool("apply-rules", false, "also append the routing rules to the global harness docs (~/.claude/CLAUDE.md / ~/.codex/AGENTS.md); idempotent, existing docs are backed up first")
 			coUseWhitelist := fs.String("co-use-whitelist", "", "co-use project path glob for --apply-rules (e.g. 'E:\\P4\\SGAME_*'); empty = pipeline-only safe default")
 			coUseDepot := fs.String("co-use-depot", "", "P4 depot of whitelisted projects for --apply-rules (e.g. //sgproj/trunk)")
+			upgradeRules := fs.Bool("upgrade-rules", false, "replace an existing managed rules block with the latest template render (backs up first; reports user-customized lines)")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
 			if err != nil {
@@ -43,6 +44,9 @@ func PluginCommand() SubCommand {
 			}
 			if len(rest) > 0 {
 				return nil, usageErr("plugin: unexpected argument " + rest[0])
+			}
+			if *applyRules && *upgradeRules {
+				return nil, usageErr("plugin: --apply-rules and --upgrade-rules are mutually exclusive (apply appends a missing block; upgrade replaces an existing one)")
 			}
 
 			doClaude, doCodex := *claude, *codex
@@ -146,6 +150,66 @@ func PluginCommand() SubCommand {
 					ruleReports = append(ruleReports, rep)
 				}
 				result["rules_applied"] = ruleReports
+			}
+
+			if *upgradeRules {
+				// Replace an existing managed block with the latest template
+				// render — the one-command path for the "rules template was
+				// updated upstream" scenario. User customizations inside the
+				// old block are reported (never silently merged away).
+				bin, _ := os.Executable()
+				if bin == "" {
+					bin = "upipe"
+				}
+				vars := ruleVars{
+					Repo:      repoRoot,
+					Bin:       bin,
+					Guide:     userHomeDir(".codex", "UNITY-GUIDE.md"),
+					Whitelist: *coUseWhitelist,
+					Depot:     *coUseDepot,
+				}
+				docs := map[string]string{}
+				if doClaude {
+					docs[userHomeDir(".claude", "CLAUDE.md")] = filepath.Join(repoRoot, "harness", "rules", "claude.md")
+				}
+				if doCodex {
+					docs[userHomeDir(".codex", "AGENTS.md")] = filepath.Join(repoRoot, "harness", "rules", "agents.md")
+				}
+				type upgradeReport struct {
+					Doc             string   `json:"doc"`
+					Status          string   `json:"status"`
+					Backup          string   `json:"backup,omitempty"`
+					CustomizedLines []string `json:"customizedLines,omitempty"`
+					Warning         string   `json:"warning,omitempty"`
+				}
+				var upReports []upgradeReport
+				for _, doc := range sortedKeys(docs) {
+					tmpl := docs[doc]
+					rep := upgradeReport{Doc: doc}
+					body, terr := extractRuleBody(tmpl)
+					if terr != nil {
+						rep.Status = "failed"
+						rep.Warning = terr.Error()
+						upReports = append(upReports, rep)
+						continue
+					}
+					// Upgrade renders with the CURRENT machine values for
+					// path placeholders, but when the caller did not pass
+					// --co-use-* we keep whatever the old block had for the
+					// whitelist line — a machine-specific customization that
+					// must not be reset to the pipeline-only default.
+					rendered := renderRule(body, vars)
+					if *coUseWhitelist == "" {
+						rendered = preserveWhitelist(readBlockLines(doc), rendered)
+					}
+					status, backup, custom, uerr := upgradeRulesDoc(doc, rendered, *dryRun)
+					if uerr != nil {
+						return nil, protocol.AsUpipeError(uerr)
+					}
+					rep.Status, rep.Backup, rep.CustomizedLines = status, backup, custom
+					upReports = append(upReports, rep)
+				}
+				result["rules_upgraded"] = upReports
 			}
 
 			if !*dryRun {

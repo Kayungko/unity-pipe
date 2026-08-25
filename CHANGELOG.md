@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-25
+
+### Added
+
+- **`upipe instances`**：列出本机全部运行中的 pipeline 实例（工程名/路径/Unity 版本/端口/PID/心跳/TCP 可达性）。实例登记表在 `~/.upipe/projects.txt`（`pkg-install` 成功时自动登记，不落工程内配置）；存活判定以 TCP 探活为准、心跳龄为参考（空闲编辑器不刷心跳但端口可达，仍算在线）；`--all` 额外显示疑似残留（端口关闭且心跳过期的旧端口文件）。
+- **`upipe plugin install --upgrade-rules`**：规则模板升级从「手动删块 × 双侧重跑」收敛为一条命令——与最新模板渲染做 hash 比对（一致跳过），整块替换前自动备份，旧块中用户自定义的行逐行列出提醒重新应用（不静默合并），**白名单/depot 配置自动保留**不被重置为 pipeline-only 默认；与 `--apply-rules` 互斥。
+- README 新增「升级 upipe」节：`gh release download` 单鉴权面升级路径（含回滚与 SHA256 校验）。
+
+### Fixed
+
+- `instances` 判定修正：TCP 可达优先于 30s 心跳阈值（首版实现按心跳判定会把空闲编辑器误判为离线——实测 SGAME 编辑器空闲 2h 仍在线）。
+
+### Tests
+
+- registry 登记去重/容错单测；upgrade 全生命周期（missing-block/up-to-date/upgraded+备份+自定义行报告/dry-run 不落盘）与白名单保留单测；假 HOME 端到端验证（初装→模板变更→dry-run 预览→升级→白名单保留+新内容落盘+备份存在）。
+
 ## [0.1.4] - 2026-08-25
 
 ### Added
@@ -69,7 +85,8 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Kayungko/unity-pipe/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Kayungko/unity-pipe/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Kayungko/unity-pipe/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Kayungko/unity-pipe/compare/v0.1.1...v0.1.2

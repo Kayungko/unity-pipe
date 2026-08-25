@@ -107,3 +107,77 @@ func TestApplyRulesDocLifecycle(t *testing.T) {
 		t.Fatal("dry-run created a file")
 	}
 }
+
+func TestUpgradeRulesDocLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "CLAUDE.md")
+	v1 := "## 13. 规则\n- 条款A\n- 白名单：`E:\\P4\\SGAME_*`"
+
+	// 1. No managed block -> missing-block.
+	status, _, _, err := upgradeRulesDoc(doc, v1, false)
+	if err != nil || status != "missing-block" {
+		t.Fatalf("no block: status=%q err=%v", status, err)
+	}
+
+	// 2. Install v1, then upgrade to identical render -> up-to-date.
+	if _, _, err := applyRulesDoc(doc, v1, false); err != nil {
+		t.Fatal(err)
+	}
+	status, _, _, err = upgradeRulesDoc(doc, v1, false)
+	if err != nil || status != "up-to-date" {
+		t.Fatalf("same render: status=%q err=%v", status, err)
+	}
+
+	// 3. Upgrade to v2 -> upgraded with backup; custom lines (user edits
+	// not in the new render) are reported.
+	v2 := "## 13. 规则\n- 条款A\n- 条款B（新增）\n- 白名单：`E:\\P4\\SGAME_*`"
+	// Simulate a user customization inside the installed block.
+	data, _ := os.ReadFile(doc)
+	doctored := strings.Replace(string(data), "- 条款A", "- 条款A\n- 我的自定义条款", 1)
+	_ = os.WriteFile(doc, []byte(doctored), 0o644)
+
+	status, backup, custom, err := upgradeRulesDoc(doc, v2, false)
+	if err != nil || status != "upgraded" || backup == "" {
+		t.Fatalf("upgrade: status=%q backup=%q err=%v", status, backup, err)
+	}
+	if len(custom) != 1 || !strings.Contains(custom[0], "我的自定义条款") {
+		t.Fatalf("customization not reported: %v", custom)
+	}
+	// New content in place, old custom line reported but not preserved.
+	out, _ := os.ReadFile(doc)
+	if !strings.Contains(string(out), "条款B（新增）") {
+		t.Fatal("upgraded doc missing new content")
+	}
+
+	// 4. Dry-run upgrade writes nothing.
+	v3 := "## 13. 规则 v3"
+	before, _ := os.ReadFile(doc)
+	status, _, custom, err = upgradeRulesDoc(doc, v3, true)
+	if err != nil || status != "dry-run(upgrade)" {
+		t.Fatalf("dry-run: status=%q err=%v", status, err)
+	}
+	if len(custom) == 0 {
+		t.Fatal("dry-run should still report customized lines")
+	}
+	after, _ := os.ReadFile(doc)
+	if string(before) != string(after) {
+		t.Fatal("dry-run mutated the doc")
+	}
+}
+
+func TestPreserveWhitelist(t *testing.T) {
+	oldLines := []string{
+		"## 13. 规则",
+		"例外（co-use）：当前白名单：`E:\\P4\\SGAME_*`（depot `//sgproj/trunk`）。",
+		"- 其他条款",
+	}
+	rendered := "## 13. 规则\n例外（co-use）：当前白名单：未配置。（depot N/A）。\n- 其他条款"
+	got := preserveWhitelist(oldLines, rendered)
+	if !strings.Contains(got, `E:\P4\SGAME_*`) || !strings.Contains(got, "//sgproj/trunk") {
+		t.Fatalf("whitelist custom not preserved: %q", got)
+	}
+	// No customization in old block -> render unchanged.
+	if got := preserveWhitelist(nil, rendered); got != rendered {
+		t.Fatalf("render should be unchanged without old block: %q", got)
+	}
+}

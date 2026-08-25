@@ -27,6 +27,7 @@ type SubCommand struct {
 func All() []SubCommand {
 	return []SubCommand{
 		VersionCommand(),
+		InstancesCommand(),
 		StatusCommand(),
 		CommandsCommand(),
 		ExecCommand(),
