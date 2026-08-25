@@ -4,7 +4,17 @@
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-08-25
+## [0.1.2] - 2026-08-25
+
+### Added
+
+- **全局路由规则模板**（`harness/rules/`）：`claude.md` / `agents.md` 两份可直接粘贴的规则段（对应 `~/.claude/CLAUDE.md §13` 与 `~/.codex/AGENTS.md 6.4`），关闭「skills 装了但规则没落地」的部署缺口；`plugin install` 完成后输出 rules 模板路径与粘贴指引。
+- `docs/ARCHITECTURE.md`：架构内容从 README 拆出独立成篇。
+
+### Changed
+
+- **README 重构为新手手册**：价值主张先行、Release 优先安装、新增「和你的 AI 对话」示例与术语表；抽象链路图替换为一段可直接复制的 **AI 安装提示词**，手动安装降级为故障排查细节；冒烟测试提示词与对话示例可视化为可复制块。
+- 视觉标识刷新：SVG logo 与自定义徽章条（亮/暗双主题）、静态 SVG 架构图（去掉 GitHub mermaid 视图外壳）。
 
 ### Fixed
 
@@ -30,6 +40,7 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Kayungko/unity-pipe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Kayungko/unity-pipe/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.0
