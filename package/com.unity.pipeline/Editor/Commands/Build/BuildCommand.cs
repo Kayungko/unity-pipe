@@ -60,8 +60,8 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 ["CompressWithLz4"] = BuildOptions.CompressWithLz4,
                 ["CompressWithLz4HC"] = BuildOptions.CompressWithLz4HC,
                 // Strict-mode companion flags commonly paired with LZ4HC releases.
+                // (CompressWithLz4HCNoChunks is a Unity 6+ API — not in 2022.3, do not add.)
                 ["StrictMode"] = BuildOptions.StrictMode,
-                ["CompressWithLz4HCNoChunks"] = BuildOptions.CompressWithLz4HCNoChunks,
             };
 
         static readonly object s_Lock = new object();
