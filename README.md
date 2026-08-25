@@ -7,10 +7,10 @@
 
 **自维护的 Unity Pipeline 薄客户端 · Unity 2022 适配包分发 · AI Harness 插件包**
 
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white&style=flat-square)](https://go.dev)
-[![Deps](https://img.shields.io/badge/deps-zero%20(stdlib%20only)-success?style=flat-square)](go.mod)
-[![License: MIT (code)](https://img.shields.io/badge/license-MIT%20(code%20only)-blue?style=flat-square)](LICENSE)
-[![Repo: PRIVATE](https://img.shields.io/badge/repo-PRIVATE%20%20contains%20Unity%20package-red?style=flat-square)](LICENSE-NOTES.md)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/badges-dark.svg">
+  <img src="assets/badges.svg" width="700" alt="Go 1.23+ · deps zero · license MIT (code) · PRIVATE contains Unity pkg">
+</picture>
 
 [快速上手](#快速开始) · [使用流程](#使用流程) · [协议参考](docs/PROTOCOL.md) · [迁移指南](docs/MIGRATION.md) · [2022 适配记录](package/ADAPTATION-2022.md) · [更新日志](CHANGELOG.md)
 
@@ -35,28 +35,9 @@ Unity 官方 `unity` CLI 是闭源单二进制，`pipeline install` 硬性要求
 
 ## 架构
 
-```mermaid
-flowchart LR
-    U["Agent / 人"] -->|"upipe &lt;cmd&gt;"| CLI
-
-    subgraph upipe["upipe · 本仓库（Go 单二进制）"]
-        CLI["cli<br/>分发 · 信封渲染 · 退出码"] --> CMD["commands<br/>子命令等待策略"]
-        CMD -->|"纯逻辑依赖"| P["protocol<br/>模型 · 端点 · 发现<br/>重试梯 · 轮询状态机<br/>（零 IO · 移植边界）"]
-        P <-->|"Transport 接口"| T["transport<br/>net/http keep-alive<br/>（唯一 IO 点）"]
-    end
-
-    T -->|"Bearer + 端口文件<br/>127.0.0.1:7800~7849"| E["Unity Editor<br/>com.unity.pipeline 包"]
-
-    classDef user fill:#64748b,stroke:none,color:#f8fafc
-    classDef layer fill:#1e293b,stroke:none,color:#e2e8f0
-    classDef core fill:#059669,stroke:none,color:#ecfdf5
-    classDef editor fill:#dbeafe,stroke:none,color:#1e3a8a
-    class U user
-    class CLI,CMD,T layer
-    class P core
-    class E editor
-    style upipe fill:#f8fafc,stroke:#cbd5e1,color:#475569
-```
+<p align="center">
+  <img src="assets/architecture.svg" width="840" alt="upipe 分层架构：cli → commands → protocol ← transport → Unity Editor">
+</p>
 
 分层单向依赖 `cli → commands → protocol ← transport` 由 [`layering_test.go`](layering_test.go)（go/parser import lint）**强制执行**；`protocol` 层零 IO，是未来 daemon 化 / 换语言移植的机械翻译边界。
 

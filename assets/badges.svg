@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 30" role="img" aria-label="unity-pipe badges">
+  <g font-family="'Segoe UI',-apple-system,'Helvetica Neue',Arial,sans-serif" font-size="13">
+    <!-- GO 1.23+ -->
+    <rect x="0" y="0" width="104" height="30" rx="7" fill="#1E293B"/>
+    <circle cx="17" cy="15" r="4" fill="#00ADD8"/>
+    <text x="29" y="19.5" font-weight="600"><tspan fill="#94A3B8">Go</tspan><tspan fill="#F1F5F9"> 1.23+</tspan></text>
+
+    <!-- DEPS zero -->
+    <rect x="114" y="0" width="172" height="30" rx="7" fill="#1E293B"/>
+    <circle cx="131" cy="15" r="4" fill="#34D399"/>
+    <text x="143" y="19.5" font-weight="600"><tspan fill="#94A3B8">deps</tspan><tspan fill="#F1F5F9"> zero · stdlib only</tspan></text>
+
+    <!-- LICENSE MIT -->
+    <rect x="296" y="0" width="152" height="30" rx="7" fill="#1E293B"/>
+    <circle cx="313" cy="15" r="4" fill="#38BDF8"/>
+    <text x="325" y="19.5" font-weight="600"><tspan fill="#94A3B8">license</tspan><tspan fill="#F1F5F9"> MIT · code</tspan></text>
+
+    <!-- PRIVATE -->
+    <rect x="458" y="0" width="242" height="30" rx="7" fill="#1E293B" stroke="#DC2626" stroke-width="1.5"/>
+    <circle cx="475" cy="15" r="4" fill="#EF4444"/>
+    <text x="487" y="19.5" font-weight="600"><tspan fill="#FCA5A5">PRIVATE</tspan><tspan fill="#F1F5F9"> · contains Unity pkg</tspan></text>
+  </g>
+</svg>
