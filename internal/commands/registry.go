@@ -17,7 +17,10 @@ type SubCommand struct {
 	Name     string
 	Aliases  []string
 	Synopsis string
-	Run      func(rt *Runtime, args []string) (any, error)
+	// NoRuntime marks commands that need neither a running editor nor a
+	// project (e.g. plugin install) — the cli layer skips instance resolution.
+	NoRuntime bool
+	Run       func(rt *Runtime, args []string) (any, error)
 }
 
 // All returns the full subcommand registry in help order.
@@ -36,6 +39,7 @@ func All() []SubCommand {
 		ProgressCommand(),
 		PkgStatusCommand(),
 		PkgInstallCommand(),
+		PluginCommand(),
 	}
 }
 

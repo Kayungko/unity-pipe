@@ -44,9 +44,13 @@ func Main(argv []string) int {
 	// A fresh options copy for the subcommand pass (global values already set
 	// remain as defaults; re-specifying after the subcommand overrides them).
 	subOpts := *opts
-	rt, err := newRuntime(&subOpts)
-	if err != nil {
-		return render(err, &subOpts)
+	rt := &commands.Runtime{Opts: &subOpts}
+	if !sub.NoRuntime {
+		r, err := newRuntime(&subOpts)
+		if err != nil {
+			return render(err, &subOpts)
+		}
+		rt = r
 	}
 	defer rt.Close()
 
