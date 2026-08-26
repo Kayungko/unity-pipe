@@ -193,7 +193,7 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 
 ### 适配包维护（package/）
 
-- **`0.5.0-2022.1`**：基于官方 `0.5.0-exp.1`（upstream revision `17df0ac8`），9 文件适配 Unity 2022.3（详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)）
+- **`0.5.2-2022.1`**：基于官方 `0.5.0-exp.1`（upstream revision `17df0ac8`），适配 Unity 2022.3 + 本仓演进层（写面守门 / token 接缝剥离 / 跨平台加固，详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)）
 - 版本命名策略：semver 预发布段 `"2022.1" > "exp.1"`，UPM 视 vendored 版本更高，**不会被 registry 误"升级"覆盖**
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

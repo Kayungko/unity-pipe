@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.1.8] - 2026-08-26
 
 ### Fixed
 
@@ -138,7 +138,10 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/Kayungko/unity-pipe/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/Kayungko/unity-pipe/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/Kayungko/unity-pipe/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Kayungko/unity-pipe/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Kayungko/unity-pipe/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Kayungko/unity-pipe/compare/v0.1.2...v0.1.3

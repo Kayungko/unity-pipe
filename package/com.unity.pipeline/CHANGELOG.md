@@ -5,6 +5,12 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2-2022.1] - 2026-08-26
+
+- **Destructive guards on the scene command family**: `open_scene` / `create_scene` in non-additive mode refuse while any open scene has unsaved changes (the refusal lists the dirty scene names; save first via `save_scene`/`save_all` or pass `confirm=true` to discard deliberately — scripted Single-mode open discards edits with no dialog and no Undo recovery). `create_scene` also refuses to overwrite an existing scene asset at the target path unless `confirm=true`. `remove_scene_from_build` requires `confirm` (build-settings writes are immediate).
+- **`create_prefab_variant` overwrite guard**: same destructive semantics as `create_prefab` — refuses when the target asset exists unless `confirm=true` (the confirm parameter was previously a pure placeholder and SaveAsPrefabAsset silently overwrote any existing prefab).
+- **`test_status` can no longer serve a stale prior run's results**: the async status file is now written as `running` in the same command that starts the run, atomically replacing any prior terminal status — a run that fails to start can no longer leave a previous run's COMPLETED file on disk to be returned as this run's outcome.
+
 ## [0.5.1-2022.1] - 2026-08-26
 
 - **Safety gate on `create_prefab`**: saving to a `.prefab` path that already exists now refuses by default with a clear `ArgumentException` (asset overwrite is not undoable); pass `confirm=true` to overwrite. The whole prefab command family gains a `confirm` parameter for surface parity — the other six are "reserved for parity" declarations (scene-side single-step undoable or already confined to the authoring root).
