@@ -358,3 +358,39 @@ func TestSuccessfulCommandRegistersProject(t *testing.T) {
 		t.Fatalf("want exactly one registry line for the project, got %d:\n%s", got, data)
 	}
 }
+
+// TestSharedFlagPrepassSilentForSubcommandFlags locks the fix for the
+// "flag provided but not defined: -source" stderr noise: the shared-flag
+// pre-parse deliberately discards errors (the subcommand's own flag pass is
+// the authority), so it must not print usage for flags it doesn't know.
+// A subcommand flag in either dash form (Go's flag treats -x/--x equally)
+// must leave stderr clean while still reaching the command.
+func TestSharedFlagPrepassSilentForSubcommandFlags(t *testing.T) {
+	m := newMockEditor(t)
+
+	for _, dash := range []string{"-", "--"} {
+		code, stderr := captureStderrCLI(t, "--project-path", m.project, "--json",
+			"exec", "set_autotick", dash+"set", "enable=true")
+		if code != 0 {
+			t.Fatalf("dash %q: exit=%d stderr=%s", dash, code, stderr)
+		}
+		if strings.Contains(stderr, "flag provided but not defined") {
+			t.Errorf("dash %q: shared pre-pass leaked usage noise to stderr:\n%s", dash, stderr)
+		}
+		if strings.Contains(stderr, "Usage of upipe") {
+			t.Errorf("dash %q: usage banner leaked by the pre-pass:\n%s", dash, stderr)
+		}
+	}
+}
+
+// TestVersionCommandIgnoresProjectPathNoise pins the pre-pass silencing for a
+// NoRuntime command with a subcommand flag after it — same leak path.
+func TestVersionCommandIgnoresProjectPathNoise(t *testing.T) {
+	code, stderr := captureStderrCLI(t, "--json", "version")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr)
+	}
+	if strings.Contains(stderr, "flag provided but not defined") {
+		t.Errorf("stderr noise leaked:\n%s", stderr)
+	}
+}

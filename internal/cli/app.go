@@ -6,6 +6,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -64,7 +65,12 @@ func Main(argv []string) int {
 	// command's Run re-parses its own flag set; a shared pre-parse that only
 	// consumes known shared flags keeps that path untouched.
 	preFS := flag.NewFlagSet("upipe "+name, flag.ContinueOnError)
-	preFS.SetOutput(os.Stderr)
+	// Silence this pre-pass: rest still carries the subcommand's OWN flags
+	// (e.g. pkg-install's --source), which preFS doesn't know — Parse would
+	// print "flag provided but not defined" plus usage to stderr even though
+	// the error is deliberately discarded and the real parse happens in Run.
+	// The subcommand's flag set renders any real usage errors.
+	preFS.SetOutput(io.Discard)
 	options.Attach(preFS, &subOpts)
 	// Reorder so interspersed shared flags parse: hoist flags, keep the rest.
 	rest := reorderForFlags(preFS, global.Args()[1:])
