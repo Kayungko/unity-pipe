@@ -6,7 +6,16 @@
 
 版本命名依据：semver 预发布段字典序 `"2022.1" > "exp.1"`，UPM 视 vendored 版本高于 registry 版本，不会被"升级"覆盖。
 
-## 完整改动清单（upstream → vendored，git diff 快照见 patches/0001-adapt-unity-2022.patch）
+## 补丁分层（upstream → vendored 的两类 diff，升级时处理策略不同）
+
+| 层 | patch | 语义 | 上游升级时 |
+|---|---|---|---|
+| 兼容层 | `patches/0001-adapt-unity-2022.patch` | 纯 Unity 2022 API 兼容（上表 9 文件） | **须重放**到新树，冲突处审读 API 差异 |
+| 演进层 | `patches/0002-evolution.patch` | 本仓功能演进：token 接缝剥离 + ArbitraryKeys 豁免、prefab confirm 守门（含 create_prefab_variant）、BuildOptions U6 API 规避、包内 CHANGELOG/版本号、Tests 演进用例 | **须保留**——新树重放 0001 后应用本层；与本仓新演进冲突时以演进层为准合并 |
+
+守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
+
+## 完整改动清单（兼容层：upstream → vendored，git diff 快照见 patches/0001-adapt-unity-2022.patch）
 
 共 9 个文件：
 
@@ -18,6 +27,14 @@
 | 4 | `Editor/Commands/Materials/MaterialCommands.cs` | `rawRenderQueue` 守卫回退 `renderQueue` |
 | 5 | `Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs` | `defaultRenderPipeline` 守卫回退 `renderPipelineAsset`（上游 README 未提及，是额外发现的 U6 API） |
 | 6-9 | `Runtime/Plugins/CodeAnalysis/*.dll.meta` ×4 | PluginImporter v3 列表格式 → v2（GUID 保留） |
+
+演进层（`patches/0002-evolution.patch`，22 文件）完整清单见 patch 本身；要点：
+- `Runtime/Common/BasePipelineServer.cs` — legacy token 回显的管道接缝两级剥离
+- `Runtime/Common/CliArgAttribute.cs` / `ParameterInfo.cs` / `CommandRegistry.cs` — `ArbitraryKeys` 豁免机制
+- `Editor/Commands/Prefabs/PrefabCommands.cs` — prefab 命令族 confirm 守门（create_prefab / create_prefab_variant 覆盖已存在资产默认拒绝）
+- `Editor/Commands/Build/BuildCommand.cs` — 删 Unity 6 独有 `CompressWithLz4HCNoChunks`
+- `Editor/Commands/Materials/MaterialCommands.cs` / `Assets/AssetImportCommands.cs` — 移除逐命令 token workaround
+- `Tests/Editor/**` ×3 + `package.json` / `CHANGELOG.md` — 回归用例与版本簿记
 
 ## 已知取舍
 
@@ -33,6 +50,6 @@
 ## 上游升级流程
 
 1. 下载新版本 tgz → 覆盖 `package/upstream/`（一次性 commit）。
-2. 将 `patches/` 中的适配重新应用到新树（冲突处人工审读 API 差异）。
-3. 版本号递增（如 `0.6.0-2022.1`），更新本文件与 `patches/` 快照。
+2. 复制 `upstream/` 全树为 `com.unity.pipeline/`，重放兼容层 `0001`（冲突处人工审读 API 差异），再应用演进层 `0002`（以本仓演进为准合并）。
+3. 版本号递增（如 `0.6.0-2022.1`），更新本文件并重新生成 `patches/` 快照（`go test ./...` 中的 `patches_sync_test.go` 会强制核对）。
 4. `go run ./package/build` 重打 tgz，跑冒烟回归。
