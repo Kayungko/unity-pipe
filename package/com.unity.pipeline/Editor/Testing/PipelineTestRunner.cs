@@ -266,9 +266,21 @@ namespace Unity.Pipeline.Editor.Testing
                 };
                 File.WriteAllText(TestRequestFile, JsonConvert.SerializeObject(request));
 
-                // Clear any previous status
-                if (File.Exists(TestStatusFile))
-                    File.Delete(TestStatusFile);
+                // Atomically replace any previous completed status with "running" IN THE SAME
+                // command that starts the run. Before this, the status file was only written at
+                // completion: if a run failed to start (e.g. the main-thread dispatch timed out),
+                // a stale COMPLETED file from an earlier run survived on disk and every later
+                // test_status poll returned it as if it were this run's result — the client saw
+                // old pass/fail data for filters it never ran. Writing "running" up front means
+                // a poller can only ever observe THIS run's lifecycle (running → completed), or
+                // a timeout — never a previous run's results.
+                WriteStatusFile(new
+                {
+                    status = "running",
+                    mode = testMode.ToString(),
+                    filter = string.IsNullOrEmpty(filter) ? null : $"{filterType}: {filter}",
+                    startedAtUtc = DateTime.UtcNow
+                });
 
                 // Start test execution now, on the main thread (run_tests is MainThreadRequired,
                 // so we are inside the editor update tick that dispatched this command). Must NOT
@@ -476,7 +488,27 @@ namespace Unity.Pipeline.Editor.Testing
         public static void CheckForPendingTests()
         {
             if (!File.Exists(TestRequestFile)) return;
-            if (File.Exists(TestStatusFile)) return; // Already completed
+            if (File.Exists(TestStatusFile))
+            {
+                // A terminal status (completed/error/cancelled) means the run already finished —
+                // nothing to resume. A "running" status was written by the async trigger of a run
+                // whose completion this domain never saw (play-mode reload dropped it) — fall
+                // through and reattach a collector to capture the resumed run.
+                try
+                {
+                    var existing = JsonConvert.DeserializeObject<Dictionary<string, object>>(
+                        File.ReadAllText(TestStatusFile));
+                    object stObj = null;
+                    var hasStatus = existing != null && existing.TryGetValue("status", out stObj);
+                    if (!hasStatus ||
+                        !string.Equals(Convert.ToString(stObj), "running", StringComparison.OrdinalIgnoreCase))
+                        return;
+                }
+                catch (Exception)
+                {
+                    return; // Unreadable status — treat as terminal rather than double-starting.
+                }
+            }
 
             try
             {

@@ -2385,6 +2385,64 @@ index afb70b7..1433303 100644
              [CliArg("component", "Component type name on the target GameObject (e.g. 'Rigidbody'). Use when 'target' is a GameObject; omit when 'target' is already a component handle.")] string component = null)
          {
              if (target == null || target.IsEmpty)
+diff --git a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+index 7ea1a4a..77c04eb 100644
+--- a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
++++ b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+@@ -266,9 +266,21 @@ namespace Unity.Pipeline.Editor.Testing
+                 };
+                 File.WriteAllText(TestRequestFile, JsonConvert.SerializeObject(request));
+ 
+-                // Clear any previous status
+-                if (File.Exists(TestStatusFile))
+-                    File.Delete(TestStatusFile);
++                // Atomically replace any previous completed status with "running" IN THE SAME
++                // command that starts the run. Before this, the status file was only written at
++                // completion: if a run failed to start (e.g. the main-thread dispatch timed out),
++                // a stale COMPLETED file from an earlier run survived on disk and every later
++                // test_status poll returned it as if it were this run's result — the client saw
++                // old pass/fail data for filters it never ran. Writing "running" up front means
++                // a poller can only ever observe THIS run's lifecycle (running → completed), or
++                // a timeout — never a previous run's results.
++                WriteStatusFile(new
++                {
++                    status = "running",
++                    mode = testMode.ToString(),
++                    filter = string.IsNullOrEmpty(filter) ? null : $"{filterType}: {filter}",
++                    startedAtUtc = DateTime.UtcNow
++                });
+ 
+                 // Start test execution now, on the main thread (run_tests is MainThreadRequired,
+                 // so we are inside the editor update tick that dispatched this command). Must NOT
+@@ -476,7 +488,27 @@ namespace Unity.Pipeline.Editor.Testing
+         public static void CheckForPendingTests()
+         {
+             if (!File.Exists(TestRequestFile)) return;
+-            if (File.Exists(TestStatusFile)) return; // Already completed
++            if (File.Exists(TestStatusFile))
++            {
++                // A terminal status (completed/error/cancelled) means the run already finished —
++                // nothing to resume. A "running" status was written by the async trigger of a run
++                // whose completion this domain never saw (play-mode reload dropped it) — fall
++                // through and reattach a collector to capture the resumed run.
++                try
++                {
++                    var existing = JsonConvert.DeserializeObject<Dictionary<string, object>>(
++                        File.ReadAllText(TestStatusFile));
++                    object stObj = null;
++                    var hasStatus = existing != null && existing.TryGetValue("status", out stObj);
++                    if (!hasStatus ||
++                        !string.Equals(Convert.ToString(stObj), "running", StringComparison.OrdinalIgnoreCase))
++                        return;
++                }
++                catch (Exception)
++                {
++                    return; // Unreadable status — treat as terminal rather than double-starting.
++                }
++            }
+ 
+             try
+             {
 diff --git a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
 index 1d7388a..304d732 100644
 --- a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
@@ -3135,10 +3193,10 @@ index 694fc58..c21a6a7 100644
      }
  }
 diff --git a/com.unity.pipeline/Tests/Editor/Prefabs/PrefabCommandsTests.cs b/com.unity.pipeline/Tests/Editor/Prefabs/PrefabCommandsTests.cs
-index e0dfa17..7078372 100644
+index e0dfa17..35b8fc4 100644
 --- a/com.unity.pipeline/Tests/Editor/Prefabs/PrefabCommandsTests.cs
 +++ b/com.unity.pipeline/Tests/Editor/Prefabs/PrefabCommandsTests.cs
-@@ -144,6 +144,98 @@ namespace Unity.Pipeline.Tests.Editor.Prefabs
+@@ -144,6 +144,109 @@ namespace Unity.Pipeline.Tests.Editor.Prefabs
                  "After unpack the object should no longer be a prefab instance");
          }
  
@@ -3214,24 +3272,35 @@ index e0dfa17..7078372 100644
 +        [Test]
 +        public void CreatePrefabVariant_ExistingPath_WithConfirm_Overwrites()
 +        {
-+            var source = CreateSourceGameObject("VariantGatedConfirm");
-+            var baseResult = PrefabCommands.CreatePrefab(
-+                new ObjectRef { InstanceId = PipelineUtils.GetObjectId(source) },
-+                Root + "/VariantConfirmBase");
++            // Two separate prefabs: overwriting the FIRST one's path with a variant
++            // of the SECOND is a clean overwrite — the observable outcome is that
++            // the asset at that path now derives from the second base.
++            var sourceA = CreateSourceGameObject("VariantConfirmA");
++            var resultA = PrefabCommands.CreatePrefab(
++                new ObjectRef { InstanceId = PipelineUtils.GetObjectId(sourceA) },
++                Root + "/VariantConfirmA");
++            var sourceB = CreateSourceGameObject("VariantConfirmB");
++            sourceB.GetComponent<BoxCollider>().isTrigger = true; // content marker for B
++            var resultB = PrefabCommands.CreatePrefab(
++                new ObjectRef { InstanceId = PipelineUtils.GetObjectId(sourceB) },
++                Root + "/VariantConfirmB");
 +
-+            // Overwrite the BASE prefab's own path with a variant of itself — observable
-+            // outcome: the asset still exists and now carries the variant (instance) link.
 +            var result = PrefabCommands.CreatePrefabVariant(
-+                new ObjectRef { Path = baseResult.AssetPath },
-+                Root + "/VariantConfirmBase",
++                new ObjectRef { Path = resultB.AssetPath },
++                Root + "/VariantConfirmA", // overwrite A's path with a variant of B
 +                confirm: true);
 +
-+            Assert.AreEqual(Root + "/VariantConfirmBase.prefab", result.AssetPath,
++            Assert.AreEqual(Root + "/VariantConfirmA.prefab", result.AssetPath,
 +                "Overwrite should report the same asset path");
-+            var asset = AssetDatabase.LoadAssetAtPath<GameObject>(Root + "/VariantConfirmBase.prefab");
++            var asset = AssetDatabase.LoadAssetAtPath<GameObject>(Root + "/VariantConfirmA.prefab");
 +            Assert.IsNotNull(asset, "Prefab asset should still exist after the confirmed overwrite");
-+            Assert.IsTrue(PrefabUtility.IsPartOfVariantPrefab(asset),
-+                "Confirmed overwrite should have replaced the asset with the variant content");
++            // Content assertion (not variant-type): SaveAsPrefabAsset onto a path that
++            // already held a regular prefab may flatten the variant link, but the asset
++            // must now carry the second source's contents.
++            var collider = asset.GetComponent<BoxCollider>();
++            Assert.IsNotNull(collider, "Overwritten asset should still carry the BoxCollider");
++            Assert.IsTrue(collider.isTrigger,
++                "Confirmed overwrite should have replaced the asset contents with the variant source");
 +        }
 +
          #endregion
