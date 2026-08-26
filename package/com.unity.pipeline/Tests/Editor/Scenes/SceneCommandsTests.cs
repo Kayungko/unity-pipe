@@ -200,8 +200,8 @@ namespace Unity.Pipeline.Tests.Editor.Scenes
             Assert.AreEqual(1, entries.Length, "Adding twice must not duplicate the entry");
             Assert.IsFalse(entries[0].enabled, "Re-add should reconcile the enabled flag");
 
-            // Remove.
-            SceneCommands.RemoveSceneFromBuild(ScenePath);
+            // Remove (destructive: requires confirm since the scene-guards change).
+            SceneCommands.RemoveSceneFromBuild(ScenePath, confirm: true);
             Assert.IsFalse(
                 EditorBuildSettings.scenes.Any(s => s.path == ScenePath),
                 "Scene should be gone from the build list");
@@ -456,6 +456,115 @@ namespace Unity.Pipeline.Tests.Editor.Scenes
             yield return null;
             while (EditorApplication.isPlaying)
                 yield return null;
+        }
+
+        #endregion
+
+        #region Destructive guards (scene writes)
+
+        [Test]
+        public void OpenScene_DirtyOpenScene_RefusesWithoutConfirm()
+        {
+            SceneCommands.CreateScene(ScenePath);
+            MarkActiveSceneDirty();
+
+            var ex = Assert.Throws<System.ArgumentException>(
+                () => SceneCommands.OpenScene(ScenePath),
+                "open_scene (single mode) should refuse while open scenes have unsaved changes");
+
+            StringAssert.Contains("confirm=true", ex.Message);
+            StringAssert.Contains("save_scene", ex.Message);
+        }
+
+        [Test]
+        public void OpenScene_DirtyOpenScene_WithConfirm_Replaces()
+        {
+            SceneCommands.CreateScene(ScenePath);
+            MarkActiveSceneDirty();
+
+            var result = SceneCommands.OpenScene(ScenePath, confirm: true);
+
+            Assert.AreEqual(ScenePath, result.AssetPath, "confirmed open should proceed and replace the dirty scene");
+        }
+
+        [Test]
+        public void OpenScene_Additive_DirtyScene_DoesNotRequireConfirm()
+        {
+            SceneCommands.CreateScene(ScenePath);
+            MarkActiveSceneDirty();
+
+            // Additive never replaces open scenes — no guard should fire.
+            var result = SceneCommands.OpenScene(ScenePath, additive: true);
+
+            Assert.AreEqual(ScenePath, result.AssetPath, "additive open should not be blocked by the dirty-scene guard");
+        }
+
+        /// <summary>
+        /// Make the active scene carry unsaved changes. Creating a GameObject alone does not mark
+        /// an EditMode scene dirty in every Unity version, so mark it explicitly — the dirty
+        /// state is what the destructive-scene guards key on.
+        /// </summary>
+        private static void MarkActiveSceneDirty()
+        {
+            new UnityEngine.GameObject("Unsaved_CLI193");
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            Assert.IsTrue(EditorSceneManager.GetActiveScene().isDirty, "test setup: scene should be dirty");
+        }
+
+        [Test]
+        public void CreateScene_ExistingPath_RefusesWithoutConfirm()
+        {
+            SceneCommands.CreateScene(ScenePath);
+
+            var ex = Assert.Throws<System.ArgumentException>(
+                () => SceneCommands.CreateScene(ScenePath),
+                "create_scene should refuse to overwrite an existing scene asset by default");
+
+            StringAssert.Contains("confirm=true", ex.Message);
+            // The existing asset must survive the refused attempt.
+            Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(ScenePath),
+                "the refused create must not delete the existing scene asset");
+        }
+
+        [Test]
+        public void CreateScene_ExistingPath_WithConfirm_Overwrites()
+        {
+            SceneCommands.CreateScene(ScenePath);
+
+            var result = SceneCommands.CreateScene(ScenePath, template: "default", confirm: true);
+
+            Assert.AreEqual(ScenePath, result.AssetPath, "confirmed overwrite should report the same path");
+            Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<SceneAsset>(ScenePath),
+                "scene asset should still exist after the confirmed overwrite");
+        }
+
+        [Test]
+        public void RemoveSceneFromBuild_RefusesWithoutConfirm()
+        {
+            SceneCommands.CreateScene(ScenePath);
+            SceneCommands.AddSceneToBuild(ScenePath);
+
+            var ex = Assert.Throws<System.ArgumentException>(
+                () => SceneCommands.RemoveSceneFromBuild(ScenePath),
+                "remove_scene_from_build should require confirm");
+
+            StringAssert.Contains("confirm=true", ex.Message);
+
+            // The build entry must survive the refusal.
+            Assert.IsTrue(EditorBuildSettings.scenes.Any(s => s.path == ScenePath),
+                "the refused removal must leave the build-list entry intact");
+        }
+
+        [Test]
+        public void RemoveSceneFromBuild_WithConfirm_Removes()
+        {
+            SceneCommands.CreateScene(ScenePath);
+            SceneCommands.AddSceneToBuild(ScenePath);
+
+            SceneCommands.RemoveSceneFromBuild(ScenePath, confirm: true);
+
+            Assert.IsFalse(EditorBuildSettings.scenes.Any(s => s.path == ScenePath),
+                "confirmed removal should drop the build-list entry");
         }
 
         #endregion

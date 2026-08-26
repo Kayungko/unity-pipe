@@ -2,6 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **test_status 陈旧结果**（包，正确性）：`run_tests` 异步状态文件此前只在完成时写——运行未启动成功（如主线程派发超时）时，上一次运行的 COMPLETED 文件残留磁盘，后续每次 `test_status` 轮询都把旧结果当本次返回（实测三个不同 filter 返回同一份数据）。现在启动命令同时原子写入 `status=running`，轮询者只能观察本次运行的生命周期；`CheckForPendingTests` 改为读内容判断（running 文件在 play-mode 域重载后正确重挂 collector）。真机验证：三个 filter 分别返回 9/15/19 且全绿，行为在 domain reload 后保持。
+- **`create_prefab_variant` 覆盖守门缺失**（包，深度评审 P1）：与 create_prefab 同构的拒绝守门（已存在资产默认拒绝，需 confirm=true），此前 confirm 为纯占位而 SaveAsPrefabAsset 静默覆盖任意已存在路径。
+
+### Added
+
+- **场景族写面守门**（包）：`open_scene`/`create_scene` 非 additive 模式在有未保存修改时拒绝（提示先 save_scene 或 confirm=true——脚本化 Single 模式直接丢弃编辑且不可恢复）；`create_scene` 对已存在场景资产默认拒绝覆盖；`remove_scene_from_build` 需 confirm（build list 变更立即落盘且场景索引加载会静默坏）。SceneCommandsTests 24/24（含 7 个新守门用例），真机 2022.3 验证。
+- **vendored-tests harness**（`scripts/vendored-tests`）：把 vendored 测试子集搭进任意 Unity 2022.3 工程的可重复工具（--setup/--teardown，manifest 追踪精确还原）——无 Unity 许可 CI 的替代验证链路。
+- **CI 双平台矩阵**：windows-latest 加入（开发/发版平台此前反而不在 CI；v0.1.7 盘符缺陷正是单平台盲区所致）。
+- **契约锁定测试**：退出码契约（skill §0 的 10/11/12/13/20 快照）、版本三源（package.json ↔ VendoredPkgRef ↔ dist tgz 名）、pkg-install 包装层（P4 只读门/dry-run/注册挂点）、tgz 构建布局（含 CLAUDE.md/CODEOWNERS/.claude 剔除）。
+- **patch 快照双层治理**：`patches/0002-evolution.patch`（演进层）+ `patches_sync_test.go` 漂移守门（vendored 漂移出 patch 登记即 fail build）；ADAPTATION-2022.md 记录兼容层/演进层两类升级策略。
+
 ## [0.1.7] - 2026-08-26
 
 ### Fixed

@@ -45,6 +45,7 @@ var stagedFiles = []string{
 	"Tests/Editor/Prefabs/PrefabCommandsTests.cs",
 	"Tests/Editor/Materials/MaterialCommandsTests.cs",
 	"Tests/Editor/GameObjects/ComponentCommandsTests.cs",
+	"Tests/Editor/Scenes/SceneCommandsTests.cs",
 	"Tests/Editor/PipelineTestServer.cs",
 	"Tests/Editor/TestEditorPipelineServer.cs",
 	"Tests/Runtime/PipelineClient.cs", // staged into Tests/Editor/
@@ -144,7 +145,7 @@ func doSetup(repoRoot, srcRoot, pkgDir, project, markPath string) error {
 		}
 	}
 	// Folder metas for the tree we create.
-	for _, dir := range []string{"Tests", "Tests/Editor", "Tests/Editor/Prefabs", "Tests/Editor/Materials", "Tests/Editor/GameObjects"} {
+	for _, dir := range []string{"Tests", "Tests/Editor", "Tests/Editor/Prefabs", "Tests/Editor/Materials", "Tests/Editor/GameObjects", "Tests/Editor/Scenes"} {
 		if err := copyFile(filepath.Join(srcRoot, filepath.FromSlash(dir+".meta")), filepath.Join(pkgDir, filepath.FromSlash(dir+".meta"))); err != nil {
 			return err
 		}

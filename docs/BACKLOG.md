@@ -5,7 +5,7 @@
 ## P2 — 应改进
 
 - [ ] **create_prefab 守门不查未导入磁盘文件**：守门用 `AssetDatabase.LoadAssetAtPath`，磁盘上存在但未导入的 `.prefab` 会被无 confirm 覆盖（`Editor/Commands/Prefabs/PrefabCommands.cs`）。改用 `File.Exists` 补查。
-- [ ] **apply_prefab_overrides 的 confirm 描述与事实相反**：描述称 "single undoable Editor action"，实际把覆盖写回源 prefab 资产到磁盘（不可 Undo）——描述应如实标注或补真实守门。
+- [ ] ~~**apply_prefab_overrides 的 confirm 描述与事实相反**~~：已随场景族守门批次修复（描述改为如实说明资产写回语义）——见 2026-08-26 场景守门提交。
 - [ ] **tgz 解压无资源上限**：`pkg.go` 的 `io.ReadAll(tr)` 无每条目/总大小上限，恶意 gzip bomb 可耗尽内存/磁盘（对比 transport 层有 `LimitReader`）。dry-run 也全量读入。
 - [ ] **evalToken 端口文件 ACL fail-open**：权限收紧失败只打 warning 继续；且先写文件再收紧有 TOCTOU 窗口（`Runtime/Models/InstanceDescriptor.cs`）。
 - [ ] **applyPlan 无视 Unchanged 分类全量重写**：每次安装把字节相同的文件原样重写（`internal/commands/pkg.go`）。

@@ -41,7 +41,8 @@ namespace Unity.Pipeline.Editor.Commands.Scenes
         public static AuthoringResult CreateScene(
             [CliArg("path", "Scene path relative to the authoring root (default Assets/); the Assets/ prefix and the .unity extension are optional. e.g. Scenes/Level1", Required = true)] string path,
             [CliArg("additive", "Open the new scene additively alongside currently open scenes instead of replacing them.", DefaultValue = false)] bool additive = false,
-            [CliArg("template", "Initial contents: 'empty' (default) for a blank scene, or 'default' to seed a Main Camera + Directional Light matching Unity's built-in 3D template.", DefaultValue = TemplateEmpty)] string template = TemplateEmpty)
+            [CliArg("template", "Initial contents: 'empty' (default) for a blank scene, or 'default' to seed a Main Camera + Directional Light matching Unity's built-in 3D template.", DefaultValue = TemplateEmpty)] string template = TemplateEmpty,
+            [CliArg("confirm", "Must be true to (a) replace currently open scenes that have unsaved changes (non-additive mode), or (b) overwrite a scene asset that already exists at the target path; without it the command refuses (destructive guard, discarded edits and asset overwrites are not undoable).")] bool confirm = false)
         {
             GuardNotPlaying("create_scene");
 
@@ -49,7 +50,12 @@ namespace Unity.Pipeline.Editor.Commands.Scenes
             // recoverably with a clear, enumerated error rather than silently doing the wrong thing.
             var sceneSetup = ResolveSceneSetup(template);
 
+            if (!additive)
+                GuardNoDirtyScenes("create_scene", confirm);
+
             var normalized = ResolveScenePath(path);
+            if (!confirm && AssetDatabase.LoadAssetAtPath<SceneAsset>(normalized) != null)
+                throw new ArgumentException($"Refusing to overwrite existing scene '{normalized}'. Pass confirm=true to overwrite it (scene asset overwrite is not undoable via Unity's Undo).");
             EnsureParentFolder(normalized);
 
             // NewSceneMode.Single replaces all open scenes; Additive keeps them. NewSceneSetup.EmptyScene
@@ -69,13 +75,17 @@ namespace Unity.Pipeline.Editor.Commands.Scenes
         [CliCommand("open_scene", "Open an existing scene from the given path.", Tags = new[] { "scenes" })]
         public static AuthoringResult OpenScene(
             [CliArg("path", "Scene path relative to the authoring root (default Assets/); the Assets/ prefix and the .unity extension are optional.", Required = true)] string path,
-            [CliArg("additive", "Open additively alongside currently open scenes instead of replacing them.", DefaultValue = false)] bool additive = false)
+            [CliArg("additive", "Open additively alongside currently open scenes instead of replacing them.", DefaultValue = false)] bool additive = false,
+            [CliArg("confirm", "Must be true to discard unsaved changes in currently open scenes (non-additive mode replaces them all); without it the command refuses (destructive guard, discarded edits are not recoverable).")] bool confirm = false)
         {
             GuardNotPlaying("open_scene");
 
             var normalized = ResolveScenePath(path);
             if (string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(normalized)))
                 throw new InvalidOperationException($"No scene asset at '{normalized}'.");
+
+            if (!additive)
+                GuardNoDirtyScenes("open_scene", confirm);
 
             var mode = additive ? OpenSceneMode.Additive : OpenSceneMode.Single;
             var scene = EditorSceneManager.OpenScene(normalized, mode);
@@ -247,9 +257,13 @@ namespace Unity.Pipeline.Editor.Commands.Scenes
 
         [CliCommand("remove_scene_from_build", "Remove a scene from the Build Settings scene list (idempotent).", Tags = new[] { "scenes", "build/settings" })]
         public static object RemoveSceneFromBuild(
-            [CliArg("path", "Scene path to remove (authoring-root relative; Assets/ prefix and .unity optional).", Required = true)] string path)
+            [CliArg("path", "Scene path to remove (authoring-root relative; Assets/ prefix and .unity optional).", Required = true)] string path,
+            [CliArg("confirm", "Must be true to remove the scene from the build list; without it the command refuses (destructive guard — a stripped-from-build scene silently breaks scene-index-based loads).")] bool confirm = false)
         {
             GuardNotPlaying("remove_scene_from_build");
+
+            if (!confirm)
+                throw new ArgumentException("Refusing to remove a scene from the build list. Pass confirm=true to remove it (build-settings changes are saved immediately).");
 
             var normalized = ResolveScenePath(path);
             var scenes = EditorBuildSettings.scenes.ToList();
@@ -273,6 +287,25 @@ namespace Unity.Pipeline.Editor.Commands.Scenes
                 throw new InvalidOperationException(
                     $"'{command}' cannot run while the editor is in (or entering) play mode. " +
                     "Exit play mode (editor_stop) and retry — no scene state was changed.");
+        }
+
+        /// <summary>
+        /// Refuse a scene-replacing command while any open scene has unsaved changes. Scripted
+        /// OpenScene(NewSceneMode.Single) / NewScene(NewSceneMode.Single) discard them with no
+        /// dialog and no Undo recovery — the exact destructive path this guard closes. Callers
+        /// pass <paramref name="confirm"/> so an explicit opt-in can proceed deliberately.
+        /// Additive variants never replace open scenes and skip this guard.
+        /// </summary>
+        private static void GuardNoDirtyScenes(string command, bool confirm)
+        {
+            if (confirm)
+                return;
+
+            var dirty = OpenScenes().Where(s => s.isDirty).Select(s => s.name).ToList();
+            if (dirty.Count > 0)
+                throw new ArgumentException(
+                    $"'{command}' would replace open scene(s) with unsaved changes: {string.Join(", ", dirty)}. " +
+                    "Save them first (save_scene / save_all) or pass confirm=true to discard — discarded edits are not recoverable.");
         }
 
         /// <summary>
