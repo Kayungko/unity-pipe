@@ -2,6 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.9] - 2026-08-26
+
+### Fixed
+
+- **共享 flag 预解析的 stderr 噪声泄漏**：`upipe pkg-install -source x.tgz` 这类携带子命令专属 flag 的调用，会先打印 `flag provided but not defined: -source` + usage 再正常执行成功——cli.Main 的共享 flag 预解析是 best-effort（子命令自己的解析才是权威），其 flagset 现在静默（`io.Discard`），单/双横线形式均零噪声。回归锁定：`TestSharedFlagPrepassSilentForSubcommandFlags`。
+
 ## [0.1.8] - 2026-08-26
 
 ### Fixed
@@ -138,7 +144,8 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/Kayungko/unity-pipe/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/Kayungko/unity-pipe/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Kayungko/unity-pipe/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Kayungko/unity-pipe/compare/v0.1.5...v0.1.6
