@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3-2022.1] - 2026-08-26
+
+- **Documentation synced to the guard behavior**: `scenes.md` / `prefabs.md` now document the `confirm` parameter and recovery path for every gated command (create_scene dirty+overwrite, open_scene dirty with additive exemption, remove_scene_from_build, create_prefab / create_prefab_variant overwrite); `materials.md` records the token-seam boundary (a shader property literally named `token` is stripped for schema-fixed dict parameters).
+- The bundled unity-pipeline skill copy inside the package (`.claude/skills`) is now a synced copy of the harness original instead of the upstream stub describing the closed-source `unity` CLI — it no longer competes with the real skill in package-directory sessions.
+
 ## [0.5.2-2022.1] - 2026-08-26
 
 - **Destructive guards on the scene command family**: `open_scene` / `create_scene` in non-additive mode refuse while any open scene has unsaved changes (the refusal lists the dirty scene names; save first via `save_scene`/`save_all` or pass `confirm=true` to discard deliberately — scripted Single-mode open discards edits with no dialog and no Undo recovery). `create_scene` also refuses to overwrite an existing scene asset at the target path unless `confirm=true`. `remove_scene_from_build` requires `confirm` (build-settings writes are immediate).

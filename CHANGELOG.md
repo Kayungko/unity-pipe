@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.10] - 2026-08-26
+
+### Fixed
+
+- **守门文档与 0.5.2 行为全面同步**（工作流研究 14 代理 / 对抗验证 8 条漂移全存活）：scenes.md/prefabs.md 补齐 5 个守门命令的 confirm 记载与恢复路径（此前 agent 按文档调用必被拒一次且无恢复指引）；materials.md 记载 token 接缝边界；SKILL.md §0.5 守门表扩列 + 退出码补 22/50 + tgz 示例占位符；RECIPES §2 扩列 + 新增拒绝消息签名表（消息特征→守门→恢复动作）。
+
+### Added
+
+- **技能触发面双语化**：SKILL.md description 补齐生产高频任务词（prefab/场景/序列化资产/烘焙/build/截图/jobs）+ 中文触发短语——消除 AI Mana 中文环境漏触发导致的裸探索。
+- **消除包内旧技能冲突源**：`package/com.unity.pipeline/.claude/skills` 此前是上游原件（描述闭源 unity CLI 契约，与正版技能在包目录 session 实际竞争）——现为同步副本，`skill_sync_test.go` 锁定一致。
+- **RECIPES 新配方**：脏场景恢复流、安全覆盖三步配方、批量 confirm 三档语义、detached jobs（§5.5）、settling + test 轮询判据（§5.6）。
+- **发现配方**：`upipe commands --full --query <name>` 单往返直取 schema（命令发现 3 跳→2 跳），替换指向不存在章节的死链。
+
 ## [0.1.9] - 2026-08-26
 
 ### Fixed
@@ -144,7 +157,8 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/Kayungko/unity-pipe/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/Kayungko/unity-pipe/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/Kayungko/unity-pipe/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Kayungko/unity-pipe/compare/v0.1.6...v0.1.7
