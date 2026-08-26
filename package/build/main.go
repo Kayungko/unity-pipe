@@ -28,6 +28,10 @@ func excludedTop(name string) bool {
 	switch name {
 	case "Tests", "Tests.meta", ".signature", ".attestation.p7m":
 		return true
+	// Repo-internal instruction files must not ship inside the UPM package —
+	// they are workspace tooling, not package content.
+	case "CLAUDE.md", "CLAUDE.md.meta", "CODEOWNERS", "CODEOWNERS.meta", ".claude", ".claude.meta":
+		return true
 	}
 	return false
 }

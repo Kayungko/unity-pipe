@@ -14,8 +14,16 @@ on:
 
 jobs:
   go:
-    name: Build, Vet & Test
-    runs-on: ubuntu-latest
+    name: Build, Vet & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both hosts matter: path/permission semantics fork between Windows and
+        # Linux (ToSlash/FromSlash, read-only detection, path discovery) — the
+        # v0.1.7 drive-letter tar-entry bug shipped because only one host was
+        # ever exercised. The development host is Windows; CI must cover both.
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
