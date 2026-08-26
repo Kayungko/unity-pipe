@@ -28,6 +28,7 @@ Set shader properties on a material (Float/Range/Int=number; Color=[r,g,b,a] or 
 | `dry_run` | no | `false` | If true, validate the shader, resolve property names and texture refs, and report applied[]/unknown[] without writing anything. |
 
 **Returns:** `SetMaterialPropertiesResult`
+**Notes:** A shader property literally named `token` is stripped by the pipeline safety seam (legacy-client auth-token echo guard) and will not reach the material — a known boundary for schema-fixed dict parameters. `set_component_properties` (arbitrary component field names) is exempt via `ArbitraryKeys`.
 
 ## Shaders
 

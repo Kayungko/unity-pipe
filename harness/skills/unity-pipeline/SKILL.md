@@ -1,6 +1,6 @@
 ---
 name: unity-pipeline
-description: Drive a running Unity Editor or development Player from the command line via the unity-pipeline package — install the package, keep the editor ticking while unfocused, run the edit→recompile→run_tests loop, evaluate C#, and hot-reload files at runtime. Use when an agent needs to control a live Unity instance, automate Unity tests, recompile scripts headlessly, or apply runtime hot reloads. Uses the self-maintained `upipe` CLI (github.com/Kayungko/unity-pipe, direct HTTP to the pipeline server); does NOT require Unity's closed-source unity CLI binary.
+description: Drive a running Unity Editor or development Player from the command line via the unity-pipeline package — install the package, keep the editor ticking while unfocused, run the edit→recompile→run_tests loop, evaluate C#, and hot-reload files at runtime. Use when an agent needs to control a live Unity instance, automate Unity tests, recompile scripts headlessly, or apply runtime hot reloads. Also covers prefab authoring (create/instantiate/variant/edit), scene open/save/create with dirty-state guards, serialized-asset writes (materials, components, import settings), asset search, screenshots/capture for verification, builds, baking, audits, and detached long-running jobs. 中文触发：Unity 自动化、改 prefab、改场景、烘焙、跑测试、Unity 编辑器控制、序列化资产写入。Uses the self-maintained `upipe` CLI (github.com/Kayungko/unity-pipe, direct HTTP to the pipeline server); does NOT require Unity's closed-source unity CLI binary.
 ---
 
 # Unity Pipeline (agent control)
@@ -9,8 +9,14 @@ Invoke commands with `upipe <subcommand>` (thin client over the pipeline
 HTTP API inside the editor; zero third-party deps, single static binary).
 Run `upipe commands` to list what an instance exposes. Two servers exist:
 **Editor** (`7800-7849`, auto-starts with the editor) and **Runtime**
-(`7900-7949`, only in a dev Player build). See the package `README.md`
-"Commands" reference for the full list and parameters.
+(`7900-7949`, only in a dev Player build).
+
+**Finding the right command**: `upipe commands --query <keyword>` returns a
+compact name/description/tags index; `upipe commands --full --query <name>`
+returns the full parameter schema in one round-trip — prefer that over
+compact→full two-step. Deeper docs live in the package's
+`Documentation~/commands/*.md` (16 category files), reachable in a source
+checkout or under `Library/PackageCache` in an installed project.
 
 ## 0. Exit codes (branch on these, never parse stderr)
 
@@ -24,7 +30,9 @@ Run `upipe commands` to list what an instance exposes. Two servers exist:
 | 13 | busy/settling/queue-full — retryable |
 | 20 | command failed (compile errors, failing tests) — details in `error.data` |
 | 21 | timeout |
+| 22 | job cancelled before completion (see `upipe job <id>`) |
 | 30 | protocol mismatch (package too old/new) |
+| 50 | internal error (unexpected — report it) |
 
 With `--json`, stdout is always exactly one envelope:
 `{"ok": bool, "error": {code,kind,message,retryable,data}?, "data": ...}`.
@@ -39,8 +47,15 @@ places**. Success = outer `ok=true` AND (`result.applied==true` or
 | gate style | commands | refusal looks like |
 |---|---|---|
 | inner `result.status=="error"` | `build`, `bake_*` | outer ok=true, exit 0 — check result.status! |
-| outer `ok=false`, `error.code=20` | `clear_*`, `delete_asset`, `switch_build_target` | error.message contains "confirm" |
+| outer `ok=false`, `error.code=20` | `clear_*`, `delete_asset`, `switch_build_target`, `create_prefab`/`create_prefab_variant` (overwrite), `open_scene`/`create_scene` (dirty scenes or overwrite), `remove_scene_from_build` | error.message contains "confirm" |
 | inner `result.applied==false` | `set_*_settings` | message contains "Refused" |
+
+Dirty-scene refusal from `open_scene`/`create_scene` (non-additive): the
+message lists the dirty scene names — run `save_scene`/`save_all` and
+retry, or pass `confirm=true` as the explicit choice to DISCARD unsaved
+edits (not recoverable). In batch loops treat the refusal as a normal
+branch, not an abort; never blanket-`confirm=true` every write command —
+only when the refusal message names overwrite/discard semantics.
 
 Read eval return values from `data.result.result` (the `output` field is
 always null); scene-hierarchy nodes live under `result.roots`. Asset search:
@@ -54,7 +69,7 @@ source of truth: `docs/RECIPES.md` in the unity-pipe repo).
 ## 1. Install & verify
 
 ```powershell
-upipe pkg-install --source <com.unity.pipeline-0.5.0-2022.1.tgz> --dry-run   # review, then drop --dry-run
+upipe pkg-install --source <com.unity.pipeline-<version>-2022.1.tgz> --dry-run   # from go run ./package/build; review, then drop --dry-run
 upipe status                # port file + server health + editor_status (auto-detects project from cwd)
 upipe commands              # dynamic command surface of the connected instance
 ```

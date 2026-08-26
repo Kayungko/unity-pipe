@@ -9,9 +9,10 @@ Save a GameObject as a prefab asset at a project path; the source becomes a conn
 |-----------|----------|---------|-------------|
 | `source` | yes | – | Reference to the source GameObject to save as a prefab (globalId/path/guid/instanceId/hierarchyPath). |
 | `path` | yes | – | Prefab asset path relative to the authoring root (the Assets/ prefix is optional and the .prefab extension is added if missing). e.g. Prefabs/Enemy or Prefabs/Enemy.prefab |
+| `confirm` | no | `false` | Required (true) only when overwriting an existing prefab asset at the path. |
 
 **Returns:** `AuthoringResult`
-**Notes:** Scene-side effects are Undo-able; the prefab asset write is not undoable.
+**Notes:** Scene-side effects are Undo-able; the prefab asset write is not undoable. `confirm=true` is required to overwrite an existing prefab asset.
 
 ### `instantiate_prefab`
 Instantiate a prefab asset into a loaded scene and return the created instance.
@@ -32,9 +33,10 @@ Create a prefab variant asset that inherits from a base prefab.
 |-----------|----------|---------|-------------|
 | `base` | yes | – | Reference to the base prefab asset (path/guid/globalId). |
 | `path` | yes | – | Variant prefab asset path relative to the authoring root (.prefab added if missing). |
+| `confirm` | no | `false` | Required (true) only when overwriting an existing prefab asset at the path. |
 
 **Returns:** `AuthoringResult`
-**Notes:** Prefab asset write is not undoable.
+**Notes:** Prefab asset write is not undoable. `confirm=true` is required to overwrite an existing prefab asset at the target path.
 
 ### `apply_prefab_overrides`
 Apply a prefab instance's overrides back to its source prefab asset.

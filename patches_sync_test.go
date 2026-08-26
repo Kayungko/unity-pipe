@@ -64,10 +64,20 @@ func TestPatchSnapshotsCoverVendoredDrift(t *testing.T) {
 		".claude": true, // repo tooling (skills), not part of the shipped package content
 	}
 
+	// Exception: the vendored SKILL.md is a deliberately maintained copy of the
+	// harness original (locked by skill_sync_test.go) — upstream grades it as
+	// drift, but it is governed by its own sync lock, not the patch chain.
+	syncLocked := map[string]bool{
+		"com.unity.pipeline/.claude/skills/unity-pipeline/SKILL.md": true,
+	}
+
 	var unregistered []string
 	for _, rel := range actual {
 		top := strings.SplitN(rel, "/", 2)[0]
 		if excluded[top] {
+			continue
+		}
+		if syncLocked[rel] {
 			continue
 		}
 		if !registered[rel] {

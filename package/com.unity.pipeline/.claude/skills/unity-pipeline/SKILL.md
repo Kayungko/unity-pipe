@@ -1,139 +1,188 @@
 ---
 name: unity-pipeline
-description: Drive a running Unity Editor or development Player from the command line via the unity-pipeline package — install the package, keep the editor ticking while unfocused, run the edit→recompile→run_tests loop, evaluate C#, and hot-reload files at runtime. Use when an agent needs to control a live Unity instance, automate Unity tests, recompile scripts headlessly, or apply runtime hot reloads. Assumes the `unity` CLI is on PATH.
+description: Drive a running Unity Editor or development Player from the command line via the unity-pipeline package — install the package, keep the editor ticking while unfocused, run the edit→recompile→run_tests loop, evaluate C#, and hot-reload files at runtime. Use when an agent needs to control a live Unity instance, automate Unity tests, recompile scripts headlessly, or apply runtime hot reloads. Also covers prefab authoring (create/instantiate/variant/edit), scene open/save/create with dirty-state guards, serialized-asset writes (materials, components, import settings), asset search, screenshots/capture for verification, builds, baking, audits, and detached long-running jobs. 中文触发：Unity 自动化、改 prefab、改场景、烘焙、跑测试、Unity 编辑器控制、序列化资产写入。Uses the self-maintained `upipe` CLI (github.com/Kayungko/unity-pipe, direct HTTP to the pipeline server); does NOT require Unity's closed-source unity CLI binary.
 ---
 
 # Unity Pipeline (agent control)
 
-Invoke commands with `unity command <name> [args]`. Run `unity command` with no name to
-list what an instance exposes. Two servers exist: **Editor** (`7800-7849`, auto-starts with
-the editor) and **Runtime** (`7900-7949`, only in a dev Player build). See the package
-`README.md` "Commands" reference for the full list and parameters.
+Invoke commands with `upipe <subcommand>` (thin client over the pipeline
+HTTP API inside the editor; zero third-party deps, single static binary).
+Run `upipe commands` to list what an instance exposes. Two servers exist:
+**Editor** (`7800-7849`, auto-starts with the editor) and **Runtime**
+(`7900-7949`, only in a dev Player build).
+
+**Finding the right command**: `upipe commands --query <keyword>` returns a
+compact name/description/tags index; `upipe commands --full --query <name>`
+returns the full parameter schema in one round-trip — prefer that over
+compact→full two-step. Deeper docs live in the package's
+`Documentation~/commands/*.md` (16 category files), reachable in a source
+checkout or under `Library/PackageCache` in an installed project.
+
+## 0. Exit codes (branch on these, never parse stderr)
+
+| code | meaning |
+|---|---|
+| 0 | success |
+| 2 | usage error |
+| 10 | no running instance (port file missing) |
+| 11 | unreachable after domain-reload retry ladder |
+| 12 | auth failure — editor restart refreshes the token |
+| 13 | busy/settling/queue-full — retryable |
+| 20 | command failed (compile errors, failing tests) — details in `error.data` |
+| 21 | timeout |
+| 22 | job cancelled before completion (see `upipe job <id>`) |
+| 30 | protocol mismatch (package too old/new) |
+| 50 | internal error (unexpected — report it) |
+
+With `--json`, stdout is always exactly one envelope:
+`{"ok": bool, "error": {code,kind,message,retryable,data}?, "data": ...}`.
+
+## 0.5 Response-value field map & write-gates (field-tested)
+
+Exit code 0 does NOT mean the business operation happened — write commands
+gate behind `confirm`/`dry_run` and report refusal in **three different
+places**. Success = outer `ok=true` AND (`result.applied==true` or
+`result.status != "error"`):
+
+| gate style | commands | refusal looks like |
+|---|---|---|
+| inner `result.status=="error"` | `build`, `bake_*` | outer ok=true, exit 0 — check result.status! |
+| outer `ok=false`, `error.code=20` | `clear_*`, `delete_asset`, `switch_build_target`, `create_prefab`/`create_prefab_variant` (overwrite), `open_scene`/`create_scene` (dirty scenes or overwrite), `remove_scene_from_build` | error.message contains "confirm" |
+| inner `result.applied==false` | `set_*_settings` | message contains "Refused" |
+
+Dirty-scene refusal from `open_scene`/`create_scene` (non-additive): the
+message lists the dirty scene names — run `save_scene`/`save_all` and
+retry, or pass `confirm=true` as the explicit choice to DISCARD unsaved
+edits (not recoverable). In batch loops treat the refusal as a normal
+branch, not an abort; never blanket-`confirm=true` every write command —
+only when the refusal message names overwrite/discard semantics.
+
+Read eval return values from `data.result.result` (the `output` field is
+always null); scene-hierarchy nodes live under `result.roots`. Asset search:
+prefer `eval` + `AssetDatabase.FindAssets` over `exec search` (full-catalog
+queries can block >2min). Full field-tested recipes — eval pitfalls (no
+`System.Tuple`, no `\n` escapes), missing-script locator, prefab census
+strategy, probe-object lifecycle, MSYS path-mangling workaround — see
+[`references/RECIPES.md`](references/RECIPES.md) (bundled with the skill;
+source of truth: `docs/RECIPES.md` in the unity-pipe repo).
 
 ## 1. Install & verify
 
-```bash
-unity pipeline install            # install into current project (or --project-path)
-unity pipeline list               # confirm the editor instance + server are reachable
-unity command editor_status       # confirm the editor server answers
+```powershell
+upipe pkg-install --source <com.unity.pipeline-<version>-2022.1.tgz> --dry-run   # from go run ./package/build; review, then drop --dry-run
+upipe status                # port file + server health + editor_status (auto-detects project from cwd)
+upipe commands              # dynamic command surface of the connected instance
 ```
+
+`upipe pkg-install` refuses read-only (P4-managed) targets — run p4
+edit/reconcile first; upipe never runs p4 itself.
 
 ## 2. Autonomous edit loop (Editor)
 
 This is the core agent workflow: keep the editor alive, change code, recompile, test.
 
-```bash
+```powershell
 # 1. Keep the editor ticking even when unfocused/minimized. REQUIRED before headless work —
 #    Unity otherwise throttles or stalls update/compile when it isn't the active app.
-unity command set_autotick --enable true
+upipe exec set_autotick --set enable=true
 
 # 2. Edit C# source files on disk normally.
 
-# 3. Recompile (async: triggers a domain reload, then poll until done).
-unity command recompile
-unity command recompile_status    # repeat until "completed" or "up_to_date"
-#   Tolerate connection errors while the domain reload is in flight — that is expected.
-#   If recompile_status reports failed=true, read its "errors" array and fix before testing.
+# 3. Recompile and WAIT: upipe recompile polls recompile_status through the
+#    domain reload until completed/up_to_date. Compile errors → exit 20 with
+#    the error list in error.data.
+upipe recompile
 
 # 4. (Optional) List available tests without running them.
-unity command list_tests --mode editor            # mode: all | editor | playmode
+upipe exec list_tests --set mode=editor        # mode: all | editor | playmode
 
-# 5. Run tests (filter to keep it fast).
-unity command run_tests --mode editor --filter MyFixture.MyTest
+# 5. Run tests (filter to keep it fast). Failing tests → exit 20, summary in error.data.
+upipe test --mode editor --filter MyFixture.MyTest
 ```
 
-`run_tests` modes: `all` | `editor` | `playmode`. `filter_type`: `testName` | `assembly` |
-`category`. For long runs use `--async_tests true` and poll `unity command test_status`
-(abort with `unity command cancel_tests`).
+`upipe test` submits `run_tests --async_tests=true` and polls `test_status`.
+A filter matching zero tests is reported as `{"status":"completed","message":"filter matched no tests"}`, not a failure.
 
-> **Known caveat:** when any selected test *fails*, `run_tests` may surface an opaque
-> result instead of the failure details. Re-run a narrower `--filter`, or inspect the
-> editor's Test Runner / logs to get the real failure.
+> **Known caveat:** when any selected test *fails*, the server may surface an
+> opaque summary. Re-run a narrower `--filter`, or inspect the editor's Test
+> Runner / logs for per-test detail.
 
 ## 3. Runtime hot reload
 
-Change gameplay code in a **running** game with no domain reload. The game must be live:
-enter Editor Play Mode (`unity command editor_play`) or run a dev Player. A
-`RuntimePipelineManager` in the scene auto-discovers tagged methods on `Awake` (no manual
-registration). Mono only — Editor Play Mode and Mono desktop dev builds, not IL2CPP. The token
-is auto-injected for local requests.
+Change gameplay code in a **running** game with no domain reload. The game
+must be live: enter Editor Play Mode (`upipe exec editor_play --set enable=true`)
+or run a dev Player. A `RuntimePipelineManager` in the scene auto-discovers
+tagged methods on `Awake` (no manual registration). Mono only — Editor Play
+Mode and Mono desktop dev builds, not IL2CPP.
 
 ### Prefer: in-place — `reload_file`
 
-Edit the method body directly; no separate file, no boilerplate.
-
 1. Tag the method `[HotReload]` on the MonoBehaviour.
 2. Edit its body on disk.
-3. Apply (re-run to iterate):
-   ```bash
-   unity command reload_file --filename Assets/Spinner.cs
-   ```
-   Add `--pdb` to make it debuggable — emits a portable PDB mapped to your source so breakpoints in
-   the original file bind (attach the IDE + enable Editor Attaching; compiles unoptimized):
-   ```bash
-   unity command reload_file --filename Assets/Spinner.cs --pdb
-   ```
+3. Apply (re-run to iterate): `upipe exec reload_file --set filename=Assets/Spinner.cs`
+   (add `--set pdb=true` for debuggable reloads with a source-mapped PDB).
 
-Constraints: `void` instance methods only; **public** members only; debugging requires `--pdb`
-(the default emits no symbols).
+Constraints: `void` instance methods only; **public** members only; debugging
+requires `pdb=true` (the default emits no symbols).
 
 ### Alternative: with helper — `reload_file_override`
 
-Keep the original method; put the tweak in a **separate** override file.
-
 1. Tag the method `[HotReloadWithOverrides]` and route it via
-   `HotReloadHelper.ExecuteWithHotReload(this, "Update", OriginalUpdate)` (original body in `OriginalUpdate`).
-2. In a **separate file that does not redeclare the target type**, add a `public static`
-   method tagged `[HotReloadOverrideMethod("BossController.Update")]` taking the instance first.
-3. Apply: `unity command reload_file_override --filename Assets/HotReload/BossOverrides.cs`
+   `HotReloadHelper.ExecuteWithHotReload(this, "Update", OriginalUpdate)`.
+2. In a **separate file that does not redeclare the target type**, add a
+   `public static` method tagged `[HotReloadOverrideMethod("BossController.Update")]`
+   taking the instance first.
+3. Apply: `upipe exec reload_file_override --set filename=Assets/HotReload/BossOverrides.cs`
 
-Constraints: **public** members only; you cannot break into the override.
-
-`unity command hotreload_status` shows active overrides. `reload_file_override*` options: `--timeout <ms>`
-(default 30000), `--assemblyDir <dir>` (persist DLLs instead of in-memory);
-`cleanup_hotreload --assemblyDir <dir>` clears old DLLs. Both commands validate the file up front
-and return a clear error on misconfiguration (no override found, target type redeclared, bad signature).
+`upipe exec hotreload_status` shows active overrides.
 
 ## 4. Quick C# eval (Runtime)
 
-```bash
-unity command eval "return 2 + 2;"
-# Or evaluate a .cs file on disk (contents run through the same path):
-unity command eval_file Assets/Scratch.cs
+```powershell
+upipe eval "return 2 + 2;"
+upipe eval-file Assets/Scratch.cs
 ```
 
 ## 5. Project audit (Editor)
 
-Static-analysis scan via Project Auditor, producing a CSV of issues to fix. Trigger, poll, read.
-
-```bash
-unity command audit                              # optional: --categories Code,ProjectSetting --output my.csv
-unity command audit_status                       # repeat until terminal status
+```powershell
+upipe audit                 # triggers audit, polls audit_status until terminal
 ```
 
-`audit_status` is terminal on `completed` (with `csvPath` + `issueCount`), `failed`, `unavailable`, or
-`interrupted` (a domain reload killed the scan — just re-run `audit`). Polling stays responsive while a
-Code-category scan compiles assemblies and holds the main thread. One scan at a time: a second `audit`
-returns `busy`. There is no cancel — stop polling to abandon a scan.
+Terminal statuses: `completed` (csvPath + issueCount), `failed`,
+`unavailable` (no Project Auditor / rules — see message), `interrupted`
+(a domain reload killed the scan — just re-run). Requires Project Auditor
+plus its rules (`upipe exec package_add --set identifier=com.unity.project-auditor-rules --set confirm=true`).
 
-CSV columns: `Category, Severity, Areas, Description, RelativePath, Line, DescriptorId, Recommendation`
-(diagnostics only, so every row is something to fix; `Recommendation` says how).
+## 6. Fallback when upipe is not installed
 
-> **Requires Project Auditor plus its rules.** `unavailable` means the Editor has no Project Auditor,
-> or it has no analysis rules — in a built-in-module Editor the rules live in the separate
-> `com.unity.project-auditor-rules` package (`unity command package_add --identifier
-> com.unity.project-auditor-rules --confirm true`). Read the `message` field; the command never reports
-> an empty `completed` scan that would look like a clean project.
+The CLI is a thin HTTP client; the protocol is directly reachable:
+
+```powershell
+# Read <project>/Library/Pipeline/.unity-pipeline-port → { "port": …, "evalToken": … }
+$pf = Get-Content "<project>/Library/Pipeline/.unity-pipeline-port" | ConvertFrom-Json
+$h = @{ Authorization = "Bearer $($pf.evalToken)" }
+Invoke-RestMethod "http://127.0.0.1:$($pf.port)/api/editor_status" -Headers $h          # GET
+Invoke-RestMethod "http://127.0.0.1:$($pf.port)/api/exec" -Method Post -Headers $h `
+  -ContentType "application/json" `
+  -Body (@{ command = "eval"; parameters = @{ code = "return 2 + 2;" } } | ConvertTo-Json)
+```
+
+The port file is rewritten after every domain reload — always re-read it.
 
 ## Gotchas
 
-- **`set_autotick` first.** Without it, recompile and tests can hang while the editor is
-  unfocused. The package's watchdog relies on the tick loop staying alive.
-- **Hot reload needs the game running.** `reload_file_override` / `reload_file` apply to a live
-  game — enter Editor Play Mode (`unity command editor_play`) first, or run a dev Player.
-- **Player-only commands need a dev Player.** `log`, `set_timescale`, `runtime_status`, etc. hit
-  the Runtime server, which does not run in the Editor.
-- **Async commands poll.** `recompile`→`recompile_status`, `run_tests --async_tests`→
-  `test_status`. Never assume completion from the trigger call's response.
-- **Target a specific instance** with `--instance host:port` or `--project-path <path>`
-  when more than one is running.
+- **set_autotick first.** Without it, recompile and tests can hang while the editor
+  is unfocused.
+- **Hot reload needs the game running.** Enter Play Mode or run a dev Player first.
+- **Player-only commands need a dev Player.** `log`, `set_timescale`,
+  `runtime_status`, etc. hit the Runtime server, absent in the Editor.
+- **Domain reloads drop connections.** upipe retries internally (re-reading the
+  port file); during a reload expect exit 13/11 transiently — retry, don't assume failure.
+- **Target a specific project** with `--project-path <root>` when cwd is elsewhere.
+- **Any command not wrapped as a subcommand** goes through `upipe exec <name> --set k=v`
+  (values are JSON-scalar coerced: "true"→bool, "60"→number).
+- **Git Bash mangles leading-slash args.** `--set target=/Name` becomes
+  `C:/Program Files/Git/Name` (MSYS path conversion) and the command fails with a
+  bogus hierarchy-path error. Prefix the call with `MSYS_NO_PATHCONV=1` (or use
+  `//Name`); instanceId targets are immune. PowerShell/cmd unaffected.

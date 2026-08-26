@@ -1,11 +1,17 @@
 diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
-index c1e75e3..afe7919 100644
+index c1e75e3..5292d91 100644
 --- a/com.unity.pipeline/CHANGELOG.md
 +++ b/com.unity.pipeline/CHANGELOG.md
-@@ -5,6 +5,12 @@ All notable changes to this package will be documented in this file.
+@@ -5,6 +5,18 @@ All notable changes to this package will be documented in this file.
  The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
  and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
  
++## [0.5.2-2022.1] - 2026-08-26
++
++- **Destructive guards on the scene command family**: `open_scene` / `create_scene` in non-additive mode refuse while any open scene has unsaved changes (the refusal lists the dirty scene names; save first via `save_scene`/`save_all` or pass `confirm=true` to discard deliberately — scripted Single-mode open discards edits with no dialog and no Undo recovery). `create_scene` also refuses to overwrite an existing scene asset at the target path unless `confirm=true`. `remove_scene_from_build` requires `confirm` (build-settings writes are immediate).
++- **`create_prefab_variant` overwrite guard**: same destructive semantics as `create_prefab` — refuses when the target asset exists unless `confirm=true` (the confirm parameter was previously a pure placeholder and SaveAsPrefabAsset silently overwrote any existing prefab).
++- **`test_status` can no longer serve a stale prior run's results**: the async status file is now written as `running` in the same command that starts the run, atomically replacing any prior terminal status — a run that fails to start can no longer leave a previous run's COMPLETED file on disk to be returned as this run's outcome.
++
 +## [0.5.1-2022.1] - 2026-08-26
 +
 +- **Safety gate on `create_prefab`**: saving to a `.prefab` path that already exists now refuses by default with a clear `ArgumentException` (asset overwrite is not undoable); pass `confirm=true` to overwrite. The whole prefab command family gains a `confirm` parameter for surface parity — the other six are "reserved for parity" declarations (scene-side single-step undoable or already confined to the authoring root).
@@ -15,6 +21,85 @@ index c1e75e3..afe7919 100644
  ## [0.5.0-exp.1] - 2026-08-10
  
  - New `GET /api/progress` endpoint: the currently executing command's task progress, served off the main thread so it answers even while a long synchronous command has the Editor blocked. Command authors report via the new `CliProgress.Report(title, info, current, total, progress)` API (thread-safe, callable from a blocked main thread) or the `CliEditorProgress.DisplayProgressBar` drop-in wrappers around `EditorUtility.DisplayProgressBar`; running `UnityEditor.Progress` items are mirrored automatically. Consumed by the `unity` CLI to render live terminal progress bars during `unity command` / `unity run --command`. (CLI-488, coordinated with CLI-335)
+diff --git a/com.unity.pipeline/Documentation~/commands/materials.md b/com.unity.pipeline/Documentation~/commands/materials.md
+index a81d780..203cd33 100644
+--- a/com.unity.pipeline/Documentation~/commands/materials.md
++++ b/com.unity.pipeline/Documentation~/commands/materials.md
+@@ -28,6 +28,7 @@ Set shader properties on a material (Float/Range/Int=number; Color=[r,g,b,a] or
+ | `dry_run` | no | `false` | If true, validate the shader, resolve property names and texture refs, and report applied[]/unknown[] without writing anything. |
+ 
+ **Returns:** `SetMaterialPropertiesResult`
++**Notes:** A shader property literally named `token` is stripped by the pipeline safety seam (legacy-client auth-token echo guard) and will not reach the material — a known boundary for schema-fixed dict parameters. `set_component_properties` (arbitrary component field names) is exempt via `ArbitraryKeys`.
+ 
+ ## Shaders
+ 
+diff --git a/com.unity.pipeline/Documentation~/commands/prefabs.md b/com.unity.pipeline/Documentation~/commands/prefabs.md
+index 9f5c13a..1ceff58 100644
+--- a/com.unity.pipeline/Documentation~/commands/prefabs.md
++++ b/com.unity.pipeline/Documentation~/commands/prefabs.md
+@@ -9,9 +9,10 @@ Save a GameObject as a prefab asset at a project path; the source becomes a conn
+ |-----------|----------|---------|-------------|
+ | `source` | yes | – | Reference to the source GameObject to save as a prefab (globalId/path/guid/instanceId/hierarchyPath). |
+ | `path` | yes | – | Prefab asset path relative to the authoring root (the Assets/ prefix is optional and the .prefab extension is added if missing). e.g. Prefabs/Enemy or Prefabs/Enemy.prefab |
++| `confirm` | no | `false` | Required (true) only when overwriting an existing prefab asset at the path. |
+ 
+ **Returns:** `AuthoringResult`
+-**Notes:** Scene-side effects are Undo-able; the prefab asset write is not undoable.
++**Notes:** Scene-side effects are Undo-able; the prefab asset write is not undoable. `confirm=true` is required to overwrite an existing prefab asset.
+ 
+ ### `instantiate_prefab`
+ Instantiate a prefab asset into a loaded scene and return the created instance.
+@@ -32,9 +33,10 @@ Create a prefab variant asset that inherits from a base prefab.
+ |-----------|----------|---------|-------------|
+ | `base` | yes | – | Reference to the base prefab asset (path/guid/globalId). |
+ | `path` | yes | – | Variant prefab asset path relative to the authoring root (.prefab added if missing). |
++| `confirm` | no | `false` | Required (true) only when overwriting an existing prefab asset at the path. |
+ 
+ **Returns:** `AuthoringResult`
+-**Notes:** Prefab asset write is not undoable.
++**Notes:** Prefab asset write is not undoable. `confirm=true` is required to overwrite an existing prefab asset at the target path.
+ 
+ ### `apply_prefab_overrides`
+ Apply a prefab instance's overrides back to its source prefab asset.
+diff --git a/com.unity.pipeline/Documentation~/commands/scenes.md b/com.unity.pipeline/Documentation~/commands/scenes.md
+index 5d5e5af..90b347c 100644
+--- a/com.unity.pipeline/Documentation~/commands/scenes.md
++++ b/com.unity.pipeline/Documentation~/commands/scenes.md
+@@ -10,9 +10,10 @@ Create a new scene and save it to the given path under the authoring root.
+ | `path` | yes | – | Scene path relative to the authoring root (default Assets/); the Assets/ prefix and the .unity extension are optional. e.g. Scenes/Level1 |
+ | `additive` | no | `false` | Open the new scene additively alongside currently open scenes instead of replacing them. |
+ | `template` | no | `empty` | Initial contents: 'empty' (default) for a blank scene, or 'default' to seed a Main Camera + Directional Light matching Unity's built-in 3D template. |
++| `confirm` | no | `false` | Must be true to (a) replace open scenes that have unsaved changes (non-additive mode) or (b) overwrite a scene asset that already exists at the target path; otherwise the command refuses (destructive guard — discarded edits and asset overwrites are not recoverable). |
+ 
+ **Returns:** `AuthoringResult`
+-**Notes:** Blocked during Play mode.
++**Notes:** Blocked during Play mode. Non-additive open refuses when any open scene is dirty (save first via `save_scene`/`save_all` or pass `confirm=true`); overwriting an existing scene asset at the path also requires `confirm=true`.
+ 
+ ### `open_scene`
+ Open an existing scene from the given path.
+@@ -21,9 +22,10 @@ Open an existing scene from the given path.
+ |-----------|----------|---------|-------------|
+ | `path` | yes | – | Scene path relative to the authoring root (default Assets/); the Assets/ prefix and the .unity extension are optional. |
+ | `additive` | no | `false` | Open additively alongside currently open scenes instead of replacing them. |
++| `confirm` | no | `false` | Must be true to discard unsaved changes in currently open scenes (non-additive mode replaces them all); otherwise the command refuses (destructive guard — discarded edits are not recoverable). |
+ 
+ **Returns:** `AuthoringResult`
+-**Notes:** Blocked during Play mode.
++**Notes:** Blocked during Play mode. Non-additive open refuses when any open scene is dirty (save first via `save_scene`/`save_all` or pass `confirm=true`); the refusal message lists the dirty scene names. Additive opens never replace scenes and are never blocked by the guard.
+ 
+ ### `save_scene`
+ Save an open scene. Saves the active scene when no path is given.
+@@ -86,8 +88,9 @@ Remove a scene from the Build Settings scene list (idempotent).
+ | Parameter | Required | Default | Description |
+ |-----------|----------|---------|-------------|
+ | `path` | yes | – | Scene path to remove (authoring-root relative; Assets/ prefix and .unity optional). |
++| `confirm` | no | `false` | Must be true to actually remove; without it the command refuses (destructive guard — a stripped-from-build scene silently breaks scene-index-based loads). |
+ 
+ **Returns:** `object`
+-**Notes:** Blocked during Play mode.
++**Notes:** Blocked during Play mode. Destructive — `confirm=true` required; build-settings changes are saved immediately.
+ 
+ See [Creating commands](../creating-commands.md) and [Connectivity](../connectivity.md).
 diff --git a/com.unity.pipeline/Editor/Commands/Assets/AssetCommands.cs b/com.unity.pipeline/Editor/Commands/Assets/AssetCommands.cs
 index dbc16e0..6ce2473 100644
 --- a/com.unity.pipeline/Editor/Commands/Assets/AssetCommands.cs
@@ -3526,7 +3611,7 @@ index ddfff79..2fc1b75 100644
      }
  }
 diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
-index 12f6849..36d87d2 100644
+index 12f6849..b8f8028 100644
 --- a/com.unity.pipeline/package.json
 +++ b/com.unity.pipeline/package.json
 @@ -1,38 +1,38 @@
@@ -3570,7 +3655,7 @@ index 12f6849..36d87d2 100644
 +{
 +  "name": "com.unity.pipeline",
 +  "displayName": "Unity Pipeline",
-+  "version": "0.5.1-2022.1",
++  "version": "0.5.2-2022.1",
 +  "unity": "2022.3",
 +  "category": "Pipeline",
 +  "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

@@ -10,9 +10,10 @@ Create a new scene and save it to the given path under the authoring root.
 | `path` | yes | – | Scene path relative to the authoring root (default Assets/); the Assets/ prefix and the .unity extension are optional. e.g. Scenes/Level1 |
 | `additive` | no | `false` | Open the new scene additively alongside currently open scenes instead of replacing them. |
 | `template` | no | `empty` | Initial contents: 'empty' (default) for a blank scene, or 'default' to seed a Main Camera + Directional Light matching Unity's built-in 3D template. |
+| `confirm` | no | `false` | Must be true to (a) replace open scenes that have unsaved changes (non-additive mode) or (b) overwrite a scene asset that already exists at the target path; otherwise the command refuses (destructive guard — discarded edits and asset overwrites are not recoverable). |
 
 **Returns:** `AuthoringResult`
-**Notes:** Blocked during Play mode.
+**Notes:** Blocked during Play mode. Non-additive open refuses when any open scene is dirty (save first via `save_scene`/`save_all` or pass `confirm=true`); overwriting an existing scene asset at the path also requires `confirm=true`.
 
 ### `open_scene`
 Open an existing scene from the given path.
@@ -21,9 +22,10 @@ Open an existing scene from the given path.
 |-----------|----------|---------|-------------|
 | `path` | yes | – | Scene path relative to the authoring root (default Assets/); the Assets/ prefix and the .unity extension are optional. |
 | `additive` | no | `false` | Open additively alongside currently open scenes instead of replacing them. |
+| `confirm` | no | `false` | Must be true to discard unsaved changes in currently open scenes (non-additive mode replaces them all); otherwise the command refuses (destructive guard — discarded edits are not recoverable). |
 
 **Returns:** `AuthoringResult`
-**Notes:** Blocked during Play mode.
+**Notes:** Blocked during Play mode. Non-additive open refuses when any open scene is dirty (save first via `save_scene`/`save_all` or pass `confirm=true`); the refusal message lists the dirty scene names. Additive opens never replace scenes and are never blocked by the guard.
 
 ### `save_scene`
 Save an open scene. Saves the active scene when no path is given.
@@ -86,8 +88,9 @@ Remove a scene from the Build Settings scene list (idempotent).
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `path` | yes | – | Scene path to remove (authoring-root relative; Assets/ prefix and .unity optional). |
+| `confirm` | no | `false` | Must be true to actually remove; without it the command refuses (destructive guard — a stripped-from-build scene silently breaks scene-index-based loads). |
 
 **Returns:** `object`
-**Notes:** Blocked during Play mode.
+**Notes:** Blocked during Play mode. Destructive — `confirm=true` required; build-settings changes are saved immediately.
 
 See [Creating commands](../creating-commands.md) and [Connectivity](../connectivity.md).
