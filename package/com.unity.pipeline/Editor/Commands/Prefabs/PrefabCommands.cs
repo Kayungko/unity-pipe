@@ -121,11 +121,13 @@ namespace Unity.Pipeline.Editor.Commands.Prefabs
         public static AuthoringResult CreatePrefabVariant(
             [CliArg("base", "Reference to the base prefab asset (path/guid/globalId).", Required = true)] ObjectRef basePrefab,
             [CliArg("path", "Variant prefab asset path relative to the authoring root (.prefab added if missing).", Required = true)] string path,
-            [CliArg("confirm", "Reserved for parity; creating a variant writes a new asset under the authoring root and does not modify the base prefab, so it is not required.")] bool confirm = false)
+            [CliArg("confirm", "Must be true to overwrite a prefab asset that already exists at the target path; without it the command refuses (destructive guard, asset overwrite is not undoable).")] bool confirm = false)
         {
             var basePrefabAsset = ResolvePrefabAsset(basePrefab, "base");
 
             var assetPath = ResolvePrefabPath(path);
+            if (!confirm && AssetDatabase.LoadAssetAtPath<Object>(assetPath) != null)
+                throw new ArgumentException($"Refusing to overwrite existing prefab '{assetPath}'. Pass confirm=true to overwrite it (asset overwrite is not undoable via Unity's Undo).");
             EnsureParentFolder(assetPath);
 
             // Author the variant from a throwaway instance of the base (saving an instance of a prefab

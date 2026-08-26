@@ -191,6 +191,62 @@ namespace Unity.Pipeline.Tests.Editor.Prefabs
                 "Confirmed overwrite should replace the asset contents with the new source");
         }
 
+        [Test]
+        public void CreatePrefabVariant_ExistingPath_RefusesWithoutConfirm()
+        {
+            // The variant command saves to an arbitrary authoring-root path, so the same
+            // destructive guard as create_prefab applies: an existing asset at the target
+            // must not be silently replaced by variant content.
+            var source = CreateSourceGameObject("VariantGated");
+            var baseResult = PrefabCommands.CreatePrefab(
+                new ObjectRef { InstanceId = PipelineUtils.GetObjectId(source) },
+                Root + "/VariantBase");
+
+            Assert.Throws<System.ArgumentException>(() =>
+                PrefabCommands.CreatePrefabVariant(
+                    new ObjectRef { Path = baseResult.AssetPath },
+                    Root + "/VariantBase"),
+                "create_prefab_variant should refuse to overwrite an existing prefab without confirm=true");
+
+            // The base prefab must be untouched by the refused attempt.
+            var baseAsset = AssetDatabase.LoadAssetAtPath<GameObject>(Root + "/VariantBase.prefab");
+            Assert.IsNotNull(baseAsset, "the refused variant attempt must not delete the existing asset");
+        }
+
+        [Test]
+        public void CreatePrefabVariant_ExistingPath_WithConfirm_Overwrites()
+        {
+            // Two separate prefabs: overwriting the FIRST one's path with a variant
+            // of the SECOND is a clean overwrite — the observable outcome is that
+            // the asset at that path now derives from the second base.
+            var sourceA = CreateSourceGameObject("VariantConfirmA");
+            var resultA = PrefabCommands.CreatePrefab(
+                new ObjectRef { InstanceId = PipelineUtils.GetObjectId(sourceA) },
+                Root + "/VariantConfirmA");
+            var sourceB = CreateSourceGameObject("VariantConfirmB");
+            sourceB.GetComponent<BoxCollider>().isTrigger = true; // content marker for B
+            var resultB = PrefabCommands.CreatePrefab(
+                new ObjectRef { InstanceId = PipelineUtils.GetObjectId(sourceB) },
+                Root + "/VariantConfirmB");
+
+            var result = PrefabCommands.CreatePrefabVariant(
+                new ObjectRef { Path = resultB.AssetPath },
+                Root + "/VariantConfirmA", // overwrite A's path with a variant of B
+                confirm: true);
+
+            Assert.AreEqual(Root + "/VariantConfirmA.prefab", result.AssetPath,
+                "Overwrite should report the same asset path");
+            var asset = AssetDatabase.LoadAssetAtPath<GameObject>(Root + "/VariantConfirmA.prefab");
+            Assert.IsNotNull(asset, "Prefab asset should still exist after the confirmed overwrite");
+            // Content assertion (not variant-type): SaveAsPrefabAsset onto a path that
+            // already held a regular prefab may flatten the variant link, but the asset
+            // must now carry the second source's contents.
+            var collider = asset.GetComponent<BoxCollider>();
+            Assert.IsNotNull(collider, "Overwritten asset should still carry the BoxCollider");
+            Assert.IsTrue(collider.isTrigger,
+                "Confirmed overwrite should have replaced the asset contents with the variant source");
+        }
+
         #endregion
 
         #region Nested-prefab integrity
