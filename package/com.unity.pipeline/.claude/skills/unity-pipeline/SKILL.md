@@ -141,12 +141,25 @@ requires `pdb=true` (the default emits no symbols).
 ```powershell
 upipe eval "return 2 + 2;"
 upipe eval-file Assets/Scratch.cs
+upipe eval "return 2 + 2;" --eval-timeout 60000 --job   # long eval: detach, then upipe job <id>
 ```
+
+## 4.5 Detached jobs (long build/bake/eval)
+
+```powershell
+upipe exec <cmd> --job            # or: upipe eval "…" --job
+upipe job <id> --timeout 45m      # wait; default 10m
+upipe job-cancel <id>             # POST {"id":…}; terminal state is "canceled" → exit 22
+upipe progress                    # snapshot of the in-flight command (does not block exec)
+```
+
+Jobs do not survive a domain reload. Cancel body field is `id` (not `jobId`).
 
 ## 5. Project audit (Editor)
 
 ```powershell
 upipe audit                 # triggers audit, polls audit_status until terminal
+upipe audit --categories Code,Texture --output Temp/pipeline-audit.csv
 ```
 
 Terminal statuses: `completed` (csvPath + issueCount), `failed`,

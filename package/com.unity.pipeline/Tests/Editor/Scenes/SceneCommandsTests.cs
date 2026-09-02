@@ -22,7 +22,7 @@ namespace Unity.Pipeline.Tests.Editor.Scenes
     /// teardown, and any build-list entries added by the tests are removed, so the suite leaves no
     /// residue in the host project.
     /// </summary>
-    public class SceneCommandsTests
+    class SceneCommandsTests
     {
         private const string TestRoot = "Assets/__CLI193Test";
         private const string ScenePath = TestRoot + "/RoundTrip.unity";
@@ -36,6 +36,12 @@ namespace Unity.Pipeline.Tests.Editor.Scenes
         {
             // ViaClient tests need discovery wired up for the isolated test server.
             CommandRegistry.SetDiscovery(new TypeCacheCommandDiscovery());
+
+            // Suites that create GameObjects (batch/component tests) leave the active scene
+            // dirty, and our destructive-scene guards key on that dirty flag — discard it so
+            // this suite stays order-independent when staged tests run in one domain.
+            if (EditorSceneManager.GetActiveScene().isDirty)
+                EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
         }
 
         [TearDown]
@@ -459,9 +465,6 @@ namespace Unity.Pipeline.Tests.Editor.Scenes
         }
 
         #endregion
-
-        #region Destructive guards (scene writes)
-
         [Test]
         public void OpenScene_DirtyOpenScene_RefusesWithoutConfirm()
         {
@@ -567,6 +570,5 @@ namespace Unity.Pipeline.Tests.Editor.Scenes
                 "confirmed removal should drop the build-list entry");
         }
 
-        #endregion
     }
 }

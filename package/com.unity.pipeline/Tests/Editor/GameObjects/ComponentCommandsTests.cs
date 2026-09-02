@@ -16,7 +16,7 @@ namespace Unity.Pipeline.Tests.Editor.GameObjects
     /// (set -> get) over primitive + enum + Vector types, object-reference assignment via a resolved
     /// handle, and the Undo-revert contract for a property mutation.
     /// </summary>
-    public class ComponentCommandsTests
+    class ComponentCommandsTests
     {
         private readonly List<GameObject> m_Spawned = new List<GameObject>();
 
@@ -257,35 +257,6 @@ namespace Unity.Pipeline.Tests.Editor.GameObjects
             }
         }
 
-        [Test]
-        public void SetComponentProperties_ViaClient_TokenKey_IsPreservedForArbitraryKeys()
-        {
-            // set_component_properties' "properties" keys are USER-DEFINED (serialized field
-            // names of arbitrary components), so its CliArg sets ArbitraryKeys=true and the
-            // pipeline seam's legacy "token" echo strip must NOT touch it — unlike the
-            // schema-fixed dicts (set_material_properties), where the seam strips "token".
-            var go = Track(new GameObject("ViaToken_CLI192"));
-            var holder = go.AddComponent<TokenHolderBehaviour>();
-
-            using (var server = new PipelineTestServer())
-            {
-                var response = server.Execute("set_component_properties", new
-                {
-                    target = new { instanceId = PipelineUtils.GetObjectId(holder) },
-                    properties = new JObject
-                    {
-                        ["token"] = "legit-field-value",
-                        ["speed"] = 5.5,
-                    },
-                });
-
-                Assert.IsTrue(response.IsSuccess, $"set_component_properties should succeed: {response.Error}");
-                Assert.AreEqual("legit-field-value", holder.token,
-                    "a user-defined serialized field named 'token' must survive the pipeline seam");
-                Assert.AreEqual(5.5f, holder.speed, 0.001f, "regular fields should still apply");
-            }
-        }
-
         #endregion
 
         #region CLI-220 follow-ups — asset references + array properties
@@ -425,6 +396,34 @@ namespace Unity.Pipeline.Tests.Editor.GameObjects
         }
 
         #endregion
+        [Test]
+        public void SetComponentProperties_ViaClient_TokenKey_IsPreservedForArbitraryKeys()
+        {
+            // set_component_properties' "properties" keys are USER-DEFINED (serialized field
+            // names of arbitrary components), so its CliArg sets ArbitraryKeys=true and the
+            // pipeline seam's legacy "token" echo strip must NOT touch it — unlike the
+            // schema-fixed dicts (set_material_properties), where the seam strips "token".
+            var go = Track(new GameObject("ViaToken_CLI192"));
+            var holder = go.AddComponent<TokenHolderBehaviour>();
+
+            using (var server = new PipelineTestServer())
+            {
+                var response = server.Execute("set_component_properties", new
+                {
+                    target = new { instanceId = PipelineUtils.GetObjectId(holder) },
+                    properties = new JObject
+                    {
+                        ["token"] = "legit-field-value",
+                        ["speed"] = 5.5,
+                    },
+                });
+
+                Assert.IsTrue(response.IsSuccess, $"set_component_properties should succeed: {response.Error}");
+                Assert.AreEqual("legit-field-value", holder.token,
+                    "a user-defined serialized field named 'token' must survive the pipeline seam");
+                Assert.AreEqual(5.5f, holder.speed, 0.001f, "regular fields should still apply");
+            }
+        }
 
         /// <summary>
         /// Test component with a serialized field literally named "token" — proves the
@@ -435,5 +434,6 @@ namespace Unity.Pipeline.Tests.Editor.GameObjects
             public string token;
             public float speed;
         }
+
     }
 }

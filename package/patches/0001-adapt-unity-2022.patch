@@ -1,5 +1,114 @@
+diff --git a/upstream/package.json b/com.unity.pipeline/package.json
+index 97661e7..c627332 100644
+--- a/upstream/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1 +1,38 @@
+-{"name":"com.unity.pipeline","displayName":"Unity Pipeline","version":"0.6.0-exp.1","unity":"6000.0","category":"Pipeline","description":"This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)","keywords":["pipeline","connected","authoring","hotreload"],"dependencies":{"com.unity.test-framework":"1.1.33","com.unity.modules.jsonserialize":"1.0.0","com.unity.nuget.newtonsoft-json":"3.0.2","com.unity.nuget.mono-cecil":"1.11.6","com.unity.modules.uielements":"1.0.0","com.unity.modules.screencapture":"1.0.0"},"samples":[{"displayName":"Hot Reload Examples","description":"In-place [HotReload] editing and override-file ([HotReloadOverrideMethod]) hot reload examples.","path":"Samples~/HotReload"}],"repository":{"revision":"27af91a943315a5702ac7679241399b649d6a20d","type":"git","url":"https://github.cds.internal.unity3d.com/unity/com.unity.pipeline.git"},"documentationUrl":"https://docs.unity3d.com/Packages/com.unity.pipeline@0.6/manual/index.html","_upm":{"changelog":"### Fixed\n- [UUM-149991] AutoStaticsCleanup: Fixed usage-analysis findings.\n- [UUM-149991] Fixed `CommandRegistry` staying on reflection-based command discovery after exiting Play Mode without a domain reload; `PipelineServerStartup` now restores TypeCache discovery on `EnteredEditMode`.\n- [UUM-149977] Removed the \"Editor is not in automated mode\" console warning. Now surfaced as `info` on the instance descriptor instead.\n- [AUTHAPI-36] Fixed `TestResultCollector.RunFinished` throwing `InvalidOperationException` (double-complete) when a run had already been completed by `SetError`/`Cancel` (e.g. a timed-out or errored run): a late `RunFinished` is now a no-op and the original error/cancellation is preserved.\n\n### Added\n- [AUTHAPI-68] `POST /api/exec` accepts an unparsed command line as `commandLine` (a string the server tokenizes) or `argv` (pre-split tokens), binding positional and `--flag` arguments against the command's declared parameters server-side. Exactly one of `command`, `commandLine` or `argv` may be present, and `parameters` cannot accompany the raw forms. Argument failures return `400` with `errorCode: \"INVALID_COMMAND_ARGS\"`, a machine-readable `argProblems` array, and the command's `commandSchema`; successful raw-form replies echo the bound `parameters`. Servers advertise `exec.argv` / `exec.commandLine` in `capabilities` on `/api/status` and in the port descriptor. `command` is no longer a JSON-required property, so a body carrying none of the three forms is now rejected by request validation as `400 {\"error\":\"Invalid Request\",\"errorDetails\":\"Command name is required\"}` instead of by deserialization as `400 {\"error\":\"Invalid JSON\"}`.\n- [AUTHAPI-64] Added a new endpoint reporting currently-open modal dialogs, and command execution now reports any dialogs shown while it ran. Main-thread commands are rejected with a busy status while a dialog is open, and status polling reports that a dialog is blocking it. Requires a recent enough trunk build.\n- [AUTHAPI-29] Instrument `eval`/`eval_file` usage: each call logs a JSONL record (timing, success, statement/expression shape, and an API fingerprint of top-level member accesses) to `<project>/Library/Pipeline/eval-usage.jsonl`, editor-only and local-first — raw source isn't stored unless `Store Eval Source` is enabled. Toggle via `Eval Telemetry Enabled`.\n- [AUTHAPI-29] New `report_evals` command: ranks logged eval fingerprints by frequency and cross-references the command catalog to surface patterns not yet covered by an existing command.\n- [AUTHAPI-49] Editor analytics: `Pipeline_SessionStarted` on the first command a client executes, `Pipeline_CommandExecuted` per command executed, and `Pipeline_SessionStopped` when the Editor quits. `isEvalWithExistingCommandAvailable` reuses the AUTHAPI-29 eval fingerprints and coverage map, so it agrees with `report_evals` by construction. Only commands shipped in the package report their name and tags; a project-declared command reports `<customUserCommand>` and no tags. See `Documentation~/analytics.md`.\n- [UUM-149580] `runtime_status` now reports `pipelineDriver` (isServerRunning, actualPort, and the enableInBuilds/requestTimeoutMs/enableAuditLogging/autoStart/maxWorkItemsPerFrame values actually governing the running driver, not just what Project Settings currently shows) — `null` if no driver was ever bootstrapped.\n- [UUM-149580] New `get_runtime_pipeline_settings`/`set_runtime_pipeline_settings` commands: structured, `confirm`/`dry_run`-gated read/write access to Pipeline Runtime settings (Project Settings > Pipeline > Runtime), matching the existing Audio/Graphics/Input/Physics/Player/Quality/Time settings command family. Refused while in Play Mode.\n- [AUTHAPI-27] New `batch` command: run up to 200 ordered operations in one request, with later ops referencing earlier results. Transactional by default (single Undo step, rolled back on failure); supports `on_error`, `dry_run`, `time_budget_ms`, and detached `job` execution. See `Documentation~/commands/batch.md` for details.\n- [AUTHAPI-26] New `run_script` command: compi"}}
+\ No newline at end of file
++{
++  "name": "com.unity.pipeline",
++  "displayName": "Unity Pipeline",
++  "version": "0.6.0-2022.1",
++  "unity": "2022.3",
++  "category": "Pipeline",
++  "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",
++  "keywords": [
++    "pipeline",
++    "connected",
++    "authoring",
++    "hotreload"
++  ],
++  "dependencies": {
++    "com.unity.test-framework": "1.1.33",
++    "com.unity.modules.jsonserialize": "1.0.0",
++    "com.unity.nuget.newtonsoft-json": "3.0.2",
++    "com.unity.nuget.mono-cecil": "1.11.6",
++    "com.unity.modules.uielements": "1.0.0",
++    "com.unity.modules.screencapture": "1.0.0"
++  },
++  "samples": [
++    {
++      "displayName": "Hot Reload Examples",
++      "description": "In-place [HotReload] editing and override-file ([HotReloadOverrideMethod]) hot reload examples.",
++      "path": "Samples~/HotReload"
++    }
++  ],
++  "repository": {
++    "revision": "27af91a943315a5702ac7679241399b649d6a20d",
++    "type": "git",
++    "url": "https://github.cds.internal.unity3d.com/unity/com.unity.pipeline.git"
++  },
++  "documentationUrl": "https://docs.unity3d.com/Packages/com.unity.pipeline@0.6/manual/index.html",
++  "_upm": {
++    "changelog": "### Fixed\n- [UUM-149991] AutoStaticsCleanup: Fixed usage-analysis findings.\n- [UUM-149991] Fixed `CommandRegistry` staying on reflection-based command discovery after exiting Play Mode without a domain reload; `PipelineServerStartup` now restores TypeCache discovery on `EnteredEditMode`.\n- [UUM-149977] Removed the \"Editor is not in automated mode\" console warning. Now surfaced as `info` on the instance descriptor instead.\n- [AUTHAPI-36] Fixed `TestResultCollector.RunFinished` throwing `InvalidOperationException` (double-complete) when a run had already been completed by `SetError`/`Cancel` (e.g. a timed-out or errored run): a late `RunFinished` is now a no-op and the original error/cancellation is preserved.\n\n### Added\n- [AUTHAPI-68] `POST /api/exec` accepts an unparsed command line as `commandLine` (a string the server tokenizes) or `argv` (pre-split tokens), binding positional and `--flag` arguments against the command's declared parameters server-side. Exactly one of `command`, `commandLine` or `argv` may be present, and `parameters` cannot accompany the raw forms. Argument failures return `400` with `errorCode: \"INVALID_COMMAND_ARGS\"`, a machine-readable `argProblems` array, and the command's `commandSchema`; successful raw-form replies echo the bound `parameters`. Servers advertise `exec.argv` / `exec.commandLine` in `capabilities` on `/api/status` and in the port descriptor. `command` is no longer a JSON-required property, so a body carrying none of the three forms is now rejected by request validation as `400 {\"error\":\"Invalid Request\",\"errorDetails\":\"Command name is required\"}` instead of by deserialization as `400 {\"error\":\"Invalid JSON\"}`.\n- [AUTHAPI-64] Added a new endpoint reporting currently-open modal dialogs, and command execution now reports any dialogs shown while it ran. Main-thread commands are rejected with a busy status while a dialog is open, and status polling reports that a dialog is blocking it. Requires a recent enough trunk build.\n- [AUTHAPI-29] Instrument `eval`/`eval_file` usage: each call logs a JSONL record (timing, success, statement/expression shape, and an API fingerprint of top-level member accesses) to `<project>/Library/Pipeline/eval-usage.jsonl`, editor-only and local-first — raw source isn't stored unless `Store Eval Source` is enabled. Toggle via `Eval Telemetry Enabled`.\n- [AUTHAPI-29] New `report_evals` command: ranks logged eval fingerprints by frequency and cross-references the command catalog to surface patterns not yet covered by an existing command.\n- [AUTHAPI-49] Editor analytics: `Pipeline_SessionStarted` on the first command a client executes, `Pipeline_CommandExecuted` per command executed, and `Pipeline_SessionStopped` when the Editor quits. `isEvalWithExistingCommandAvailable` reuses the AUTHAPI-29 eval fingerprints and coverage map, so it agrees with `report_evals` by construction. Only commands shipped in the package report their name and tags; a project-declared command reports `<customUserCommand>` and no tags. See `Documentation~/analytics.md`.\n- [UUM-149580] `runtime_status` now reports `pipelineDriver` (isServerRunning, actualPort, and the enableInBuilds/requestTimeoutMs/enableAuditLogging/autoStart/maxWorkItemsPerFrame values actually governing the running driver, not just what Project Settings currently shows) — `null` if no driver was ever bootstrapped.\n- [UUM-149580] New `get_runtime_pipeline_settings`/`set_runtime_pipeline_settings` commands: structured, `confirm`/`dry_run`-gated read/write access to Pipeline Runtime settings (Project Settings > Pipeline > Runtime), matching the existing Audio/Graphics/Input/Physics/Player/Quality/Time settings command family. Refused while in Play Mode.\n- [AUTHAPI-27] New `batch` command: run up to 200 ordered operations in one request, with later ops referencing earlier results. Transactional by default (single Undo step, rolled back on failure); supports `on_error`, `dry_run`, `time_budget_ms`, and detached `job` execution. See `Documentation~/commands/batch.md` for details.\n- [AUTHAPI-26] New `run_script` command: compi"
++  }
++}
+diff --git a/upstream/Runtime/Unity.Pipeline.asmdef b/com.unity.pipeline/Runtime/Unity.Pipeline.asmdef
+index 25dc26b..d375b94 100644
+--- a/upstream/Runtime/Unity.Pipeline.asmdef
++++ b/com.unity.pipeline/Runtime/Unity.Pipeline.asmdef
+@@ -1,30 +1,29 @@
+-{
+-    "name": "Unity.Pipeline",
+-    "rootNamespace": "Unity.Pipeline",
+-    "references": [
+-        "Unity.InputSystem",
+-        "Unity.Pipeline.IlInterpreter"
+-    ],
+-    "includePlatforms": [],
+-    "excludePlatforms": [],
+-    "allowUnsafeCode": false,
+-    "overrideReferences": true,
+-    "precompiledReferences": [
+-        "Microsoft.CodeAnalysis.dll",
+-        "Microsoft.CodeAnalysis.CSharp.dll",
+-        "System.Collections.Immutable.dll",
+-        "System.Runtime.CompilerServices.Unsafe.dll",
+-        "System.Reflection.Metadata.dll",
+-        "Newtonsoft.Json.dll"
+-    ],
+-    "autoReferenced": true,
+-    "defineConstraints": [],
+-    "versionDefines": [
+-        {
+-            "name": "com.unity.modules.unitywebrequest",
+-            "expression": "1.0.0",
+-            "define": "UNITY_2022_3_OR_NEWER"
+-        }
+-    ],
+-    "noEngineReferences": false
+-}
++{
++    "name": "Unity.Pipeline",
++    "rootNamespace": "Unity.Pipeline",
++    "references": [
++        "Unity.Pipeline.IlInterpreter"
++    ],
++    "includePlatforms": [],
++    "excludePlatforms": [],
++    "allowUnsafeCode": false,
++    "overrideReferences": true,
++    "precompiledReferences": [
++        "Microsoft.CodeAnalysis.dll",
++        "Microsoft.CodeAnalysis.CSharp.dll",
++        "System.Collections.Immutable.dll",
++        "System.Runtime.CompilerServices.Unsafe.dll",
++        "System.Reflection.Metadata.dll",
++        "Newtonsoft.Json.dll"
++    ],
++    "autoReferenced": true,
++    "defineConstraints": [],
++    "versionDefines": [
++        {
++            "name": "com.unity.modules.unitywebrequest",
++            "expression": "1.0.0",
++            "define": "UNITY_2022_3_OR_NEWER"
++        }
++    ],
++    "noEngineReferences": false
++}
 diff --git a/upstream/Editor/Commands/Assets/AssetCommands.cs b/com.unity.pipeline/Editor/Commands/Assets/AssetCommands.cs
-index e31f217..6ce2473 100644
+index 1d9f402..c007c00 100644
 --- a/upstream/Editor/Commands/Assets/AssetCommands.cs
 +++ b/com.unity.pipeline/Editor/Commands/Assets/AssetCommands.cs
 @@ -7,6 +7,10 @@ using Unity.Pipeline.Models;
@@ -14,7 +123,7 @@ index e31f217..6ce2473 100644
  namespace Unity.Pipeline.Editor.Commands.Assets
  {
 diff --git a/upstream/Editor/Commands/Materials/MaterialCommands.cs b/com.unity.pipeline/Editor/Commands/Materials/MaterialCommands.cs
-index af34ff1..481b5f8 100644
+index b8a78cd..42b52ac 100644
 --- a/upstream/Editor/Commands/Materials/MaterialCommands.cs
 +++ b/com.unity.pipeline/Editor/Commands/Materials/MaterialCommands.cs
 @@ -46,7 +46,13 @@ namespace Unity.Pipeline.Editor.Commands.Materials
@@ -31,8 +140,28 @@ index af34ff1..481b5f8 100644
                  EnabledKeywords = GetEnabledKeywords(mat),
              };
  
+@@ -143,9 +149,6 @@ namespace Unity.Pipeline.Editor.Commands.Materials
+                 {
+                     foreach (var pair in properties)
+                     {
+-                        if (pair.Key == "token") // injected by the server; never a material property.
+-                            continue;
+-
+                         var name = pair.Key;
+                         if (!mat.HasProperty(name))
+                         {
+@@ -287,9 +290,6 @@ namespace Unity.Pipeline.Editor.Commands.Materials
+ 
+             foreach (var pair in properties)
+             {
+-                if (pair.Key == "token")
+-                    continue;
+-
+                 var name = pair.Key;
+                 var propType = shader != null ? GetPropertyType(shader, name) : null;
+                 if (propType == null)
 diff --git a/upstream/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs b/com.unity.pipeline/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs
-index aefac43..2fd6edb 100644
+index 0828dee..a5c1ed9 100644
 --- a/upstream/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs
 +++ b/com.unity.pipeline/Editor/Commands/ProjectSettings/GraphicsSettingsCommands.cs
 @@ -42,7 +42,7 @@ namespace Unity.Pipeline.Editor.Commands.ProjectSettings
@@ -86,28 +215,783 @@ index aefac43..2fd6edb 100644
              return new Dictionary<string, object>
              {
                  ["defaultRenderPipeline"] = srp != null ? srp.name : null,
+diff --git a/upstream/Editor/PipelineAnalytics.cs b/com.unity.pipeline/Editor/PipelineAnalytics.cs
+index 5b38385..643346d 100644
+--- a/upstream/Editor/PipelineAnalytics.cs
++++ b/com.unity.pipeline/Editor/PipelineAnalytics.cs
+@@ -1,367 +1,385 @@
+-using System;
+-using System.Collections.Generic;
+-using System.Linq;
+-using Newtonsoft.Json.Linq;
+-using Unity.Pipeline.Commands;
+-using Unity.Pipeline.Telemetry;
+-using UnityEditor;
+-using UnityEngine;
+-using UnityEngine.Analytics;
+-#if UNITY_6000_5_OR_NEWER
+-using Unity.Scripting.LifecycleManagement;
+-#endif
+-
+-namespace Unity.Pipeline.Editor
+-{
+-    /// <summary>
+-    /// Reports pipeline usage to Unity's editor analytics: one session-start event on the first
+-    /// command a client executes, one event per command executed after that, and one session-stop
+-    /// event when the Editor quits.
+-    ///
+-    /// Everything here is main-thread only — SendAnalytic, SessionState and the editor state the
+-    /// events describe all require it. Commands finish on the background HTTP thread, so
+-    /// <see cref="EditorPipelineServer"/> posts each one to the server dispatcher, which runs it
+-    /// here on the next main-thread pump.
+-    ///
+-    /// A session spans a Unity PROCESS, not a domain: the latch lives in SessionState, which
+-    /// survives domain reloads and dies with the editor, so a recompile does not start a new
+-    /// session.
+-    /// </summary>
+-#if UNITY_6000_5_OR_NEWER
+-    [NoAutoStaticsCleanup]
+-#endif
+-    internal static class PipelineAnalytics
+-    {
+-        private const string VendorKey = "unity.pipeline";
+-
+-        private const string SessionStartedEventName = "Pipeline_SessionStarted";
+-        private const string CommandExecutedEventName = "Pipeline_CommandExecuted";
+-        private const string SessionStoppedEventName = "Pipeline_SessionStopped";
+-
+-        // A session emits at most one start and one stop; commands are the volume, and an
+-        // agent-driven session issues them continuously.
+-        private const int SessionEventsPerHour = 10;
+-        private const int CommandEventsPerHour = 1000;
+-        private const int MaxElements = 1000;
+-
+-        private const string SessionStartedKey = "Unity.Pipeline.Analytics.SessionStarted";
+-        private const string SessionStartTicksKey = "Unity.Pipeline.Analytics.SessionStartTicks";
+-
+-        /// <summary>
+-        /// Assemblies whose commands ship with the package. Anything else carrying [CliCommand] was
+-        /// written by the project, which is what isUserDefinedCommand reports.
+-        /// </summary>
+-        private static readonly HashSet<string> PackageAssemblies =
+-            new HashSet<string> { "Unity.Pipeline", "Unity.Pipeline.Editor" };
+-
+-        /// <summary>
+-        /// The tag every code-evaluation command carries (eval, eval_file, run_script). Matching the
+-        /// tag rather than a name list covers a new eval command the moment it is tagged, and the
+-        /// suite already enforces that shipped commands carry well-formed tags.
+-        /// </summary>
+-        private const string EvalTag = "scripts/eval";
+-
+-        /// <summary>
+-        /// Reported in place of a project-declared command's real name. A command name is text the
+-        /// project's own authors wrote, so it can name an unannounced feature or an internal system;
+-        /// none of that belongs in an event leaving the machine. Its tags are withheld for the same
+-        /// reason — nothing constrains a project to the documented taxonomy, so a tag can carry a
+-        /// project-chosen word exactly as a name can. Counting how much traffic is project-declared
+-        /// is the useful signal, and isUserDefinedCommand already carries it.
+-        /// </summary>
+-        private const string RedactedCommandName = "<customUserCommand>";
+-
+-        /// <summary>
+-        /// The send call, indirected so tests can capture events instead of shipping them.
+-        /// </summary>
+-        internal static Action<IAnalytic> s_Send = analytic => EditorAnalytics.SendAnalytic(analytic);
+-
+-        /// <summary>
+-        /// The session latch as stored in SessionState: whether the start event has been sent this
+-        /// Unity process, and the UTC tick count it was sent at. Exposed so a fixture driving the
+-        /// reporter can save and restore the live latch.
+-        /// </summary>
+-        internal static (bool started, long startTicks) SessionLatch
+-        {
+-            get
+-            {
+-                var started = SessionState.GetBool(SessionStartedKey, false);
+-                long.TryParse(SessionState.GetString(SessionStartTicksKey, "0"), out var ticks);
+-                return (started, ticks);
+-            }
+-            set
+-            {
+-                SessionState.SetBool(SessionStartedKey, value.started);
+-                SessionState.SetString(SessionStartTicksKey, value.startTicks.ToString());
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Report one executed command, opening the session first if this is the first one. An
+-        /// info with no command is a request that was rejected before executing anything, which is
+-        /// not a command execution and is skipped. Main thread.
+-        /// </summary>
+-        internal static void RecordCommandExecuted(in CommandExecutionInfo info)
+-        {
+-            if (info.Command == null)
+-                return;
+-
+-            try
+-            {
+-                EnsureSessionStarted();
+-
+-                var command = info.Command;
+-                var userDefined = IsUserDefinedCommand(command.Package);
+-                s_Send(new CommandExecutedAnalytic(new CommandExecutedData
+-                {
+-                    // Only a command that shipped with the package describes itself; a
+-                    // project-declared one reports the placeholder and no tags.
+-                    commandName = userDefined ? RedactedCommandName : command.Name,
+-                    commandTags = userDefined ? Array.Empty<string>() : ToArray(command.Tags),
+-                    commandSuccess = info.Success,
+-                    commandDuration = info.DurationMs,
+-                    isUserDefinedCommand = userDefined,
+-                    isEval = IsEvalCommand(command.Tags),
+-                    isEvalWithExistingCommandAvailable = EvalCoversAnExistingCommand(command, info.Parameters),
+-                }));
+-            }
+-            catch (Exception ex)
+-            {
+-                // Reporting must never break request handling.
+-                Debug.LogWarning($"Pipeline analytics failed to report a command: {ex.Message}");
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Send the session-stop event if this process ever opened a session, and close the latch so
+-        /// a second call is a no-op. Main thread.
+-        /// </summary>
+-        internal static void SendSessionStoppedIfStarted()
+-        {
+-            try
+-            {
+-                var (started, startTicks) = SessionLatch;
+-                if (!started)
+-                    return;
+-
+-                SessionLatch = (false, 0);
+-
+-                var elapsedMs = startTicks > 0
+-                    ? Math.Max(0, (DateTime.UtcNow.Ticks - startTicks) / TimeSpan.TicksPerMillisecond)
+-                    : 0;
+-
+-                s_Send(new SessionStoppedAnalytic(new SessionStoppedData
+-                {
+-                    sessionDuration = elapsedMs,
+-                }));
+-            }
+-            catch (Exception ex)
+-            {
+-                Debug.LogWarning($"Pipeline analytics failed to report the session end: {ex.Message}");
+-            }
+-        }
+-
+-        /// <summary>
+-        /// Send the session-start event once per Unity process, describing how this editor and its
+-        /// server were launched. The latch is set before sending, so a throwing send cannot make a
+-        /// later command try again.
+-        /// </summary>
+-        private static void EnsureSessionStarted()
+-        {
+-            if (SessionLatch.started)
+-                return;
+-
+-            SessionLatch = (true, DateTime.UtcNow.Ticks);
+-
+-            var server = PipelineServerStartup.Server;
+-            s_Send(new SessionStartedAnalytic(new SessionStartedData
+-            {
+-                batchmode = Application.isBatchMode,
+-                automated = EditorPipelineServer.DetectAutomatedMode(Environment.GetCommandLineArgs()),
+-                // Both fall back to what the server starts with when no settings asset is authored:
+-                // browser clients refused, port auto-assigned from the range.
+-                browserAllowed = server?.AllowSandboxedBrowserClients ?? false,
+-                dynamicPortAssignation = server?.PortAutoAssigned ?? true,
+-                hotReloadWatcherEnabled = EditorHotReloadWatcher.IsWatching,
+-            }));
+-        }
+-
+-        /// <summary>
+-        /// Whether a command came from the project rather than the package, judged by its declaring
+-        /// assembly. An unresolved assembly is not evidence of a project command, so it counts as
+-        /// shipped.
+-        /// </summary>
+-        internal static bool IsUserDefinedCommand(string package)
+-        {
+-            return !string.IsNullOrEmpty(package) && !PackageAssemblies.Contains(package);
+-        }
+-
+-        /// <summary>
+-        /// Whether the snippet this eval ran touches an API that an existing command already covers
+-        /// — the "you did not need eval for this" signal.
+-        ///
+-        /// Same judgement the report_evals command makes, on one invocation instead of the whole log:
+-        /// fingerprint the body, look each fingerprint up in the curated
+-        /// <see cref="EvalCoverageMap"/>, and count it only if the command it names is actually in the
+-        /// live catalog. The map is a hint layer, so a false here means "no mapped-and-present
+-        /// command", not "no command could ever cover this".
+-        ///
+-        /// Answerable only where the body is reachable from the parameters: <c>eval</c> passes it
+-        /// inline and <c>eval_file</c> names a file to read. <c>run_script</c> runs a project file
+-        /// with a named entry point rather than a snippet, and the fingerprinter parses script-kind
+-        /// bodies, so it is not fingerprinted and reports false.
+-        /// </summary>
+-        internal static bool EvalCoversAnExistingCommand(CommandInfo command, JObject parameters)
+-        {
+-            if (parameters == null || !IsEvalCommand(command.Tags))
+-                return false;
+-
+-            var code = ReadEvalBody(command.Name, parameters);
+-            if (string.IsNullOrWhiteSpace(code))
+-                return false;
+-
+-            var fingerprints = EvalUsageFingerprinter.Analyze(code).Fingerprints;
+-            if (fingerprints == null || fingerprints.Count == 0)
+-                return false;
+-
+-            var available = new HashSet<string>(CommandRegistry.DiscoverCommands().Select(c => c.Name));
+-            foreach (var fingerprint in fingerprints)
+-            {
+-                if (EvalCoverageMap.Default.TryGetValue(fingerprint, out var mapped) && available.Contains(mapped))
+-                    return true;
+-            }
+-
+-            return false;
+-        }
+-
+-        /// <summary>
+-        /// The evaluated body, from the parameters the command was invoked with. Returns null for a
+-        /// command whose body is not reachable that way.
+-        /// </summary>
+-        private static string ReadEvalBody(string commandName, JObject parameters)
+-        {
+-            switch (commandName)
+-            {
+-                case "eval":
+-                    return parameters["code"]?.ToString();
+-
+-                case "eval_file":
+-                    // The command read this file moments ago; re-reading it costs one small read and
+-                    // keeps eval_file from reporting a permanent false that would be indistinguishable
+-                    // from a genuine "nothing covers this".
+-                    var file = parameters["file"]?.ToString();
+-                    if (string.IsNullOrEmpty(file) || !System.IO.File.Exists(file))
+-                        return null;
+-                    try
+-                    {
+-                        return System.IO.File.ReadAllText(file);
+-                    }
+-                    catch
+-                    {
+-                        return null;
+-                    }
+-
+-                default:
+-                    return null;
+-            }
+-        }
+-
+-        internal static bool IsEvalCommand(IReadOnlyList<string> tags)
+-        {
+-            for (var i = 0; i < tags.Count; i++)
+-            {
+-                if (tags[i] == EvalTag)
+-                    return true;
+-            }
+-
+-            return false;
+-        }
+-
+-        private static string[] ToArray(IReadOnlyList<string> tags)
+-        {
+-            var array = new string[tags.Count];
+-            for (var i = 0; i < tags.Count; i++)
+-                array[i] = tags[i];
+-            return array;
+-        }
+-
+-        // The payload field names below ARE the registered event schema. Renaming one silently stops
+-        // that column being populated, so they keep the schema casing rather than C# casing.
+-
+-        [Serializable]
+-        internal struct SessionStartedData : IAnalytic.IData
+-        {
+-            public bool batchmode;
+-            public bool automated;
+-            public bool browserAllowed;
+-            public bool dynamicPortAssignation;
+-            public bool hotReloadWatcherEnabled;
+-        }
+-
+-        [Serializable]
+-        internal struct CommandExecutedData : IAnalytic.IData
+-        {
+-            public string commandName;
+-            public string[] commandTags;
+-            public bool commandSuccess;
+-            public long commandDuration;
+-            public bool isUserDefinedCommand;
+-            public bool isEval;
+-            public bool isEvalWithExistingCommandAvailable;
+-        }
+-
+-        [Serializable]
+-        internal struct SessionStoppedData : IAnalytic.IData
+-        {
+-            public long sessionDuration;
+-        }
+-
+-        [AnalyticInfo(eventName: SessionStartedEventName, vendorKey: VendorKey,
+-            maxEventsPerHour: SessionEventsPerHour, maxNumberOfElements: MaxElements)]
+-        internal class SessionStartedAnalytic : IAnalytic
+-        {
+-            private readonly SessionStartedData m_Data;
+-
+-            public SessionStartedAnalytic(SessionStartedData data) => m_Data = data;
+-
+-            public bool TryGatherData(out IAnalytic.IData data, out Exception error)
+-            {
+-                data = m_Data;
+-                error = null;
+-                return true;
+-            }
+-        }
+-
+-        [AnalyticInfo(eventName: CommandExecutedEventName, vendorKey: VendorKey,
+-            maxEventsPerHour: CommandEventsPerHour, maxNumberOfElements: MaxElements)]
+-        internal class CommandExecutedAnalytic : IAnalytic
+-        {
+-            private readonly CommandExecutedData m_Data;
+-
+-            public CommandExecutedAnalytic(CommandExecutedData data) => m_Data = data;
+-
+-            public bool TryGatherData(out IAnalytic.IData data, out Exception error)
+-            {
+-                data = m_Data;
+-                error = null;
+-                return true;
+-            }
+-        }
+-
+-        [AnalyticInfo(eventName: SessionStoppedEventName, vendorKey: VendorKey,
+-            maxEventsPerHour: SessionEventsPerHour, maxNumberOfElements: MaxElements)]
+-        internal class SessionStoppedAnalytic : IAnalytic
+-        {
+-            private readonly SessionStoppedData m_Data;
+-
+-            public SessionStoppedAnalytic(SessionStoppedData data) => m_Data = data;
+-
+-            public bool TryGatherData(out IAnalytic.IData data, out Exception error)
+-            {
+-                data = m_Data;
+-                error = null;
+-                return true;
+-            }
+-        }
+-    }
+-}
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using Newtonsoft.Json.Linq;
++using Unity.Pipeline;
++using Unity.Pipeline.Commands;
++using Unity.Pipeline.Telemetry;
++using UnityEditor;
++using UnityEngine;
++#if UNITY_6000_0_OR_NEWER
++using UnityEngine.Analytics;
++#endif
++#if UNITY_6000_5_OR_NEWER
++using Unity.Scripting.LifecycleManagement;
++#endif
++
++namespace Unity.Pipeline.Editor
++{
++#if UNITY_6000_0_OR_NEWER
++    /// <summary>
++    /// Reports pipeline usage to Unity's editor analytics: one session-start event on the first
++    /// command a client executes, one event per command executed after that, and one session-stop
++    /// event when the Editor quits.
++    ///
++    /// Everything here is main-thread only — SendAnalytic, SessionState and the editor state the
++    /// events describe all require it. Commands finish on the background HTTP thread, so
++    /// <see cref="EditorPipelineServer"/> posts each one to the server dispatcher, which runs it
++    /// here on the next main-thread pump.
++    ///
++    /// A session spans a Unity PROCESS, not a domain: the latch lives in SessionState, which
++    /// survives domain reloads and dies with the editor, so a recompile does not start a new
++    /// session.
++    /// </summary>
++#if UNITY_6000_5_OR_NEWER
++    [NoAutoStaticsCleanup]
++#endif
++    internal static class PipelineAnalytics
++    {
++        private const string VendorKey = "unity.pipeline";
++
++        private const string SessionStartedEventName = "Pipeline_SessionStarted";
++        private const string CommandExecutedEventName = "Pipeline_CommandExecuted";
++        private const string SessionStoppedEventName = "Pipeline_SessionStopped";
++
++        // A session emits at most one start and one stop; commands are the volume, and an
++        // agent-driven session issues them continuously.
++        private const int SessionEventsPerHour = 10;
++        private const int CommandEventsPerHour = 1000;
++        private const int MaxElements = 1000;
++
++        private const string SessionStartedKey = "Unity.Pipeline.Analytics.SessionStarted";
++        private const string SessionStartTicksKey = "Unity.Pipeline.Analytics.SessionStartTicks";
++
++        /// <summary>
++        /// Assemblies whose commands ship with the package. Anything else carrying [CliCommand] was
++        /// written by the project, which is what isUserDefinedCommand reports.
++        /// </summary>
++        private static readonly HashSet<string> PackageAssemblies =
++            new HashSet<string> { "Unity.Pipeline", "Unity.Pipeline.Editor" };
++
++        /// <summary>
++        /// The tag every code-evaluation command carries (eval, eval_file, run_script). Matching the
++        /// tag rather than a name list covers a new eval command the moment it is tagged, and the
++        /// suite already enforces that shipped commands carry well-formed tags.
++        /// </summary>
++        private const string EvalTag = "scripts/eval";
++
++        /// <summary>
++        /// Reported in place of a project-declared command's real name. A command name is text the
++        /// project's own authors wrote, so it can name an unannounced feature or an internal system;
++        /// none of that belongs in an event leaving the machine. Its tags are withheld for the same
++        /// reason — nothing constrains a project to the documented taxonomy, so a tag can carry a
++        /// project-chosen word exactly as a name can. Counting how much traffic is project-declared
++        /// is the useful signal, and isUserDefinedCommand already carries it.
++        /// </summary>
++        private const string RedactedCommandName = "<customUserCommand>";
++
++        /// <summary>
++        /// The send call, indirected so tests can capture events instead of shipping them.
++        /// </summary>
++        internal static Action<IAnalytic> s_Send = analytic => EditorAnalytics.SendAnalytic(analytic);
++
++        /// <summary>
++        /// The session latch as stored in SessionState: whether the start event has been sent this
++        /// Unity process, and the UTC tick count it was sent at. Exposed so a fixture driving the
++        /// reporter can save and restore the live latch.
++        /// </summary>
++        internal static (bool started, long startTicks) SessionLatch
++        {
++            get
++            {
++                var started = SessionState.GetBool(SessionStartedKey, false);
++                long.TryParse(SessionState.GetString(SessionStartTicksKey, "0"), out var ticks);
++                return (started, ticks);
++            }
++            set
++            {
++                SessionState.SetBool(SessionStartedKey, value.started);
++                SessionState.SetString(SessionStartTicksKey, value.startTicks.ToString());
++            }
++        }
++
++        /// <summary>
++        /// Report one executed command, opening the session first if this is the first one. An
++        /// info with no command is a request that was rejected before executing anything, which is
++        /// not a command execution and is skipped. Main thread.
++        /// </summary>
++        internal static void RecordCommandExecuted(in CommandExecutionInfo info)
++        {
++            if (info.Command == null)
++                return;
++
++            try
++            {
++                EnsureSessionStarted();
++
++                var command = info.Command;
++                var userDefined = IsUserDefinedCommand(command.Package);
++                s_Send(new CommandExecutedAnalytic(new CommandExecutedData
++                {
++                    // Only a command that shipped with the package describes itself; a
++                    // project-declared one reports the placeholder and no tags.
++                    commandName = userDefined ? RedactedCommandName : command.Name,
++                    commandTags = userDefined ? Array.Empty<string>() : ToArray(command.Tags),
++                    commandSuccess = info.Success,
++                    commandDuration = info.DurationMs,
++                    isUserDefinedCommand = userDefined,
++                    isEval = IsEvalCommand(command.Tags),
++                    isEvalWithExistingCommandAvailable = EvalCoversAnExistingCommand(command, info.Parameters),
++                }));
++            }
++            catch (Exception ex)
++            {
++                // Reporting must never break request handling.
++                Debug.LogWarning($"Pipeline analytics failed to report a command: {ex.Message}");
++            }
++        }
++
++        /// <summary>
++        /// Send the session-stop event if this process ever opened a session, and close the latch so
++        /// a second call is a no-op. Main thread.
++        /// </summary>
++        internal static void SendSessionStoppedIfStarted()
++        {
++            try
++            {
++                var (started, startTicks) = SessionLatch;
++                if (!started)
++                    return;
++
++                SessionLatch = (false, 0);
++
++                var elapsedMs = startTicks > 0
++                    ? Math.Max(0, (DateTime.UtcNow.Ticks - startTicks) / TimeSpan.TicksPerMillisecond)
++                    : 0;
++
++                s_Send(new SessionStoppedAnalytic(new SessionStoppedData
++                {
++                    sessionDuration = elapsedMs,
++                }));
++            }
++            catch (Exception ex)
++            {
++                Debug.LogWarning($"Pipeline analytics failed to report the session end: {ex.Message}");
++            }
++        }
++
++        /// <summary>
++        /// Send the session-start event once per Unity process, describing how this editor and its
++        /// server were launched. The latch is set before sending, so a throwing send cannot make a
++        /// later command try again.
++        /// </summary>
++        private static void EnsureSessionStarted()
++        {
++            if (SessionLatch.started)
++                return;
++
++            SessionLatch = (true, DateTime.UtcNow.Ticks);
++
++            var server = PipelineServerStartup.Server;
++            s_Send(new SessionStartedAnalytic(new SessionStartedData
++            {
++                batchmode = Application.isBatchMode,
++                automated = EditorPipelineServer.DetectAutomatedMode(Environment.GetCommandLineArgs()),
++                // Both fall back to what the server starts with when no settings asset is authored:
++                // browser clients refused, port auto-assigned from the range.
++                browserAllowed = server?.AllowSandboxedBrowserClients ?? false,
++                dynamicPortAssignation = server?.PortAutoAssigned ?? true,
++                hotReloadWatcherEnabled = EditorHotReloadWatcher.IsWatching,
++            }));
++        }
++
++        /// <summary>
++        /// Whether a command came from the project rather than the package, judged by its declaring
++        /// assembly. An unresolved assembly is not evidence of a project command, so it counts as
++        /// shipped.
++        /// </summary>
++        internal static bool IsUserDefinedCommand(string package)
++        {
++            return !string.IsNullOrEmpty(package) && !PackageAssemblies.Contains(package);
++        }
++
++        /// <summary>
++        /// Whether the snippet this eval ran touches an API that an existing command already covers
++        /// — the "you did not need eval for this" signal.
++        ///
++        /// Same judgement the report_evals command makes, on one invocation instead of the whole log:
++        /// fingerprint the body, look each fingerprint up in the curated
++        /// <see cref="EvalCoverageMap"/>, and count it only if the command it names is actually in the
++        /// live catalog. The map is a hint layer, so a false here means "no mapped-and-present
++        /// command", not "no command could ever cover this".
++        ///
++        /// Answerable only where the body is reachable from the parameters: <c>eval</c> passes it
++        /// inline and <c>eval_file</c> names a file to read. <c>run_script</c> runs a project file
++        /// with a named entry point rather than a snippet, and the fingerprinter parses script-kind
++        /// bodies, so it is not fingerprinted and reports false.
++        /// </summary>
++        internal static bool EvalCoversAnExistingCommand(CommandInfo command, JObject parameters)
++        {
++            if (parameters == null || !IsEvalCommand(command.Tags))
++                return false;
++
++            var code = ReadEvalBody(command.Name, parameters);
++            if (string.IsNullOrWhiteSpace(code))
++                return false;
++
++            var fingerprints = EvalUsageFingerprinter.Analyze(code).Fingerprints;
++            if (fingerprints == null || fingerprints.Count == 0)
++                return false;
++
++            var available = new HashSet<string>(CommandRegistry.DiscoverCommands().Select(c => c.Name));
++            foreach (var fingerprint in fingerprints)
++            {
++                if (EvalCoverageMap.Default.TryGetValue(fingerprint, out var mapped) && available.Contains(mapped))
++                    return true;
++            }
++
++            return false;
++        }
++
++        /// <summary>
++        /// The evaluated body, from the parameters the command was invoked with. Returns null for a
++        /// command whose body is not reachable that way.
++        /// </summary>
++        private static string ReadEvalBody(string commandName, JObject parameters)
++        {
++            switch (commandName)
++            {
++                case "eval":
++                    return parameters["code"]?.ToString();
++
++                case "eval_file":
++                    // The command read this file moments ago; re-reading it costs one small read and
++                    // keeps eval_file from reporting a permanent false that would be indistinguishable
++                    // from a genuine "nothing covers this".
++                    var file = parameters["file"]?.ToString();
++                    if (string.IsNullOrEmpty(file) || !System.IO.File.Exists(file))
++                        return null;
++                    try
++                    {
++                        return System.IO.File.ReadAllText(file);
++                    }
++                    catch
++                    {
++                        return null;
++                    }
++
++                default:
++                    return null;
++            }
++        }
++
++        internal static bool IsEvalCommand(IReadOnlyList<string> tags)
++        {
++            for (var i = 0; i < tags.Count; i++)
++            {
++                if (tags[i] == EvalTag)
++                    return true;
++            }
++
++            return false;
++        }
++
++        private static string[] ToArray(IReadOnlyList<string> tags)
++        {
++            var array = new string[tags.Count];
++            for (var i = 0; i < tags.Count; i++)
++                array[i] = tags[i];
++            return array;
++        }
++
++        // The payload field names below ARE the registered event schema. Renaming one silently stops
++        // that column being populated, so they keep the schema casing rather than C# casing.
++
++        [Serializable]
++        internal struct SessionStartedData : IAnalytic.IData
++        {
++            public bool batchmode;
++            public bool automated;
++            public bool browserAllowed;
++            public bool dynamicPortAssignation;
++            public bool hotReloadWatcherEnabled;
++        }
++
++        [Serializable]
++        internal struct CommandExecutedData : IAnalytic.IData
++        {
++            public string commandName;
++            public string[] commandTags;
++            public bool commandSuccess;
++            public long commandDuration;
++            public bool isUserDefinedCommand;
++            public bool isEval;
++            public bool isEvalWithExistingCommandAvailable;
++        }
++
++        [Serializable]
++        internal struct SessionStoppedData : IAnalytic.IData
++        {
++            public long sessionDuration;
++        }
++
++        [AnalyticInfo(eventName: SessionStartedEventName, vendorKey: VendorKey,
++            maxEventsPerHour: SessionEventsPerHour, maxNumberOfElements: MaxElements)]
++        internal class SessionStartedAnalytic : IAnalytic
++        {
++            private readonly SessionStartedData m_Data;
++
++            public SessionStartedAnalytic(SessionStartedData data) => m_Data = data;
++
++            public bool TryGatherData(out IAnalytic.IData data, out Exception error)
++            {
++                data = m_Data;
++                error = null;
++                return true;
++            }
++        }
++
++        [AnalyticInfo(eventName: CommandExecutedEventName, vendorKey: VendorKey,
++            maxEventsPerHour: CommandEventsPerHour, maxNumberOfElements: MaxElements)]
++        internal class CommandExecutedAnalytic : IAnalytic
++        {
++            private readonly CommandExecutedData m_Data;
++
++            public CommandExecutedAnalytic(CommandExecutedData data) => m_Data = data;
++
++            public bool TryGatherData(out IAnalytic.IData data, out Exception error)
++            {
++                data = m_Data;
++                error = null;
++                return true;
++            }
++        }
++
++        [AnalyticInfo(eventName: SessionStoppedEventName, vendorKey: VendorKey,
++            maxEventsPerHour: SessionEventsPerHour, maxNumberOfElements: MaxElements)]
++        internal class SessionStoppedAnalytic : IAnalytic
++        {
++            private readonly SessionStoppedData m_Data;
++
++            public SessionStoppedAnalytic(SessionStoppedData data) => m_Data = data;
++
++            public bool TryGatherData(out IAnalytic.IData data, out Exception error)
++            {
++                data = m_Data;
++                error = null;
++                return true;
++            }
++        }
++    }
++#else
++    /// <summary>
++    /// Unity 2022 compatibility: <c>IAnalytic</c> / <c>EditorAnalytics.SendAnalytic</c>
++    /// / <c>AnalyticInfo</c> are Unity 6+. Keep the call sites compiling; analytics is a
++    /// no-op on this editor (not a product surface for upipe).
++    /// </summary>
++    internal static class PipelineAnalytics
++    {
++        internal static void RecordCommandExecuted(in CommandExecutionInfo info) { }
++
++        internal static void SendSessionStoppedIfStarted() { }
++    }
++#endif
++
++}
 diff --git a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta
-index 1fddefb..d9a356d 100644
+index 1fddefb..22b378c 100644
 --- a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta
 +++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.CSharp.dll.meta
-@@ -2,7 +2,7 @@ fileFormatVersion: 2
- guid: b5a1f47d969a4054bbbf0bc7cc231ee5
- PluginImporter:
-   externalObjects: {}
+@@ -1,50 +1,59 @@
+-fileFormatVersion: 2
+-guid: b5a1f47d969a4054bbbf0bc7cc231ee5
+-PluginImporter:
+-  externalObjects: {}
 -  serializedVersion: 3
-+  serializedVersion: 2
-   iconMap: {}
-   executionOrder: {}
-   defineConstraints: []
-@@ -11,37 +11,46 @@ PluginImporter:
-   isExplicitlyReferenced: 0
-   validateReferences: 1
-   platformData:
+-  iconMap: {}
+-  executionOrder: {}
+-  defineConstraints: []
+-  isPreloaded: 0
+-  isOverridable: 1
+-  isExplicitlyReferenced: 0
+-  validateReferences: 1
+-  platformData:
 -    Any:
-+  - first:
-+      Any: 
-+    second:
-       enabled: 1
+-      enabled: 1
 -      settings:
 -        Exclude Editor: 0
 -        Exclude Linux64: 0
@@ -115,74 +999,113 @@ index 1fddefb..d9a356d 100644
 -        Exclude Win: 0
 -        Exclude Win64: 0
 -    Editor:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-        DefaultValueInitialized: true
+-        OS: AnyOS
+-    Linux64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    OSXUniversal:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
+-      enabled: 0
+-      settings:
+-        CPU: AnyCPU
+-  userData: 
+-  assetBundleName: 
+-  assetBundleVariant: 
++fileFormatVersion: 2
++guid: b5a1f47d969a4054bbbf0bc7cc231ee5
++PluginImporter:
++  externalObjects: {}
++  serializedVersion: 2
++  iconMap: {}
++  executionOrder: {}
++  defineConstraints: []
++  isPreloaded: 0
++  isOverridable: 1
++  isExplicitlyReferenced: 0
++  validateReferences: 1
++  platformData:
++  - first:
++      Any: 
++    second:
++      enabled: 1
 +      settings: {}
 +  - first:
 +      Editor: Editor
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
-         DefaultValueInitialized: true
-         OS: AnyOS
--    Linux64:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
++        DefaultValueInitialized: true
++        OS: AnyOS
 +  - first:
 +      Standalone: Linux64
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    OSXUniversal:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: OSXUniversal
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    Win:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: Win
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    Win64:
++      enabled: 1
++      settings:
 +        CPU: x86
 +  - first:
 +      Standalone: Win64
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    WindowsStoreApps:
++      enabled: 1
++      settings:
 +        CPU: x86_64
 +  - first:
 +      Windows Store Apps: WindowsStoreApps
 +    second:
-       enabled: 0
-       settings:
-         CPU: AnyCPU
++      enabled: 0
++      settings:
++        CPU: AnyCPU
++  userData: 
++  assetBundleName: 
++  assetBundleVariant: 
 diff --git a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta
-index 38feacc..32012aa 100644
+index 38feacc..db6d0bd 100644
 --- a/upstream/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta
 +++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/Microsoft.CodeAnalysis.dll.meta
-@@ -2,7 +2,7 @@ fileFormatVersion: 2
- guid: ff3508870465d8e4b83e5a2c71492756
- PluginImporter:
-   externalObjects: {}
+@@ -1,50 +1,59 @@
+-fileFormatVersion: 2
+-guid: ff3508870465d8e4b83e5a2c71492756
+-PluginImporter:
+-  externalObjects: {}
 -  serializedVersion: 3
-+  serializedVersion: 2
-   iconMap: {}
-   executionOrder: {}
-   defineConstraints: []
-@@ -11,37 +11,46 @@ PluginImporter:
-   isExplicitlyReferenced: 0
-   validateReferences: 1
-   platformData:
+-  iconMap: {}
+-  executionOrder: {}
+-  defineConstraints: []
+-  isPreloaded: 0
+-  isOverridable: 1
+-  isExplicitlyReferenced: 0
+-  validateReferences: 1
+-  platformData:
 -    Any:
-+  - first:
-+      Any: 
-+    second:
-       enabled: 1
+-      enabled: 1
 -      settings:
 -        Exclude Editor: 0
 -        Exclude Linux64: 0
@@ -190,74 +1113,113 @@ index 38feacc..32012aa 100644
 -        Exclude Win: 0
 -        Exclude Win64: 0
 -    Editor:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-        DefaultValueInitialized: true
+-        OS: AnyOS
+-    Linux64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    OSXUniversal:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
+-      enabled: 0
+-      settings:
+-        CPU: AnyCPU
+-  userData: 
+-  assetBundleName: 
+-  assetBundleVariant: 
++fileFormatVersion: 2
++guid: ff3508870465d8e4b83e5a2c71492756
++PluginImporter:
++  externalObjects: {}
++  serializedVersion: 2
++  iconMap: {}
++  executionOrder: {}
++  defineConstraints: []
++  isPreloaded: 0
++  isOverridable: 1
++  isExplicitlyReferenced: 0
++  validateReferences: 1
++  platformData:
++  - first:
++      Any: 
++    second:
++      enabled: 1
 +      settings: {}
 +  - first:
 +      Editor: Editor
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
-         DefaultValueInitialized: true
-         OS: AnyOS
--    Linux64:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
++        DefaultValueInitialized: true
++        OS: AnyOS
 +  - first:
 +      Standalone: Linux64
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    OSXUniversal:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: OSXUniversal
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    Win:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: Win
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    Win64:
++      enabled: 1
++      settings:
 +        CPU: x86
 +  - first:
 +      Standalone: Win64
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    WindowsStoreApps:
++      enabled: 1
++      settings:
 +        CPU: x86_64
 +  - first:
 +      Windows Store Apps: WindowsStoreApps
 +    second:
-       enabled: 0
-       settings:
-         CPU: AnyCPU
++      enabled: 0
++      settings:
++        CPU: AnyCPU
++  userData: 
++  assetBundleName: 
++  assetBundleVariant: 
 diff --git a/upstream/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta
-index 3019523..e3e6f38 100644
+index 3019523..a6b1980 100644
 --- a/upstream/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta
 +++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Collections.Immutable.dll.meta
-@@ -2,7 +2,7 @@ fileFormatVersion: 2
- guid: bedf8ea7477e57d46afe86233f846897
- PluginImporter:
-   externalObjects: {}
+@@ -1,50 +1,59 @@
+-fileFormatVersion: 2
+-guid: bedf8ea7477e57d46afe86233f846897
+-PluginImporter:
+-  externalObjects: {}
 -  serializedVersion: 3
-+  serializedVersion: 2
-   iconMap: {}
-   executionOrder: {}
-   defineConstraints: []
-@@ -11,37 +11,46 @@ PluginImporter:
-   isExplicitlyReferenced: 0
-   validateReferences: 1
-   platformData:
+-  iconMap: {}
+-  executionOrder: {}
+-  defineConstraints: []
+-  isPreloaded: 0
+-  isOverridable: 1
+-  isExplicitlyReferenced: 0
+-  validateReferences: 1
+-  platformData:
 -    Any:
-+  - first:
-+      Any: 
-+    second:
-       enabled: 1
+-      enabled: 1
 -      settings:
 -        Exclude Editor: 0
 -        Exclude Linux64: 0
@@ -265,74 +1227,113 @@ index 3019523..e3e6f38 100644
 -        Exclude Win: 0
 -        Exclude Win64: 0
 -    Editor:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-        DefaultValueInitialized: true
+-        OS: AnyOS
+-    Linux64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    OSXUniversal:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
+-      enabled: 0
+-      settings:
+-        CPU: AnyCPU
+-  userData: 
+-  assetBundleName: 
+-  assetBundleVariant: 
++fileFormatVersion: 2
++guid: bedf8ea7477e57d46afe86233f846897
++PluginImporter:
++  externalObjects: {}
++  serializedVersion: 2
++  iconMap: {}
++  executionOrder: {}
++  defineConstraints: []
++  isPreloaded: 0
++  isOverridable: 1
++  isExplicitlyReferenced: 0
++  validateReferences: 1
++  platformData:
++  - first:
++      Any: 
++    second:
++      enabled: 1
 +      settings: {}
 +  - first:
 +      Editor: Editor
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
-         DefaultValueInitialized: true
-         OS: AnyOS
--    Linux64:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
++        DefaultValueInitialized: true
++        OS: AnyOS
 +  - first:
 +      Standalone: Linux64
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    OSXUniversal:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: OSXUniversal
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    Win:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: Win
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    Win64:
++      enabled: 1
++      settings:
 +        CPU: x86
 +  - first:
 +      Standalone: Win64
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    WindowsStoreApps:
++      enabled: 1
++      settings:
 +        CPU: x86_64
 +  - first:
 +      Windows Store Apps: WindowsStoreApps
 +    second:
-       enabled: 0
-       settings:
-         CPU: AnyCPU
++      enabled: 0
++      settings:
++        CPU: AnyCPU
++  userData: 
++  assetBundleName: 
++  assetBundleVariant: 
 diff --git a/upstream/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta
-index ed2ffdf..5142fde 100644
+index ed2ffdf..20bb146 100644
 --- a/upstream/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta
 +++ b/com.unity.pipeline/Runtime/Plugins/CodeAnalysis/System.Reflection.Metadata.dll.meta
-@@ -2,7 +2,7 @@ fileFormatVersion: 2
- guid: 7e46a81867cf8f24a859c42b98fe7138
- PluginImporter:
-   externalObjects: {}
+@@ -1,50 +1,59 @@
+-fileFormatVersion: 2
+-guid: 7e46a81867cf8f24a859c42b98fe7138
+-PluginImporter:
+-  externalObjects: {}
 -  serializedVersion: 3
-+  serializedVersion: 2
-   iconMap: {}
-   executionOrder: {}
-   defineConstraints: []
-@@ -11,37 +11,46 @@ PluginImporter:
-   isExplicitlyReferenced: 0
-   validateReferences: 1
-   platformData:
+-  iconMap: {}
+-  executionOrder: {}
+-  defineConstraints: []
+-  isPreloaded: 0
+-  isOverridable: 1
+-  isExplicitlyReferenced: 0
+-  validateReferences: 1
+-  platformData:
 -    Any:
-+  - first:
-+      Any: 
-+    second:
-       enabled: 1
+-      enabled: 1
 -      settings:
 -        Exclude Editor: 0
 -        Exclude Linux64: 0
@@ -340,110 +1341,90 @@ index ed2ffdf..5142fde 100644
 -        Exclude Win: 0
 -        Exclude Win64: 0
 -    Editor:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-        DefaultValueInitialized: true
+-        OS: AnyOS
+-    Linux64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    OSXUniversal:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    Win64:
+-      enabled: 1
+-      settings:
+-        CPU: AnyCPU
+-    WindowsStoreApps:
+-      enabled: 0
+-      settings:
+-        CPU: AnyCPU
+-  userData: 
+-  assetBundleName: 
+-  assetBundleVariant: 
++fileFormatVersion: 2
++guid: 7e46a81867cf8f24a859c42b98fe7138
++PluginImporter:
++  externalObjects: {}
++  serializedVersion: 2
++  iconMap: {}
++  executionOrder: {}
++  defineConstraints: []
++  isPreloaded: 0
++  isOverridable: 1
++  isExplicitlyReferenced: 0
++  validateReferences: 1
++  platformData:
++  - first:
++      Any: 
++    second:
++      enabled: 1
 +      settings: {}
 +  - first:
 +      Editor: Editor
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
-         DefaultValueInitialized: true
-         OS: AnyOS
--    Linux64:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
++        DefaultValueInitialized: true
++        OS: AnyOS
 +  - first:
 +      Standalone: Linux64
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    OSXUniversal:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: OSXUniversal
 +    second:
-       enabled: 1
-       settings:
-         CPU: AnyCPU
--    Win:
++      enabled: 1
++      settings:
++        CPU: AnyCPU
 +  - first:
 +      Standalone: Win
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    Win64:
++      enabled: 1
++      settings:
 +        CPU: x86
 +  - first:
 +      Standalone: Win64
 +    second:
-       enabled: 1
-       settings:
--        CPU: AnyCPU
--    WindowsStoreApps:
++      enabled: 1
++      settings:
 +        CPU: x86_64
 +  - first:
 +      Windows Store Apps: WindowsStoreApps
 +    second:
-       enabled: 0
-       settings:
-         CPU: AnyCPU
-diff --git a/upstream/Runtime/Unity.Pipeline.asmdef b/com.unity.pipeline/Runtime/Unity.Pipeline.asmdef
-index c5b1a79..47d4d83 100644
---- a/upstream/Runtime/Unity.Pipeline.asmdef
-+++ b/com.unity.pipeline/Runtime/Unity.Pipeline.asmdef
-@@ -1,9 +1,7 @@
- {
-     "name": "Unity.Pipeline",
-     "rootNamespace": "Unity.Pipeline",
--    "references": [
--        "Unity.InputSystem"
--    ],
-+    "references": [],
-     "includePlatforms": [],
-     "excludePlatforms": [],
-     "allowUnsafeCode": false,
-diff --git a/upstream/package.json b/com.unity.pipeline/package.json
-index 1f099f8..2188f69 100644
---- a/upstream/package.json
-+++ b/com.unity.pipeline/package.json
-@@ -1 +1,38 @@
--{"name":"com.unity.pipeline","displayName":"Unity Pipeline","version":"0.5.0-exp.1","unity":"6000.0","category":"Pipeline","description":"This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)","keywords":["pipeline","connected","authoring","hotreload"],"dependencies":{"com.unity.test-framework":"1.1.33","com.unity.modules.jsonserialize":"1.0.0","com.unity.nuget.newtonsoft-json":"3.0.2","com.unity.nuget.mono-cecil":"1.11.6","com.unity.modules.uielements":"1.0.0","com.unity.modules.screencapture":"1.0.0"},"samples":[{"displayName":"Hot Reload Examples","description":"In-place [HotReload] editing and override-file ([HotReloadOverrideMethod]) hot reload examples.","path":"Samples~/HotReload"}],"repository":{"revision":"17df0ac8d6533a8c22830c89dc85a24c01f30ade","type":"git","url":"https://github.cds.internal.unity3d.com/unity/com.unity.pipeline.git"},"documentationUrl":"https://docs.unity3d.com/Packages/com.unity.pipeline@0.5/manual/index.html","_upm":{"changelog":"- New `GET /api/progress` endpoint: the currently executing command's task progress, served off the main thread so it answers even while a long synchronous command has the Editor blocked. Command authors report via the new `CliProgress.Report(title, info, current, total, progress)` API (thread-safe, callable from a blocked main thread) or the `CliEditorProgress.DisplayProgressBar` drop-in wrappers around `EditorUtility.DisplayProgressBar`; running `UnityEditor.Progress` items are mirrored automatically. Consumed by the `unity` CLI to render live terminal progress bars during `unity command` / `unity run --command`. (CLI-488, coordinated with CLI-335)\n- Detached command jobs (CLI-335): `POST /api/exec` with `\"job\": true` returns a job id immediately and runs the command in the background — poll `GET /api/job?id=…` for state, live progress, and the retained result, so a client can reattach and collect the outcome after its own HTTP timeout. `POST /api/job/cancel` cancels a queued job outright and requests cooperative cancellation of a running one (long-running command/eval code can check the new public `PipelineCancellation` API). Results are retained for 1 hour / last 100 jobs; jobs do not survive domain reloads.\n- The `eval` timeout cap is raised from 30 seconds to 24 hours (CLI-335) — long evaluations are legitimate now that clients can set custom timeouts or detach and reattach.\n- The HTTP server now processes requests concurrently: an in-flight `/api/exec` command no longer blocks every other request (`/api/status` probes and `/api/progress` polls answer immediately, so a busy Editor no longer looks unreachable during a long command). Command execution itself is still strictly serialized — one `/api/exec` at a time, queued in arrival order, exactly as before. (CLI-335)\n- Hardening for the above: a command's own timeout (not a fixed 60s) now governs how long `/api/exec` waits for it, `editor_status`/`test_status` queue behind the same exec gate instead of racing an in-flight command, and progress/job state is owned per server instance so a test server can never cross-attribute progress or job cancellation with the live server. Detached jobs are capped at 100 queued/running at once — further submissions get `429` until some finish. (CLI-335)\n- Fix `executedAt` being returned as the zero-value instead of the actual execution time for `eval`/`eval_file`, `hot-reload`, and `run_tests`/`test_status`.\n- New `audit` / `audit_status` commands: start a Project Auditor static-analysis scan and poll it, producing a CSV of the reported issues (`Category, Severity, Areas, Description, RelativePath, Line, DescriptorId, Recommendation`) for a client or coding agent to act on. Project Auditor is reached by reflection, so the package still compiles and runs in Editors without it, and `--categories` works against both its deployments. An Editor whose Project Auditor has no analysis rules — in a built-in-module Editor these ship in the separate `com.unity.project-auditor-rules` package — reports `unavailable` and names the package to install, rather than an empty scan that reads as a clean project.\n- [UUM-148802] Fix `get_console_logs`/`clear_console` and `console` silently losing all console capture after exiting Play Mode (recovering only on the next recompile): re-subscribe to Unity's log callback on every play-mode transition instead of only once at domain load.\n- [UUM-148605] Persist `set_autotick`'s enabled/interval state in SessionState so it survives a domain reload instead of silently turning itself off after every recompile. Add a `persist` flag (default `true`) to opt a one-off/expensive setting (e.g. `interval_ms=0`) out of that persistence.\n- Emit a busy/settling signal while the Editor is still importing/compiling after the server starts (cold project import), instead of letting early commands fail with an opaque null-data envelope. `/api/status` reports `settling` (withholding `ready`) until the Editor is first seen idle, and `/api/exec` rejects main-thread commands during that window with HTTP 503 and a structured envelop"}}
-\ No newline at end of file
-+{
-+  "name": "com.unity.pipeline",
-+  "displayName": "Unity Pipeline",
-+  "version": "0.5.0-2022.1",
-+  "unity": "2022.3",
-+  "category": "Pipeline",
-+  "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",
-+  "keywords": [
-+    "pipeline",
-+    "connected",
-+    "authoring",
-+    "hotreload"
-+  ],
-+  "dependencies": {
-+    "com.unity.test-framework": "1.1.33",
-+    "com.unity.modules.jsonserialize": "1.0.0",
-+    "com.unity.nuget.newtonsoft-json": "3.0.2",
-+    "com.unity.nuget.mono-cecil": "1.11.6",
-+    "com.unity.modules.uielements": "1.0.0",
-+    "com.unity.modules.screencapture": "1.0.0"
-+  },
-+  "samples": [
-+    {
-+      "displayName": "Hot Reload Examples",
-+      "description": "In-place [HotReload] editing and override-file ([HotReloadOverrideMethod]) hot reload examples.",
-+      "path": "Samples~/HotReload"
-+    }
-+  ],
-+  "repository": {
-+    "revision": "17df0ac8d6533a8c22830c89dc85a24c01f30ade",
-+    "type": "git",
-+    "url": "https://github.cds.internal.unity3d.com/unity/com.unity.pipeline.git"
-+  },
-+  "documentationUrl": "https://docs.unity3d.com/Packages/com.unity.pipeline@0.5/manual/index.html",
-+  "_upm": {
-+    "changelog": "- New `GET /api/progress` endpoint: the currently executing command's task progress, served off the main thread so it answers even while a long synchronous command has the Editor blocked. Command authors report via the new `CliProgress.Report(title, info, current, total, progress)` API (thread-safe, callable from a blocked main thread) or the `CliEditorProgress.DisplayProgressBar` drop-in wrappers around `EditorUtility.DisplayProgressBar`; running `UnityEditor.Progress` items are mirrored automatically. Consumed by the `unity` CLI to render live terminal progress bars during `unity command` / `unity run --command`. (CLI-488, coordinated with CLI-335)\n- Detached command jobs (CLI-335): `POST /api/exec` with `\"job\": true` returns a job id immediately and runs the command in the background — poll `GET /api/job?id=…` for state, live progress, and the retained result, so a client can reattach and collect the outcome after its own HTTP timeout. `POST /api/job/cancel` cancels a queued job outright and requests cooperative cancellation of a running one (long-running command/eval code can check the new public `PipelineCancellation` API). Results are retained for 1 hour / last 100 jobs; jobs do not survive domain reloads.\n- The `eval` timeout cap is raised from 30 seconds to 24 hours (CLI-335) — long evaluations are legitimate now that clients can set custom timeouts or detach and reattach.\n- The HTTP server now processes requests concurrently: an in-flight `/api/exec` command no longer blocks every other request (`/api/status` probes and `/api/progress` polls answer immediately, so a busy Editor no longer looks unreachable during a long command). Command execution itself is still strictly serialized — one `/api/exec` at a time, queued in arrival order, exactly as before. (CLI-335)\n- Hardening for the above: a command's own timeout (not a fixed 60s) now governs how long `/api/exec` waits for it, `editor_status`/`test_status` queue behind the same exec gate instead of racing an in-flight command, and progress/job state is owned per server instance so a test server can never cross-attribute progress or job cancellation with the live server. Detached jobs are capped at 100 queued/running at once — further submissions get `429` until some finish. (CLI-335)\n- Fix `executedAt` being returned as the zero-value instead of the actual execution time for `eval`/`eval_file`, `hot-reload`, and `run_tests`/`test_status`.\n- New `audit` / `audit_status` commands: start a Project Auditor static-analysis scan and poll it, producing a CSV of the reported issues (`Category, Severity, Areas, Description, RelativePath, Line, DescriptorId, Recommendation`) for a client or coding agent to act on. Project Auditor is reached by reflection, so the package still compiles and runs in Editors without it, and `--categories` works against both its deployments. An Editor whose Project Auditor has no analysis rules — in a built-in-module Editor these ship in the separate `com.unity.project-auditor-rules` package — reports `unavailable` and names the package to install, rather than an empty scan that reads as a clean project.\n- [UUM-148802] Fix `get_console_logs`/`clear_console` and `console` silently losing all console capture after exiting Play Mode (recovering only on the next recompile): re-subscribe to Unity's log callback on every play-mode transition instead of only once at domain load.\n- [UUM-148605] Persist `set_autotick`'s enabled/interval state in SessionState so it survives a domain reload instead of silently turning itself off after every recompile. Add a `persist` flag (default `true`) to opt a one-off/expensive setting (e.g. `interval_ms=0`) out of that persistence.\n- Emit a busy/settling signal while the Editor is still importing/compiling after the server starts (cold project import), instead of letting early commands fail with an opaque null-data envelope. `/api/status` reports `settling` (withholding `ready`) until the Editor is first seen idle, and `/api/exec` rejects main-thread commands during that window with HTTP 503 and a structured envelop"
-+  }
-+}
-\ No newline at end of file
++      enabled: 0
++      settings:
++        CPU: AnyCPU
++  userData: 
++  assetBundleName: 
++  assetBundleVariant: 
