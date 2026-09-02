@@ -49,6 +49,10 @@ var stagedFiles = []string{
 	"Tests/Editor/PipelineTestServer.cs",
 	"Tests/Editor/TestEditorPipelineServer.cs",
 	"Tests/Runtime/PipelineClient.cs", // staged into Tests/Editor/
+	// 0.6 additions (AUTHAPI-27 batch / AUTHAPI-68 command line binding).
+	"Tests/Editor/Batch/BatchCommandTests.cs",
+	"Tests/Editor/CommandLineBinderTests.cs",
+	"Tests/Editor/CommandLineTokenizerTests.cs",
 }
 
 // trimmedAsmdef drops the Unity-6-only references (InputSystem test framework,
@@ -145,7 +149,7 @@ func doSetup(repoRoot, srcRoot, pkgDir, project, markPath string) error {
 		}
 	}
 	// Folder metas for the tree we create.
-	for _, dir := range []string{"Tests", "Tests/Editor", "Tests/Editor/Prefabs", "Tests/Editor/Materials", "Tests/Editor/GameObjects", "Tests/Editor/Scenes"} {
+	for _, dir := range []string{"Tests", "Tests/Editor", "Tests/Editor/Prefabs", "Tests/Editor/Materials", "Tests/Editor/GameObjects", "Tests/Editor/Scenes", "Tests/Editor/Batch"} {
 		if err := copyFile(filepath.Join(srcRoot, filepath.FromSlash(dir+".meta")), filepath.Join(pkgDir, filepath.FromSlash(dir+".meta"))); err != nil {
 			return err
 		}

@@ -70,7 +70,7 @@ Player：`RuntimePipelineManager` 已被 `RuntimePipelineDriver`/`Bootstrap` 替
 
 - 2026-08-20：SGAME（Unity 2022.3.23f1，E:\P4\SGAME_o_jiarongke_6099）对 **0.5.x-2022.1** 编译零错误 + `editor_status` ready。
 - 2026-08-25：`upipe` 对该 0.5 实例全命令面实测通过。
-- 2026-09-02：vendor 0.6.0-exp.1 → 0.6.0-2022.1。隔离编译门 / 冒烟见 Phase C/D（未完成前不得声称 0.6 已跟上）。
+- 2026-09-02：vendor 0.6.0-exp.1 → 0.6.0-2022.1。隔离编译门（2022.3.23f1）零 CS 错误；vendored-tests 回归（含手工加录 0.6 新测试）：BatchCommandTests 28/28（事务回滚族全过）、CommandLineBinder/Tokenizer 82/82、CommandsTests 组合 63 通过 / 0 失败 / 4 URP 跳过（编译门工程无 URP，预期）。回归中发现并修复上游 0.6 测试重写冲掉的三处演进层测试代码（TokenHolderBehaviour / MarkActiveSceneDirty / RemoveSceneFromBuild confirm）+ SceneCommandsTests SetUp 脏场景隔离。SGAME 真实工程升级实测待做（tgz 已备）。
 
 ## 上游升级流程
 

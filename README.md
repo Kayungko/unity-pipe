@@ -105,11 +105,11 @@ upipe pkg-install --project-path <project> --source <tgz路径> --dry-run   # �
 upipe 升级只需要替换 exe——不用 clone 仓库，一条 `gh release download` 搞定（前提：目标机器 `gh auth login` 过，仓库授权同一凭据即可，无需单独配 git clone 权限）：
 
 ```powershell
-gh release download v0.1.4 --repo Kayungko/unity-pipe --pattern upipe.exe --pattern upipe.exe.sha256 --output <你放 upipe.exe 的目录> --clobber
+gh release download v0.1.11 --repo Kayungko/unity-pipe --pattern upipe.exe --pattern upipe.exe.sha256 --output <你放 upipe.exe 的目录> --clobber
 upipe version   # 确认版本号已更新
 ```
 
-- 回滚同理：把 `v0.1.4` 换成任意历史 tag 重新下载即可（Release 保留全部历史版本）；
+- 回滚同理：把 `v0.1.11` 换成任意历史 tag 重新下载即可（Release 保留全部历史版本）；
 - 下载后可校验：`Get-FileHash upipe.exe -Algorithm SHA256` 与 `upipe.exe.sha256` 内容比对；
 - 适配包 tgz 同一个 Release 页面（`--pattern com.unity.pipeline-*.tgz`），装法见上面的 ②；
 - 规则模板有更新的机器，顺手跑 `upipe plugin install --upgrade-rules`（见 harness/rules/README.md）。
@@ -181,7 +181,7 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 | `status` | 探活：端口文件实例 + 服务健康 + 编辑器状态 |
 | `commands` / `commands --full` | 服务端命令索引 / 含参数 schema |
 | `exec <name> [--set k=v] [--params JSON] [--job]` | 主通道，任意命令直通；`--set` 值自动做 JSON 标量类型推断 |
-| `eval "<code>"` / `eval-file <path>` | C# 求值（`eval_file` 参数名映射为 `file`） |
+| `eval "<code>"` / `eval-file <path>` | C# 求值（`eval_file` 参数名映射为 `file`；`--job` 分离式长求值） |
 | `recompile [--no-wait]` | 触发编译并轮询 `recompile_status` 至终态 |
 | `test [--mode] [--filter] [--no-wait]` | `run_tests` 异步 + `test_status` 轮询 |
 | `audit [--no-wait]` | Project Auditor 扫描 + 轮询 |
@@ -193,7 +193,7 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 
 ### 适配包维护（package/）
 
-- **`0.5.2-2022.1`**：基于官方 `0.5.0-exp.1`（upstream revision `17df0ac8`），适配 Unity 2022.3 + 本仓演进层（写面守门 / token 接缝剥离 / 跨平台加固，详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)）
+- **`0.6.0-2022.1`**：基于官方 `0.6.0-exp.1`（upstream revision `27af91a9`），适配 Unity 2022.3 + 本仓演进层（写面守门 / token 接缝剥离 / 演进层测试恢复，详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)）。0.6 新增 `batch`（事务性批量操作）/ `run_script`（文件式内存执行）/ `commandLine`+`argv` 直连 / 瘦信封 / Runtime Pipeline settings；IlInterpreter 树保留但 IL2CPP 热重载不作承诺
 - 版本命名策略：semver 预发布段 `"2022.1" > "exp.1"`，UPM 视 vendored 版本更高，**不会被 registry 误"升级"覆盖**
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

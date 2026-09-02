@@ -40,8 +40,8 @@
 如果你已经手动把适配过的 `com.unity.pipeline` 装进了工程（例如 SGAME 的 P4 内安装）：
 
 ```powershell
-upipe pkg-status --project-path <project>          # 确认当前版本（如 0.5.0-exp.1）
-upipe pkg-install --project-path <project> --source dist\com.unity.pipeline-0.5.0-2022.1.tgz --dry-run
+upipe pkg-status --project-path <project>          # 确认当前版本（如 0.5.3-2022.1）
+upipe pkg-install --project-path <project> --source dist\com.unity.pipeline-0.6.0-2022.1.tgz --dry-run
 # 预览 diff 计划（added/updated/unchanged），确认后去掉 --dry-run
 ```
 
