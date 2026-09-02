@@ -2,6 +2,24 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.11] - 2026-09-02
+
+### Added
+
+- **适配包 0.6.0-2022.1**：vendor 官方 `com.unity.pipeline` 0.6.0-exp.1（rev `27af91a9`）。留下 `batch` / `run_script` / `commandLine`+`argv` / 瘦信封 serializer / ArgProblem / Runtime Pipeline settings。第一轮不裁 IlInterpreter 树（Runtime/Editor asmdef 引用，编译门需要），也不接官方 `unity mcp`。
+- **`PipelineAnalytics` 2022 stub**：Unity 6 `IAnalytic`/`AnalyticInfo` 在 2022.3 编译失败；`#else` 空操作，调用点保留。隔离工程 2022.3.23f1 编译门通过。
+- **upipe 默认 `"verbose": true`**：对抗 0.6 瘦信封丢掉 `command`/`executedAt`。回归：`TestExecSendsVerboseTrue`。
+- **`upipe eval` / `eval-file --job`**：长 eval 可分离，不经过 `execSimple`（避免漏到 recompile/audit/test）。
+- **`upipe audit --categories` / `--output`**：透传包参数（此前固定空 `{}`）。
+- **SKILL §4.5**：detached job 主路径（提交 / 等待 / 取消 / progress）；PROTOCOL.md 对齐 `canceled` 与 cancel `id`。
+
+### Fixed
+
+- **`upipe job-cancel` 请求体字段**（正确性）：服务端 `HandleJobCancelRequest` 只读 JSON `id`，客户端此前发 `jobId` → 400。现在双写 `id`（权威）+ `jobId`（兼容），返回 `JobResponse`。回归：`TestCancelJobBodyUsesId` / `TestJobCancelSendsIdNotJobId`。
+- **job 取消终态与退出码 22**：包状态是美式 `canceled`，CLI 只等英式 `cancelled` 且 Poll 把 TerminalFail 一律映成 exit 20——取消会空转到 timeout（21）。新增 `PollConfig.TerminalCancel` → `ErrJobCancelled`（22）；`failed` 仍 20。回归：`TestJobCanceledAmericanSpellingExits22` / `TestJobCancelledBritishSpellingAlsoExits22` / `TestJobFailedStillExits20`。
+- **未设 `--timeout` 时同步 exec 被服务端 60s 掐断**：body 省略 timeout 会落到 `CommandExecutionRequest.Timeout ?? 60000`，客户端 round-trip 却是 10min。现在未指定也发送 10 分钟（`DefaultRoundTripTimeout`）。回归：`TestExecSendsDefaultTimeoutWhenUnset`。
+- **0.6 vendor 冲掉演进层测试代码（3 处恢复 + 1 处隔离修复）**：上游 0.6 重写 Tests 文件时丢掉本仓 0.5.x 的演进层用例辅助——`ComponentCommandsTests` 的 `TokenHolderBehaviour`（token 字段豁免回归）、`SceneCommandsTests` 的 `MarkActiveSceneDirty()` 与 `RemoveSceneFromBuild(confirm: true)`；编译门 vendored-tests 首轮即暴露。另补 `SceneCommandsTests` SetUp 脏场景丢弃（batch/component 套件留下的脏场景会让 create_scene 守门级联拒绝后续全部用例）。回归实测：BatchCommandTests 28/28（含事务回滚族）、CommandLineBinder/Tokenizer 82/82、CommandsTests 组合 63 通过/0 失败/4 URP 跳过（编译门工程无 URP，预期）。
+
 ## [0.1.10] - 2026-08-26
 
 ### Fixed
