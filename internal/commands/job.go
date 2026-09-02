@@ -34,8 +34,9 @@ func JobCommand() SubCommand {
 				}
 				return protocol.PollStep{Status: jr.State, Body: mustMarshal(jr)}, nil
 			}, protocol.PollConfig{
-				TerminalOK:   []string{"completed"},
-				TerminalFail: []string{"failed", "cancelled"},
+				TerminalOK:     []string{"completed"},
+				TerminalFail:   []string{"failed"},
+				TerminalCancel: []string{"canceled", "cancelled"},
 				// --timeout (a shared duration flag, e.g. 45m) extends the
 				// poll budget for long jobs (builds, bakes); without it the
 				// wait dies at the 10min default (options.DefaultTimeout).

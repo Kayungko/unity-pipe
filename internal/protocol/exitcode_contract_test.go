@@ -51,3 +51,10 @@ func TestExitCodeContract(t *testing.T) {
 		}
 	}
 }
+
+func TestErrJobCancelledIsExit22(t *testing.T) {
+	ue := ErrJobCancelled("x")
+	if ue.Code != ExitJobCancelled || ue.Kind != "JobCancelled" {
+		t.Fatalf("ErrJobCancelled = %+v, want code 22 kind JobCancelled", ue)
+	}
+}

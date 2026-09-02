@@ -90,6 +90,18 @@ func TestPollTerminalAndDeadline(t *testing.T) {
 	if err != nil || res.Attempts != 3 {
 		t.Fatalf("blips must be retried: %+v %v", res, err)
 	}
+
+	_, err = Poll(func() (PollStep, error) {
+		return PollStep{Status: "canceled", Body: json.RawMessage(`{"state":"canceled"}`)}, nil
+	}, PollConfig{
+		TerminalOK:     []string{"completed"},
+		TerminalFail:   []string{"failed"},
+		TerminalCancel: []string{"canceled", "cancelled"},
+		Interval:       time.Millisecond,
+	}, NopSleep, time.Now)
+	if AsUpipeError(err).Code != ExitJobCancelled {
+		t.Fatalf("TerminalCancel → %v, want ExitJobCancelled", err)
+	}
 }
 
 // fakeClock advances 10ms per call so the deadline test terminates instantly.

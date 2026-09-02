@@ -75,7 +75,7 @@ func (r *ExecResponse) ErrorMessage() string {
 // JobResponse is the shape of GET /api/job?id=… (job state envelope).
 type JobResponse struct {
 	JobId    string          `json:"jobId"`
-	State    string          `json:"state"` // queued | running | completed | failed | cancelled
+	State    string          `json:"state"` // queued | running | completed | failed | canceled (US; CLI also accepts cancelled)
 	Progress json.RawMessage `json:"progress"`
 	Result   *ExecResponse   `json:"result"`
 	Error    string          `json:"error"`

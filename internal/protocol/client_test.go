@@ -48,24 +48,46 @@ func TestExecSendsTimeoutInMillis(t *testing.T) {
 	}
 }
 
-func TestExecOmitsTimeoutFieldWhenUnset(t *testing.T) {
+func TestExecSendsDefaultTimeoutWhenUnset(t *testing.T) {
 	rt := &recordingTransport{fakeTransport: fakeTransport{steps: []fakeStep{okStep()}}}
 	_, err := newTestClient(rt).Exec("x", ExecOptions{})
 	if err != nil {
 		t.Fatalf("exec failed: %v", err)
 	}
-	if !json.Valid(rt.reqs[0].Body) {
-		t.Fatalf("unexpected body: %s", rt.reqs[0].Body)
+	var body struct {
+		Timeout *int64 `json:"timeout"`
 	}
-	var raw map[string]json.RawMessage
-	_ = json.Unmarshal(rt.reqs[0].Body, &raw)
-	if _, present := raw["timeout"]; present {
-		t.Fatalf("timeout must be omitted when unset, body: %s", rt.reqs[0].Body)
+	if err := json.Unmarshal(rt.reqs[0].Body, &body); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if body.Timeout == nil {
+		t.Fatal("timeout must be sent when unset so the server does not fall back to 60s")
+	}
+	want := DefaultRoundTripTimeout.Milliseconds()
+	if *body.Timeout != want {
+		t.Fatalf("body timeout = %d, want %d (10m default in milliseconds)", *body.Timeout, want)
 	}
 }
 
 // Without an explicit timeout the round-trip deadline must be the 10-minute
 // default (+30s margin), not the transport's 120s default.
+func TestExecSendsVerboseTrue(t *testing.T) {
+	rt := &recordingTransport{fakeTransport: fakeTransport{steps: []fakeStep{okStep()}}}
+	_, err := newTestClient(rt).Exec("x", ExecOptions{})
+	if err != nil {
+		t.Fatalf("exec failed: %v", err)
+	}
+	var body struct {
+		Verbose bool `json:"verbose"`
+	}
+	if err := json.Unmarshal(rt.reqs[0].Body, &body); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if !body.Verbose {
+		t.Fatal("verbose must default true so 0.6 lean envelopes keep command/executedAt")
+	}
+}
+
 func TestExecAppliesDefaultRoundTripTimeout(t *testing.T) {
 	rt := &recordingTransport{fakeTransport: fakeTransport{steps: []fakeStep{okStep()}}}
 	_, err := newTestClient(rt).Exec("x", ExecOptions{})
@@ -133,5 +155,28 @@ func TestErrBusyCarriesServerEnvelope(t *testing.T) {
 	}
 	if string(raw) != serverBody {
 		t.Fatalf("ErrBusy.Data = %s, want the server 503 body verbatim", raw)
+	}
+}
+
+func TestCancelJobBodyUsesId(t *testing.T) {
+	rt := &recordingTransport{fakeTransport: fakeTransport{steps: []fakeStep{
+		{resp: Response{StatusCode: 200, Body: []byte(`{"jobId":"abc","state":"canceled"}`)}},
+	}}}
+	got, err := newTestClient(rt).CancelJob("abc")
+	if err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+	if got.JobId != "abc" || got.State != "canceled" {
+		t.Fatalf("response = %+v, want jobId=abc state=canceled", got)
+	}
+	if len(rt.reqs) != 1 || rt.reqs[0].Path != "/api/job/cancel" {
+		t.Fatalf("request = %+v, want POST /api/job/cancel", rt.reqs)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rt.reqs[0].Body, &body); err != nil {
+		t.Fatalf("body %s: %v", rt.reqs[0].Body, err)
+	}
+	if body["id"] != "abc" {
+		t.Fatalf("id = %q, want abc (server reads parsed[\"id\"])", body["id"])
 	}
 }

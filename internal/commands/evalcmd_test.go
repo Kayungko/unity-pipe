@@ -39,7 +39,7 @@ func newCaptureRuntime(ft *captureTransport) *Runtime {
 	}
 }
 
-func execBody(t *testing.T, ft *captureTransport) (command string, params map[string]any, topLevelTimeout *int64) {
+func execBody(t *testing.T, ft *captureTransport) (command string, params map[string]any, topLevelTimeout *int64, job bool) {
 	t.Helper()
 	if ft.last.Method != "POST" || ft.last.Path != "/api/exec" {
 		t.Fatalf("expected POST /api/exec, got %s %s", ft.last.Method, ft.last.Path)
@@ -48,11 +48,12 @@ func execBody(t *testing.T, ft *captureTransport) (command string, params map[st
 		Command    string         `json:"command"`
 		Parameters map[string]any `json:"parameters"`
 		Timeout    *int64         `json:"timeout"`
+		Job        bool           `json:"job"`
 	}
 	if err := json.Unmarshal(ft.last.Body, &body); err != nil {
 		t.Fatalf("unparseable exec body %s: %v", ft.last.Body, err)
 	}
-	return body.Command, body.Parameters, body.Timeout
+	return body.Command, body.Parameters, body.Timeout, body.Job
 }
 
 func okExecTransport() *captureTransport {
@@ -64,7 +65,7 @@ func TestEvalTimeoutSentAsNumberParameter(t *testing.T) {
 	if _, err := EvalCommand().Run(newCaptureRuntime(ft), []string{"--eval-timeout", "60000", "return 2 + 2;"}); err != nil {
 		t.Fatalf("eval: %v", err)
 	}
-	cmd, params, topTimeout := execBody(t, ft)
+	cmd, params, topTimeout, job := execBody(t, ft)
 	if cmd != "eval" {
 		t.Fatalf("command = %q, want eval", cmd)
 	}
@@ -81,8 +82,13 @@ func TestEvalTimeoutSentAsNumberParameter(t *testing.T) {
 	if v != 60000 {
 		t.Fatalf("parameters.timeout = %v, want 60000 (milliseconds)", v)
 	}
-	if topTimeout != nil {
-		t.Fatalf("body-level timeout = %v, want unset (shared --timeout not given)", *topTimeout)
+	// Shared --timeout was not given: body-level timeout is the 10m default
+	// so the server dispatcher does not fall back to 60s.
+	if topTimeout == nil || *topTimeout != protocol.DefaultRoundTripTimeout.Milliseconds() {
+		t.Fatalf("body-level timeout = %v, want %d (10m default)", topTimeout, protocol.DefaultRoundTripTimeout.Milliseconds())
+	}
+	if job {
+		t.Fatal("job must be omitted/false by default")
 	}
 }
 
@@ -91,7 +97,7 @@ func TestEvalTimeoutOmittedByDefault(t *testing.T) {
 	if _, err := EvalCommand().Run(newCaptureRuntime(ft), []string{"return 1;"}); err != nil {
 		t.Fatalf("eval: %v", err)
 	}
-	_, params, _ := execBody(t, ft)
+	_, params, _, _ := execBody(t, ft)
 	if _, ok := params["timeout"]; ok {
 		t.Fatalf("parameters.timeout = %v, want absent (server default 5000ms)", params["timeout"])
 	}
@@ -106,7 +112,7 @@ func TestEvalFileTimeoutSent(t *testing.T) {
 	if _, err := EvalFileCommand().Run(newCaptureRuntime(ft), []string{"--eval-timeout", "120000", path}); err != nil {
 		t.Fatalf("eval-file: %v", err)
 	}
-	cmd, params, _ := execBody(t, ft)
+	cmd, params, _, _ := execBody(t, ft)
 	if cmd != "eval_file" {
 		t.Fatalf("command = %q, want eval_file", cmd)
 	}
@@ -139,12 +145,23 @@ func TestEvalTimeoutIndependentOfSharedTimeout(t *testing.T) {
 	if _, err := EvalCommand().Run(newCaptureRuntime(ft), []string{"--timeout", "90s", "--eval-timeout", "60000", "return 1;"}); err != nil {
 		t.Fatalf("eval: %v", err)
 	}
-	_, params, topTimeout := execBody(t, ft)
+	_, params, topTimeout, _ := execBody(t, ft)
 	if v, ok := params["timeout"].(float64); !ok || v != 60000 {
 		t.Fatalf("parameters.timeout = %#v, want number 60000", params["timeout"])
 	}
 	if topTimeout == nil || *topTimeout != 90000 {
 		t.Fatalf("body-level timeout = %v, want 90000 (ms from --timeout 90s)", topTimeout)
+	}
+}
+
+func TestEvalJobFlagSetsBodyJob(t *testing.T) {
+	ft := okExecTransport()
+	if _, err := EvalCommand().Run(newCaptureRuntime(ft), []string{"--job", "return 1;"}); err != nil {
+		t.Fatalf("eval --job: %v", err)
+	}
+	_, _, _, job := execBody(t, ft)
+	if !job {
+		t.Fatalf("body job = false, want true; body %s", ft.last.Body)
 	}
 }
 
@@ -154,6 +171,9 @@ func TestEvalFlagDocsMentionFlag(t *testing.T) {
 	for _, sc := range []SubCommand{EvalCommand(), EvalFileCommand()} {
 		if !strings.Contains(sc.Synopsis, "--eval-timeout") {
 			t.Errorf("%s: synopsis does not mention --eval-timeout: %q", sc.Name, sc.Synopsis)
+		}
+		if !strings.Contains(sc.Synopsis, "--job") {
+			t.Errorf("%s: synopsis does not mention --job: %q", sc.Name, sc.Synopsis)
 		}
 	}
 }

@@ -13,10 +13,11 @@ func EvalCommand() SubCommand {
 	return SubCommand{
 		Name: "eval",
 		Synopsis: "evaluate C# code in the running editor: upipe eval \"return 2 + 2;\" " +
-			"[--eval-timeout <ms>]",
+			"[--eval-timeout <ms>] [--job]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe eval")
 			evalTimeout := evalTimeoutFlag(fs)
+			job := fs.Bool("job", false, "submit as a detached job; prints the jobId handle")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
 			if err != nil {
@@ -29,7 +30,7 @@ func EvalCommand() SubCommand {
 			if err := applyEvalTimeout("eval", params, *evalTimeout); err != nil {
 				return nil, err
 			}
-			return rt.execSimple("eval", params)
+			return rt.execEval("eval", params, *job)
 		},
 	}
 }
@@ -40,10 +41,11 @@ func EvalFileCommand() SubCommand {
 	return SubCommand{
 		Name:     "eval-file",
 		Aliases:  []string{"eval_file"},
-		Synopsis: "evaluate a C# file in the running editor: upipe eval-file Assets/Scratch.cs [--eval-timeout <ms>]",
+		Synopsis: "evaluate a C# file in the running editor: upipe eval-file Assets/Scratch.cs [--eval-timeout <ms>] [--job]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe eval-file")
 			evalTimeout := evalTimeoutFlag(fs)
+			job := fs.Bool("job", false, "submit as a detached job; prints the jobId handle")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
 			if err != nil {
@@ -60,7 +62,7 @@ func EvalFileCommand() SubCommand {
 			if err := applyEvalTimeout("eval-file", params, *evalTimeout); err != nil {
 				return nil, err
 			}
-			return rt.execSimple("eval_file", params)
+			return rt.execEval("eval_file", params, *job)
 		},
 	}
 }
@@ -90,6 +92,16 @@ func applyEvalTimeout(cmd string, params map[string]any, ms int) error {
 	}
 	params["timeout"] = ms
 	return nil
+}
+
+// execEval runs eval/eval_file without going through execSimple, so --job
+// cannot leak onto recompile/audit/test.
+func (rt *Runtime) execEval(name string, params map[string]any, job bool) (any, error) {
+	opts := protocol.ExecOptions{Parameters: params, Job: job}
+	if rt.Opts.Timeout > 0 {
+		opts.Timeout = rt.Opts.Timeout
+	}
+	return rt.Client.ExecReloadTolerant(name, opts, 0)
 }
 
 // execSimple runs one server command reload-tolerantly with the shared timeout.

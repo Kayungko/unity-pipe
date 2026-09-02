@@ -9,11 +9,12 @@ import (
 // PollConfig drives the shared polling state machine used by recompile, test,
 // audit and job waits.
 type PollConfig struct {
-	TerminalOK   []string      // statuses that end the wait successfully
-	TerminalFail []string      // statuses that end the wait as a failure
-	Interval     time.Duration // between polls (default 500ms)
-	Deadline     time.Duration // overall budget (default 10min)
-	MaxAttempts  int           // hard cap even under the deadline (0 = unlimited)
+	TerminalOK     []string      // statuses that end the wait successfully
+	TerminalFail   []string      // statuses that end the wait as a failure (exit 20)
+	TerminalCancel []string      // statuses that end as a cancelled job (exit 22)
+	Interval       time.Duration // between polls (default 500ms)
+	Deadline       time.Duration // overall budget (default 10min)
+	MaxAttempts    int           // hard cap even under the deadline (0 = unlimited)
 }
 
 // PollResult is the terminal observation.
@@ -73,6 +74,11 @@ func Poll(fn func() (PollStep, error), cfg PollConfig, sleep SleepFunc, now func
 						Message: fmt.Sprintf("terminal status %q", step.Status),
 						Data:    json.RawMessage(step.Body),
 					}
+				}
+			}
+			for _, s := range cfg.TerminalCancel {
+				if step.Status == s {
+					return nil, ErrJobCancelled(fmt.Sprintf("job cancelled (status %q)", step.Status))
 				}
 			}
 		}

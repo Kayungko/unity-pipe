@@ -145,7 +145,7 @@ const DefaultRoundTripTimeout = 10 * time.Minute
 // ExecOptions tunes one POST /api/exec call.
 type ExecOptions struct {
 	Parameters map[string]any
-	Timeout    time.Duration // server-side command timeout hint (sent as ms); 0 = omit body field, client falls back to DefaultRoundTripTimeout
+	Timeout    time.Duration // server-side command timeout hint (sent as ms); 0 = DefaultRoundTripTimeout (10m)
 	Job        bool          // submit as a detached job, returns a jobId handle
 }
 
@@ -155,6 +155,7 @@ type execRequestBody struct {
 	Parameters map[string]any `json:"parameters"`
 	Timeout    *int64         `json:"timeout,omitempty"`
 	Job        bool           `json:"job,omitempty"`
+	Verbose    bool           `json:"verbose,omitempty"`
 }
 
 // Exec runs a command and returns its envelope. A busy/settling server
@@ -164,10 +165,21 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 		Command:    command,
 		Parameters: opts.Parameters,
 		Job:        opts.Job,
+		// Official 0.6 lean envelope (verbose default false) drops command /
+		// executedAt / executionTimeMs. Keep the full envelope until upipe
+		// consumers stop reading those fields.
+		Verbose: true,
 	}
-	if ms := opts.Timeout.Milliseconds(); ms > 0 {
-		body.Timeout = &ms
+	// Always send a body timeout. The server default is 60s
+	// (CommandExecutionRequest.Timeout ?? 60000); omitting the field used to
+	// let a 10-minute client round-trip wait on a command the dispatcher had
+	// already killed. Unset → DefaultRoundTripTimeout (10m).
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = DefaultRoundTripTimeout
 	}
+	ms := timeout.Milliseconds()
+	body.Timeout = &ms
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, &UpipeError{Code: ExitInternal, Kind: "Internal", Message: err.Error()}
@@ -177,15 +189,9 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 	// milliseconds; see CommandExecutionRequest.Timeout) and the client
 	// round-trip deadline — otherwise a slow eval is clipped at the
 	// transport default (120s) and misreported as a connection error.
-	// When --timeout is unset (0) the 10-minute default budget applies as
-	// the round-trip ceiling (transport 0 would mean its own 120s default).
 	// A small margin is added so the server can deliver its own timeout
 	// envelope before the client gives up.
-	roundTrip := opts.Timeout
-	if roundTrip <= 0 {
-		roundTrip = DefaultRoundTripTimeout
-	}
-	roundTrip += 30 * time.Second
+	roundTrip := timeout + 30*time.Second
 	resp, err := c.do(http.MethodPost, "/api/exec", raw, roundTrip)
 	if err != nil {
 		return nil, err
@@ -210,14 +216,18 @@ func (c *PipelineClient) GetJob(jobID string) (*JobResponse, error) {
 }
 
 // CancelJob requests cancellation via POST /api/job/cancel.
-func (c *PipelineClient) CancelJob(jobID string) (*ExecResponse, error) {
-	raw, _ := json.Marshal(map[string]string{"jobId": jobID})
+// The server (HandleJobCancelRequest) reads JSON field "id"; "jobId" is
+// echoed for older notes / mis-copied clients and is ignored.
+func (c *PipelineClient) CancelJob(jobID string) (*JobResponse, error) {
+	raw, _ := json.Marshal(map[string]string{"id": jobID, "jobId": jobID})
 	resp, err := c.do(http.MethodPost, "/api/job/cancel", raw, 0)
 	if err != nil {
 		return nil, err
 	}
-	var r ExecResponse
-	_ = json.Unmarshal(resp.Body, &r)
+	var r JobResponse
+	if err := json.Unmarshal(resp.Body, &r); err != nil {
+		return nil, ErrProtocol(fmt.Sprintf("unparseable job-cancel response: %v", err))
+	}
 	return &r, nil
 }
 

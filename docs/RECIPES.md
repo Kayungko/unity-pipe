@@ -116,7 +116,7 @@ PowerShell / cmd 无此问题。instanceId（纯数字）不受影响——这�
 
 ## 5.5 长任务 detached jobs（build/烘焙/audit 超时必用）
 
-- 提交：`upipe exec <cmd> --job`（立即返回 jobId）；等待：`upipe job <id> --timeout 45m`（长烤给足预算）；取消：`upipe job-cancel <id>`。
+- 提交：`upipe exec <cmd> --job` 或 `upipe eval "…" --job`（立即返回 jobId）；等待：`upipe job <id> --timeout 45m`（长烤给足预算）；取消：`upipe job-cancel <id>`（HTTP body 字段是 **`id` 不是 `jobId`**）。
 - 状态机：`queued | running | completed | failed | canceled`；退出码 **22 = job cancelled**。
 - 限制：jobs 严格串行（同时上限 100，超出 429）、**不活过 domain reload**（重编译后 jobId 失效）。
 

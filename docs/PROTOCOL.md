@@ -1,6 +1,6 @@
 # Pipeline HTTP 协议参考（实测版）
 
-本文档描述编辑器内 `com.unity.pipeline` 包（0.5.0-exp.1 / 0.5.0-2022.1）暴露的本地 HTTP API。来源为包源码通读（`Runtime/Common/BasePipelineServer.cs`、`Runtime/Models/*.cs`）+ 真实编辑器实测（Unity 2022.3.23f1，2026-08-25）。`upipe` 即此协议的 Go 实现。
+本文档描述编辑器内 `com.unity.pipeline` 包（官方 0.6.0-exp.1 / 本仓适配 **0.6.0-2022.1**）暴露的本地 HTTP API。来源为包源码通读（`Runtime/Common/BasePipelineServer.cs`、`Runtime/Models/*.cs`）+ 真实编辑器实测（Unity 2022.3.23f1）。`upipe` 即此协议的 Go 实现。0.5 实测结论在未改动处仍然成立。
 
 ⚠️ 注意：编辑器内另有一组 `com.sgame.ai-pipeline.*` 近似名包，那是别的桥，**与本协议无关**。
 
@@ -54,7 +54,7 @@ token 失效（401/403）通常意味着编辑器重启过——重读端口文�
 | `/api/test-status` | GET | 异步测试运行状态 |
 | `/api/progress` | GET | 当前命令进度 `{"active": bool, "progress": …}` |
 | `/api/job?id=…` | GET | 分离式 job 状态（结果保留 1 小时 / 最近 100 个） |
-| `/api/job/cancel` | POST | 取消 job（body 上限 4 KiB） |
+| `/api/job/cancel` | POST | 取消 job；body `{"id":"<jobId>"}`（上限 4 KiB；upipe 另附兼容字段 `jobId`，服务端忽略） |
 
 请求体上限有 MaxRequestBodyBytes 保护（超限回 413）；未知路径 404。
 
@@ -80,13 +80,16 @@ Editor 服务器会隐藏 Runtime-only 命令；Runtime 服务器反之。
   "command": "eval",
   "parameters": { "code": "return 2 + 2;" },
   "timeout": 30000,
-  "job": false
+  "job": false,
+  "verbose": true
 }
 ```
 
 - `parameters`：任意 JSON 对象，服务端按命令 schema 解析
-- `timeout`：**毫秒**，正整数，可省略（省略时服务端默认 60000ms = 60s）。单位契约为毫秒（服务端 `CommandExecutionRequest.Timeout` 按 `dispatcherTimeoutMs` 直接消费）；客户端 `--timeout` 接受 Go duration（如 `30s`、`2m`），发送前换算为毫秒，同时作为客户端 round-trip deadline（+30s 余量）。**eval 的服务端超时上限 24h（包 0.5.0 起）**
+- `timeout`：**毫秒**，正整数。服务端省略时默认 60000ms = 60s——upipe **未设 `--timeout` 时仍发送 10 分钟**（`DefaultRoundTripTimeout`），避免客户端 round-trip 10min、dispatcher 60s 的错位。单位契约为毫秒（服务端 `CommandExecutionRequest.Timeout` 按 `dispatcherTimeoutMs` 直接消费）；客户端 `--timeout` 接受 Go duration（如 `30s`、`2m`），发送前换算为毫秒，同时作为客户端 round-trip deadline（+30s 余量）。**eval 的服务端超时上限 24h（包 0.5.0 起）**
 - `job: true`：立即返回 `{"jobId": "…", "state": "queued"}`，后台执行，轮询 `/api/job?id=…` 收割；队列上限 100 并发，超出 429
+- `verbose`：官方 0.6 默认 `false`（瘦信封，成功可只剩 `{"success":true,"result":…}`，丢掉 `command`/`executedAt`/`executionTimeMs`）。**upipe 始终发送 `"verbose": true`**，保持完整信封，直到消费者不再依赖这些字段
+- `commandLine` / `argv`（0.6 AUTHAPI-68）：与 `command` 三选一。upipe 当前仍走 `command` + `parameters`；错参时服务端可回 400 + `INVALID_COMMAND_ARGS`
 
 响应信封（`BaseResponse` + `CommandExecutionResponse`）：
 
@@ -142,7 +145,7 @@ Editor 服务器会隐藏 Runtime-only 命令；Runtime 服务器反之。
 | `recompile` / `recompile_status` | `idle` → `triggered` → `compiling` → **`completed` / `up_to_date`**（completed 带 `failed` 与 `errors[]`） |
 | `run_tests`（`--async_tests`）/ `test_status` | `running` → **`completed` / `error` / `cancelled` / `no_tests`** |
 | `audit` / `audit_status` | `idle` → `scanning` → **`completed` / `failed` / `interrupted` / `unavailable`** |
-| job | `queued` → `running` → **`completed` / `failed` / `cancelled`** |
+| job | `queued` → `running` → **`completed` / `failed` / `canceled`**（美式拼写，与包 `ToLowerInvariant()` 一致；upipe 同时认英式 `cancelled`，均映射 exit 22） |
 
 ## 8. 已知协议陷阱（upipe 已适配，新客户端注意）
 

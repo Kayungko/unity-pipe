@@ -11,16 +11,25 @@ import (
 func AuditCommand() SubCommand {
 	return SubCommand{
 		Name:     "audit",
-		Synopsis: "run a Project Auditor scan and wait: upipe audit [--no-wait] (requires Project Auditor)",
+		Synopsis: "run a Project Auditor scan and wait: upipe audit [--categories …] [--output …] [--no-wait] (requires Project Auditor)",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe audit")
 			noWait := fs.Bool("no-wait", false, "submit and return immediately")
+			categories := fs.String("categories", "", "comma-separated issue categories (default: all)")
+			output := fs.String("output", "", "CSV path (default: Temp/pipeline-audit/<scanId>.csv)")
 			attachShared(fs, rt.Opts)
 			if _, err := parseArgs(fs, args); err != nil {
 				return nil, usageErr("audit: " + err.Error())
 			}
 
-			trigger, err := rt.execSimple("audit", map[string]any{})
+			params := map[string]any{}
+			if *categories != "" {
+				params["categories"] = *categories
+			}
+			if *output != "" {
+				params["output"] = *output
+			}
+			trigger, err := rt.execSimple("audit", params)
 			if err != nil {
 				return nil, err
 			}

@@ -10,8 +10,8 @@
 - [ ] **evalToken 端口文件 ACL fail-open**：权限收紧失败只打 warning 继续；且先写文件再收紧有 TOCTOU 窗口（`Runtime/Models/InstanceDescriptor.cs`）。
 - [ ] **applyPlan 无视 Unchanged 分类全量重写**：每次安装把字节相同的文件原样重写（`internal/commands/pkg.go`）。
 - [ ] **pkg-install 只增改不删除**：tgz 中已不存在的文件永久残留（未来上游删 .cs 后旧脚本残留可致编译冲突）。
-- [ ] **SKILL.md §0.5 / RECIPES.md §2 守门表未纳入 prefab confirm 语义**：agent 按旧文档无法预知覆盖已存在 prefab 需 confirm=true。
-- [ ] **包内 Documentation~/commands/prefabs.md 对 7 命令 confirm 零记载**。
+- [ ] ~~**SKILL.md §0.5 / RECIPES.md §2 守门表未纳入 prefab confirm 语义**~~：0.1.10 / 0.5.3 已补；0.6.0-2022.1 文档继续保留。
+- [ ] ~~**包内 Documentation~/commands/prefabs.md 对 7 命令 confirm 零记载**~~：0.6.0-2022.1 已把 create/variant 覆盖守门写入 prefabs.md（其余 5 个仍是 parity 保留，描述在命令参数上）。
 - [ ] **InstancesCommand 零测试**：TCP 探活、心跳龄、--all 残留检测（`internal/commands/instances.go`）。
 - [ ] **set_serialized_field.value 的 ArbitraryKeys 豁免未测**：JToken 转换分支与已测的 JObject 不同（`Tests/Editor/Scripts` 缺用例）。
 
