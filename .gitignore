@@ -2,8 +2,12 @@
 dist/
 *.exe
 *.test
-upipe
-upipe-*
+# Root-anchored so they only match built binaries at the repo root —
+# the bare `upipe` pattern silently ignored the cmd/upipe source tree
+# (gitignore patterns without a slash match at every level), which the
+# release workflow's first run exposed: ./cmd/upipe was never in git.
+/upipe
+/upipe-*
 
 # Go
 /vendor/
