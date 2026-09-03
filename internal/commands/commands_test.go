@@ -138,3 +138,35 @@ func TestLookupSubCommandParentFallback(t *testing.T) {
 		t.Fatal("unknown flag-set name must not resolve")
 	}
 }
+
+// TestNullWriterDiscardsOutput locks nullWriter's io.Writer contract: it
+// reports every byte written (so flag.FlagSet is happy) but produces no
+// observable output — it exists solely to silence the flag package's own
+// usage/error printing so the cli/commands layers can render their own.
+func TestNullWriterDiscardsOutput(t *testing.T) {
+	var w nullWriter
+	n, err := w.Write([]byte("hello, world"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != len("hello, world") {
+		t.Fatalf("Write returned n=%d, want %d", n, len("hello, world"))
+	}
+}
+
+// TestFirstNonEmpty locks testcmd.go's local firstNonEmpty helper: first
+// non-empty argument wins; an all-empty call returns "".
+func TestFirstNonEmpty(t *testing.T) {
+	if got := firstNonEmpty("", "", "third"); got != "third" {
+		t.Fatalf("got %q, want third", got)
+	}
+	if got := firstNonEmpty("first", "second"); got != "first" {
+		t.Fatalf("got %q, want first", got)
+	}
+	if got := firstNonEmpty("", ""); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+	if got := firstNonEmpty(); got != "" {
+		t.Fatalf("got %q, want empty for no args", got)
+	}
+}

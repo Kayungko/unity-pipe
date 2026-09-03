@@ -1,0 +1,89 @@
+# Release automation for unity-pipe: triggered by pushing a `v*` tag.
+#
+# Cross-compiles the upipe CLI for every platform the CI build matrix covers
+# (Windows/Linux/macOS; Go's zero-CGO toolchain makes this a single-runner
+# job, no per-OS runner needed), injects the real commit/build date into
+# `upipe version` via -ldflags, packages the vendored adapter tgz the same
+# way a developer would locally (`go run ./package/build`), and publishes
+# everything to the GitHub Release for the pushed tag via the `gh` CLI
+# already present on GitHub-hosted runners — no third-party marketplace
+# Action, consistent with this repo's zero-dependency stance.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.23
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Verify build/vet/test/gofmt before publishing anything
+        run: |
+          gofmt -l . > /tmp/fmt_out.txt
+          if [ -s /tmp/fmt_out.txt ]; then
+            echo "The following files are not gofmt-formatted:"; cat /tmp/fmt_out.txt
+            exit 1
+          fi
+          go build ./...
+          go vet ./...
+          go test ./...
+
+      - name: Derive version metadata
+        id: meta
+        run: |
+          echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile upipe binaries
+        env:
+          LDFLAGS: -X github.com/Kayungko/unity-pipe/internal/commands.Version=${{ steps.meta.outputs.version }} -X github.com/Kayungko/unity-pipe/internal/commands.Commit=${{ steps.meta.outputs.commit }} -X github.com/Kayungko/unity-pipe/internal/commands.BuildDate=${{ steps.meta.outputs.build_date }}
+        run: |
+          set -eu
+          mkdir -p dist
+          build() {
+            local goos=$1 goarch=$2 out=$3
+            echo "building $out (GOOS=$goos GOARCH=$goarch)"
+            GOOS=$goos GOARCH=$goarch CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "dist/$out" ./cmd/upipe
+          }
+          # windows/amd64 keeps the bare "upipe.exe" name — README's
+          # documented `gh release download --pattern upipe.exe` upgrade
+          # flow depends on this exact filename.
+          build windows amd64 upipe.exe
+          build linux   amd64 upipe-linux-amd64
+          build darwin  amd64 upipe-darwin-amd64
+          build darwin  arm64 upipe-darwin-arm64
+          for f in dist/upipe.exe dist/upipe-linux-amd64 dist/upipe-darwin-amd64 dist/upipe-darwin-arm64; do
+            (cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
+          done
+          ls -la dist/
+
+      - name: Package the vendored Unity adapter (tgz)
+        run: go run ./package/build
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release create "${{ steps.meta.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ steps.meta.outputs.version }}" \
+            --notes "See CHANGELOG.md for details. Commit ${{ steps.meta.outputs.commit }}." \
+            --verify-tag \
+            dist/*

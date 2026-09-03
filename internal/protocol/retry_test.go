@@ -21,6 +21,90 @@ func TestBackoffLadder(t *testing.T) {
 	}
 }
 
+// TestParseLadder locks the pure-parsing contract for UPIPE_RELOAD_LADDER
+// overrides (env reading itself lives in the cli layer; this package must
+// stay IO-free).
+func TestParseLadder(t *testing.T) {
+	got, err := ParseLadder("200ms,500ms,1s,2m")
+	if err != nil {
+		t.Fatalf("ParseLadder: %v", err)
+	}
+	want := []time.Duration{200 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Minute}
+	if len(got) != len(want) {
+		t.Fatalf("length mismatch: got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %v want %v", i, got[i], want[i])
+		}
+	}
+
+	// Whitespace around entries is tolerated.
+	got2, err := ParseLadder(" 1s , 2s ")
+	if err != nil || len(got2) != 2 {
+		t.Fatalf("whitespace-tolerant parse failed: %v %v", got2, err)
+	}
+}
+
+func TestParseLadderRejectsInvalidEntries(t *testing.T) {
+	cases := []string{
+		"",           // single empty entry
+		"1s,,2s",     // empty entry mid-list
+		"1s,notadur", // unparseable
+		"0s",         // non-positive
+		"-1s",        // negative
+	}
+	for _, c := range cases {
+		if _, err := ParseLadder(c); err == nil {
+			t.Errorf("ParseLadder(%q) should have failed", c)
+		}
+	}
+}
+
+// TestSetReloadLadderResetsOnEmpty locks the fallback contract: an empty/nil
+// override must restore DefaultReloadLadder, not leave the ladder empty
+// (which would make Backoff panic on index -1).
+func TestSetReloadLadderResetsOnEmpty(t *testing.T) {
+	orig := append([]time.Duration(nil), ReloadLadder...)
+	defer SetReloadLadder(orig)
+
+	custom := []time.Duration{1 * time.Second, 2 * time.Second}
+	SetReloadLadder(custom)
+	if len(ReloadLadder) != 2 || ReloadLadder[0] != time.Second {
+		t.Fatalf("custom ladder not applied: %v", ReloadLadder)
+	}
+
+	SetReloadLadder(nil)
+	if len(ReloadLadder) != len(DefaultReloadLadder) {
+		t.Fatalf("nil override should reset to DefaultReloadLadder, got %v", ReloadLadder)
+	}
+	for i := range DefaultReloadLadder {
+		if ReloadLadder[i] != DefaultReloadLadder[i] {
+			t.Fatalf("reset ladder mismatch at %d: %v vs default %v", i, ReloadLadder, DefaultReloadLadder)
+		}
+	}
+
+	SetReloadLadder(custom)
+	SetReloadLadder([]time.Duration{})
+	if len(ReloadLadder) != len(DefaultReloadLadder) {
+		t.Fatalf("empty-slice override should also reset to default, got %v", ReloadLadder)
+	}
+}
+
+// TestSetReloadLadderCopiesInput guards against callers later mutating the
+// slice they passed in and silently changing the active ladder.
+func TestSetReloadLadderCopiesInput(t *testing.T) {
+	orig := append([]time.Duration(nil), ReloadLadder...)
+	defer SetReloadLadder(orig)
+
+	custom := []time.Duration{1 * time.Second, 2 * time.Second}
+	SetReloadLadder(custom)
+	custom[0] = 99 * time.Second
+	if ReloadLadder[0] == 99*time.Second {
+		t.Fatal("SetReloadLadder must copy its input, not alias it")
+	}
+}
+
 // fakeTransport scripts its responses/errors in order.
 type fakeTransport struct {
 	steps []fakeStep

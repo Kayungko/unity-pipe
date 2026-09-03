@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Kayungko/unity-pipe/internal/protocol"
@@ -46,11 +47,12 @@ func PkgStatusCommand() SubCommand {
 func PkgInstallCommand() SubCommand {
 	return SubCommand{
 		Name:     "pkg-install",
-		Synopsis: "install the adapted pipeline package: upipe pkg-install --source <dist tgz>",
+		Synopsis: "install the adapted pipeline package: upipe pkg-install --source <dist tgz> [--prune]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe pkg-install")
 			source := fs.String("source", "", "path to the com.unity.pipeline-*.tgz built by this repo")
 			dryRun := fs.Bool("dry-run", false, "list the planned changes without writing")
+			prune := fs.Bool("prune", false, "also delete target files no longer present in the tgz (default: report them under \"removed\" without deleting — files the upstream package dropped between versions would otherwise linger and still get compiled)")
 			attachShared(fs, rt.Opts)
 			if _, err := parseArgs(fs, args); err != nil {
 				return nil, usageErr("pkg-install: " + err.Error())
@@ -83,18 +85,33 @@ func PkgInstallCommand() SubCommand {
 			if err != nil {
 				return nil, protocol.AsUpipeError(err)
 			}
+			var deleted []string
+			if *prune && len(plan.Removed) > 0 {
+				deleted, err = deleteRemoved(plan)
+				if err != nil {
+					return nil, protocol.AsUpipeError(err)
+				}
+			}
 			// Register the project so `upipe instances` can find it later
 			// (best-effort; never fails the install; the cli layer also
 			// registers after any successful command).
 			RegisterProject(rt.ProjectPath)
-			return map[string]any{
+			result := map[string]any{
 				"source":    *source,
 				"target":    target,
 				"written":   written,
 				"updated":   len(plan.Updated),
 				"added":     len(plan.Added),
 				"unchanged": len(plan.Unchanged),
-			}, nil
+				"removed":   plan.Removed,
+			}
+			if len(plan.Removed) > 0 && !*prune {
+				result["removedNote"] = "these target files are no longer shipped by the source tgz but were left on disk (upstream renamed/dropped them across versions) — re-run with --prune to delete them; they are otherwise harmless but still get compiled/imported by Unity"
+			}
+			if *prune {
+				result["deleted"] = deleted
+			}
+			return result, nil
 		},
 	}
 }
@@ -106,7 +123,13 @@ type pkgPlan struct {
 	Added     []string `json:"added"`
 	Updated   []string `json:"updated"`
 	Unchanged []string `json:"unchanged"`
-	entries   map[string][]byte
+	// Removed lists target files that exist on disk under Target but are no
+	// longer present in the tgz — a package upgrade that renamed or dropped
+	// files. Reported always; only deleted when the caller passes --prune
+	// (deleting by default would be a surprising destructive action on a
+	// dry, low-risk report path).
+	Removed []string `json:"removed"`
+	entries map[string][]byte
 }
 
 func installedPkgVersion(project string) (string, error) {
@@ -143,6 +166,7 @@ func extractPlan(tgzPath, target string) (*pkgPlan, error) {
 		Added:     []string{},
 		Updated:   []string{},
 		Unchanged: []string{},
+		Removed:   []string{},
 		entries:   map[string][]byte{},
 	}
 	tr := tar.NewReader(gz)
@@ -187,7 +211,59 @@ func extractPlan(tgzPath, target string) (*pkgPlan, error) {
 	if len(plan.entries) == 0 {
 		return nil, protocol.ErrProtocol("tgz contains no package/ entries — not a UPM package tarball?")
 	}
+	plan.Removed = findRemovedFiles(target, plan.entries)
 	return plan, nil
+}
+
+// findRemovedFiles walks an existing install target and returns every
+// relative file path (tar-entry style, "/"-separated) present on disk but
+// absent from the tgz's entry set — files an upstream package upgrade
+// renamed or dropped. Returns nil if target does not exist yet (a fresh
+// install has nothing to compare against). Never errors: a WalkDir failure
+// mid-tree degrades to "found nothing to report" rather than failing the
+// whole install/dry-run.
+func findRemovedFiles(target string, entries map[string][]byte) []string {
+	if _, err := os.Stat(target); err != nil {
+		return nil
+	}
+	var removed []string
+	_ = filepath.WalkDir(target, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(target, path)
+		if rerr != nil {
+			return nil
+		}
+		name := filepath.ToSlash(rel)
+		if _, ok := entries[name]; !ok {
+			removed = append(removed, name)
+		}
+		return nil
+	})
+	sort.Strings(removed)
+	return removed
+}
+
+// deleteRemoved deletes every plan.Removed file from disk under plan.Target
+// (called only when the caller passed --prune). Best-effort per file: a
+// failure to delete one entry does not abort the rest, but the first error
+// encountered is still returned after all deletions are attempted, so a
+// partial prune is visible rather than silently swallowed.
+func deleteRemoved(plan *pkgPlan) ([]string, error) {
+	var deleted []string
+	var firstErr error
+	for _, name := range plan.Removed {
+		dst := filepath.Join(plan.Target, filepath.FromSlash(name))
+		if err := os.Remove(dst); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("delete %s: %w", name, err)
+			}
+			continue
+		}
+		deleted = append(deleted, name)
+	}
+	return deleted, firstErr
 }
 
 // isUnsafeEntryName reports whether a tar entry name could escape the

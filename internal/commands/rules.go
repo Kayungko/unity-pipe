@@ -240,6 +240,60 @@ func readBlockLines(docPath string) []string {
 	return strings.Split(body, "\n")
 }
 
+// removeRulesDoc strips the managed rules block from a global harness
+// document — the inverse of applyRulesDoc, used by `upipe plugin uninstall
+// --remove-rules`. It backs up the document first (same convention as
+// apply/upgrade). If stripping the block leaves the document empty (it was
+// created purely to hold the block — the "created" status path of
+// applyRulesDoc), the now-empty file is deleted instead of left as a husk.
+//
+// Statuses: "absent" (document does not exist — nothing to do),
+// "no-managed-block" (document exists but was never touched by upipe),
+// "removed" (block stripped, backup taken), "removed-file-deleted" (block
+// stripped and the now-empty file was deleted), "dry-run(...)" variants of
+// the above with nothing written.
+func removeRulesDoc(docPath string, dryRun bool) (status, backup string, err error) {
+	data, rerr := os.ReadFile(docPath)
+	if os.IsNotExist(rerr) {
+		if dryRun {
+			return "dry-run(absent)", "", nil
+		}
+		return "absent", "", nil
+	}
+	if rerr != nil {
+		return "", "", rerr
+	}
+	s := string(data)
+	begin := strings.Index(s, ruleBeginMarker)
+	end := strings.LastIndex(s, ruleEndMarker)
+	if begin < 0 || end < 0 || end < begin {
+		if dryRun {
+			return "dry-run(no-managed-block)", "", nil
+		}
+		return "no-managed-block", "", nil
+	}
+	if dryRun {
+		return "dry-run(remove)", "", nil
+	}
+
+	stamp := time.Now().Format("20060102-150405")
+	backup = docPath + ".upipe-bak-" + stamp
+	if err := os.WriteFile(backup, data, 0o644); err != nil {
+		return "", "", fmt.Errorf("backup %s: %w", backup, err)
+	}
+	out := strings.TrimSpace(s[:begin] + s[end+len(ruleEndMarker):])
+	if out == "" {
+		if err := os.Remove(docPath); err != nil {
+			return "", "", err
+		}
+		return "removed-file-deleted", filepath.Base(backup), nil
+	}
+	if err := os.WriteFile(docPath, []byte(out+"\n"), 0o644); err != nil {
+		return "", "", err
+	}
+	return "removed", filepath.Base(backup), nil
+}
+
 // preserveWhitelist keeps the whitelist/depot configuration from the old
 // block when upgrading without explicit --co-use-* flags: those values are
 // machine customizations, and resetting them to the pipeline-only default

@@ -69,6 +69,87 @@ func TestExtractPlanClassifiesEntries(t *testing.T) {
 	}
 }
 
+// TestExtractPlanDetectsRemovedFiles locks the "removed" classification: a
+// target file that exists on disk but is absent from the tgz's entry set
+// (an upstream rename/drop) must be reported without being deleted by
+// extractPlan itself — deletion is a separate, opt-in step (deleteRemoved).
+func TestExtractPlanDetectsRemovedFiles(t *testing.T) {
+	target := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(target, "Runtime"), 0o755)
+	_ = os.WriteFile(filepath.Join(target, "Runtime", "gone.cs"), []byte("stale"), 0o644)
+	_ = os.WriteFile(filepath.Join(target, "package.json"), []byte(`{"version":"0.1"}`), 0o644)
+
+	tgz := buildTgz(t, map[string]string{
+		"package/package.json": `{"version":"0.2"}`,
+		// Runtime/gone.cs intentionally absent — upstream dropped it.
+	})
+
+	plan, err := extractPlan(tgz, target)
+	if err != nil {
+		t.Fatalf("extractPlan: %v", err)
+	}
+	expectSet(t, "removed", plan.Removed, []string{"Runtime/gone.cs"})
+	// It must still be on disk — extractPlan only classifies, never deletes.
+	if _, err := os.Stat(filepath.Join(target, "Runtime", "gone.cs")); err != nil {
+		t.Fatal("extractPlan must not delete removed files itself")
+	}
+}
+
+// TestExtractPlanFreshInstallHasNoRemoved locks that a fresh (nonexistent)
+// target reports zero removed files — there is nothing to compare against.
+func TestExtractPlanFreshInstallHasNoRemoved(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "does-not-exist-yet")
+	tgz := buildTgz(t, map[string]string{"package/package.json": `{"version":"1"}`})
+	plan, err := extractPlan(tgz, target)
+	if err != nil {
+		t.Fatalf("extractPlan: %v", err)
+	}
+	if len(plan.Removed) != 0 {
+		t.Fatalf("fresh install should report no removed files, got %v", plan.Removed)
+	}
+}
+
+// TestDeleteRemovedDeletesListedFiles locks deleteRemoved's contract: it
+// deletes exactly the files named in plan.Removed and reports them back.
+func TestDeleteRemovedDeletesListedFiles(t *testing.T) {
+	target := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(target, "Runtime"), 0o755)
+	_ = os.WriteFile(filepath.Join(target, "Runtime", "gone.cs"), []byte("stale"), 0o644)
+	_ = os.WriteFile(filepath.Join(target, "keep.cs"), []byte("keep"), 0o644)
+
+	plan := &pkgPlan{Target: target, Removed: []string{"Runtime/gone.cs"}}
+	deleted, err := deleteRemoved(plan)
+	if err != nil {
+		t.Fatalf("deleteRemoved: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0] != "Runtime/gone.cs" {
+		t.Fatalf("expected Runtime/gone.cs deleted, got %v", deleted)
+	}
+	if _, err := os.Stat(filepath.Join(target, "Runtime", "gone.cs")); !os.IsNotExist(err) {
+		t.Fatal("Runtime/gone.cs should have been deleted")
+	}
+	if _, err := os.Stat(filepath.Join(target, "keep.cs")); err != nil {
+		t.Fatal("keep.cs (not in Removed) must survive")
+	}
+}
+
+// TestDeleteRemovedReportsFirstErrorButContinues locks the "best effort,
+// report first failure" contract: one missing/undeletable entry does not
+// abort deletion of the rest.
+func TestDeleteRemovedReportsFirstErrorButContinues(t *testing.T) {
+	target := t.TempDir()
+	_ = os.WriteFile(filepath.Join(target, "real.cs"), []byte("x"), 0o644)
+
+	plan := &pkgPlan{Target: target, Removed: []string{"missing.cs", "real.cs"}}
+	deleted, err := deleteRemoved(plan)
+	if err == nil {
+		t.Fatal("expected an error for the missing entry")
+	}
+	if len(deleted) != 1 || deleted[0] != "real.cs" {
+		t.Fatalf("real.cs should still have been deleted despite the earlier failure, got %v", deleted)
+	}
+}
+
 func TestExtractPlanRejectsTraversal(t *testing.T) {
 	target := t.TempDir()
 	for _, evil := range []string{
@@ -168,5 +249,47 @@ func expectSet(t *testing.T, label string, got, want []string) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("%s: expected %d entries, got %d: %v", label, len(want), len(got), got)
+	}
+}
+
+// TestInstalledPkgVersion locks the version-detection contract PkgStatusCommand
+// relies on: read Packages/com.unity.pipeline/package.json and decode
+// "version".
+func TestInstalledPkgVersion(t *testing.T) {
+	project := t.TempDir()
+	target := filepath.Join(project, "Packages", "com.unity.pipeline")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "package.json"), []byte(`{"name":"com.unity.pipeline","version":"0.6.0-2022.1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := installedPkgVersion(project)
+	if err != nil {
+		t.Fatalf("installedPkgVersion: %v", err)
+	}
+	if got != "0.6.0-2022.1" {
+		t.Fatalf("got %q, want 0.6.0-2022.1", got)
+	}
+}
+
+func TestInstalledPkgVersionMissingPackage(t *testing.T) {
+	project := t.TempDir() // no Packages/com.unity.pipeline at all
+	if _, err := installedPkgVersion(project); err == nil {
+		t.Fatal("expected an error when the package is not installed")
+	}
+}
+
+func TestInstalledPkgVersionCorruptJSON(t *testing.T) {
+	project := t.TempDir()
+	target := filepath.Join(project, "Packages", "com.unity.pipeline")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "package.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installedPkgVersion(project); err == nil {
+		t.Fatal("expected an error for corrupt package.json")
 	}
 }

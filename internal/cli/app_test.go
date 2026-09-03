@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kayungko/unity-pipe/internal/cli"
+	"github.com/Kayungko/unity-pipe/internal/protocol"
 )
 
 // mockEditor implements enough of the pipeline HTTP API to exercise the CLI
@@ -392,5 +394,38 @@ func TestVersionCommandIgnoresProjectPathNoise(t *testing.T) {
 	}
 	if strings.Contains(stderr, "flag provided but not defined") {
 		t.Errorf("stderr noise leaked:\n%s", stderr)
+	}
+}
+
+// TestReloadLadderEnvOverride locks the UPIPE_RELOAD_LADDER wiring: a valid
+// override is applied to protocol.ReloadLadder before any command runs.
+func TestReloadLadderEnvOverride(t *testing.T) {
+	t.Setenv("UPIPE_RELOAD_LADDER", "1ms,2ms")
+	orig := append([]time.Duration(nil), protocol.ReloadLadder...)
+	defer protocol.SetReloadLadder(orig)
+
+	code, _ := runCLI(t, "--json", "version")
+	if code != 0 {
+		t.Fatalf("version should succeed regardless of ladder override, got %d", code)
+	}
+	if len(protocol.ReloadLadder) != 2 || protocol.ReloadLadder[0] != time.Millisecond {
+		t.Fatalf("UPIPE_RELOAD_LADDER override not applied: %v", protocol.ReloadLadder)
+	}
+}
+
+// TestReloadLadderEnvOverrideRejectsGarbage locks the fail-fast contract: a
+// malformed UPIPE_RELOAD_LADDER must exit 2 (usage) before any command runs,
+// not silently fall back to the default ladder.
+func TestReloadLadderEnvOverrideRejectsGarbage(t *testing.T) {
+	t.Setenv("UPIPE_RELOAD_LADDER", "not-a-duration")
+	orig := append([]time.Duration(nil), protocol.ReloadLadder...)
+	defer protocol.SetReloadLadder(orig)
+
+	code, stderr := captureStderrCLI(t, "version")
+	if code != 2 {
+		t.Fatalf("want exit 2 (usage) for a malformed ladder, got %d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "UPIPE_RELOAD_LADDER") {
+		t.Errorf("error should name the offending variable, got: %s", stderr)
 	}
 }

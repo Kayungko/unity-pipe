@@ -21,6 +21,11 @@ import (
 // Usage shape: upipe [global flags] <subcommand> [subcommand flags] [args]
 // Shared flags are accepted both before and after the subcommand.
 func Main(argv []string) int {
+	if err := applyReloadLadderOverride(); err != nil {
+		fmt.Fprintf(os.Stderr, "upipe: %v\n", err)
+		return protocol.ExitUsage
+	}
+
 	opts := &options.Options{}
 
 	global := flag.NewFlagSet("upipe", flag.ContinueOnError)
@@ -108,6 +113,32 @@ func hasHelpFlag(args []string) bool {
 		}
 	}
 	return false
+}
+
+// reloadLadderEnvVar overrides the domain-reload retry backoff schedule
+// (protocol.ReloadLadder): a comma-separated list of Go durations, e.g.
+// "200ms,500ms,1s,2s,5s,10s,30s,60s" — useful on large P4 projects where
+// domain reload routinely outlasts the built-in 30s ceiling. This is the
+// ONLY place upipe reads this variable: protocol stays IO-free (it exposes
+// SetReloadLadder/ParseLadder as pure functions), and cli is the sole
+// environment-reading seam.
+const reloadLadderEnvVar = "UPIPE_RELOAD_LADDER"
+
+// applyReloadLadderOverride reads reloadLadderEnvVar (if set) and installs it
+// as the active protocol.ReloadLadder. An unset/empty variable is a no-op —
+// the built-in protocol.DefaultReloadLadder keeps applying. A malformed value
+// is a usage error (fail fast, not a silently-ignored typo).
+func applyReloadLadderOverride() error {
+	raw := os.Getenv(reloadLadderEnvVar)
+	if raw == "" {
+		return nil
+	}
+	ladder, err := protocol.ParseLadder(raw)
+	if err != nil {
+		return fmt.Errorf("%s=%q: %w", reloadLadderEnvVar, raw, err)
+	}
+	protocol.SetReloadLadder(ladder)
+	return nil
 }
 
 func lookup(name string) (commands.SubCommand, bool) {

@@ -44,6 +44,7 @@ func All() []SubCommand {
 		PkgStatusCommand(),
 		PkgInstallCommand(),
 		PluginCommand(),
+		PluginUninstallCommand(),
 	}
 }
 

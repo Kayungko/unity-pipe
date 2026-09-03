@@ -19,11 +19,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both hosts matter: path/permission semantics fork between Windows and
-        # Linux (ToSlash/FromSlash, read-only detection, path discovery) — the
-        # v0.1.7 drive-letter tar-entry bug shipped because only one host was
-        # ever exercised. The development host is Windows; CI must cover both.
-        os: [ubuntu-latest, windows-latest]
+        # All three hosts matter: path/permission semantics fork between
+        # Windows, Linux and macOS (ToSlash/FromSlash, read-only detection,
+        # path discovery) — the v0.1.7 drive-letter tar-entry bug shipped
+        # because only one host was ever exercised. The development host is
+        # Windows; macOS is where many Unity Editor users actually run;
+        # CI must cover all three.
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,6 +35,16 @@ jobs:
         with:
           go-version: '1.23'
           cache: true
+
+      - name: Gofmt check
+        shell: bash
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$fmt_out"
+            exit 1
+          fi
 
       - name: Build
         run: go build ./...

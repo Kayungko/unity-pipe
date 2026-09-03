@@ -2,6 +2,31 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.1.12] - 2026-09-03
+
+一轮全项目优化迭代：CI 门禁、发版可追溯性、大工程域重载容错、登记表/技能/规则文档的对称清理、pkg-install 安全删除、以及 `internal/commands` 测试覆盖率补齐；随后一轮代码评审修复：`plugin uninstall` 子命令转发、tag-push 发版自动化、v0.1.11 tag/CHANGELOG 核对、过时版本号注释、零星覆盖率洼地。
+
+### Added
+
+- **CI gofmt 门禁**：Build 之前新增 "Gofmt check" 步骤，`gofmt -l .` 非空即 fail——此前格式漂移（CRLF 行尾、struct tag 对齐）只能靠人工发现。
+- **CI 三平台矩阵**：`macos-latest` 加入 windows/ubuntu 矩阵（v0.1.7 的盘符缺陷提醒我们跨平台盲区的代价）。
+- **`upipe version` 携带构建溯源**：新增 `commit`（git commit hash）与 `buildDate`（构建时间），通过 `-ldflags -X ...Commit=/-X ...BuildDate=` 注入；未注入时输出 `"unknown"` 占位符而非空串。README 补充带版本信息的发版构建命令示例。
+- **域重载退避梯环境变量覆盖**（`UPIPE_RELOAD_LADDER`）：逗号分隔的 Go duration 列表覆盖内置 0.2/0.5/1/2/5/10/30s 梯度，供域重载常态化超出 30s 上限的大型 P4 工程使用；值非法时 exit 2 快速失败，不静默回退默认梯度。`protocol` 包新增 `DefaultReloadLadder`/`SetReloadLadder`/`ParseLadder`（保持零 IO）；仅 `cli` 层读取该环境变量。
+- **`upipe instances --prune`**：清理登记表（`~/.upipe/projects.txt`）里已失效的工程路径（端口文件不可读/损坏，或不可连且心跳过期）——判定基准与默认列表隐藏残留实例的"确定已死"门槛一致；活跃工程（哪怕当前不可连但心跳新鲜）保留。结果携带 `pruned`/`prunedCount`。
+- **`upipe plugin-uninstall`**：`plugin install` 的对称卸载命令。技能目录移入同级 `<skills>-backup`（从不硬删，可随时找回，与 install 自身的备份策略一致），未安装的技能只报告不报错；`--remove-rules` 额外从 `~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md` 剥离管理块（剥离前备份；若文档是纯为承载该块而创建，剥离后文档为空则整份删除）。`rules.go` 新增 `removeRulesDoc`。
+- **`upipe pkg-install` removed 文件检测 + `--prune`**：`extractPlan` 新增 `Removed` 分类——已安装目标里存在、但当前 tgz 已不再包含的文件（上游改名/删除遗留）。默认只在结果里报告（`removed` + 提示用 `--prune`），从不擅自删除；显式传 `--prune` 才调用新增的 `deleteRemoved` 实际清理（逐文件最优努力，首个失败会报告但不阻断其余删除）。
+- **`internal/commands` 测试覆盖率补齐**：新增 `exec_test.go`/`runtime_test.go`/`version_test.go`/`recompile_test.go` 及既有文件里的多组用例，补齐此前 0% 覆盖的纯函数（`coerceScalar`/`multiFlag`、`Runtime.Close`/`PortFileSource`/`ResolveProjectPath`/`PublicDescriptor`、`installedPkgVersion`、`findRepoRoot`/`listSkillDirs`/`userHomeDir`、`pollCommand`（经 `RecompileCommand` 驱动）、`readBlockLines`、`nullWriter.Write`、`firstNonEmpty`）；`internal/protocol` 新增 `client_methods_test.go`/`errors_test.go` 补齐 `Status`/`EditorStatus`/`ListCommands`/`ListCommandsFull`/`GetJob`/`Progress`/`TestStatus`/`ErrNoInstance`/`AsUpipeError` 的错误包装分支/`ProjectPortFile`。`internal/commands` 覆盖率 59.3%→67.2%，`internal/protocol` 71.6%→85.6%（保留：`cmd/upipe`、`scripts/*` 的 `main`/CLI 脚本入口函数不计——这些是外围开发工具，不属于核心 CLI contract）。
+- **tag-push 触发的 GitHub Actions 发版工作流**（`.github/workflows/release.yml`）：推 `v*` tag 自动跑一遍 build/vet/test/gofmt 门禁，交叉编译 4 份二进制（windows-amd64、linux-amd64、darwin-amd64、darwin-arm64），`-ldflags` 注入真实 `Version`/`Commit`/`BuildDate`（而非手工敲命令），打包适配包 tgz（`go run ./package/build`），各产物附 `sha256sum`，最后用 `gh release create --verify-tag` 发布到对应 tag 的 GitHub Release——之前发版完全靠本地手动交叉编译 + 手动上传，README 里的命令示例也只是示范，并没有被任何自动化执行过。README 补充该自动化流程的说明，标注本地命令仅用于调试或应急发版。
+- **`internal/cli` 覆盖率补齐**（顺手带上第 5 项）：新增 `app_internal_test.go`（白盒，package `cli`），补齐 `reorderForFlags`（`--` 终止符分支、未知 `name=value` 落回 positional 分支）与 `render`/`writeJSON`（非 `--json` 人类可读成功路径、`json.MarshalIndent` 失败分支）此前未覆盖的分支；`reorderForFlags` 80%→100%、`render` 63.2%→100%（`writeJSON` 停在 60%——唯一剩余分支是 `enc.Encode` 失败后的 `os.Exit`，进程内单测无法安全驱动，判定为可接受）。`internal/protocol` 新增 `TestClientSleepDefaultsToRealTimeSleepWhenUnset`，补上 `(*PipelineClient).sleep` 未注入 `Sleep`（生产默认路径）时的 `time.Sleep` 回退分支：50%→100%。
+
+### Fixed
+
+- **`internal/protocol/client.go` / `client_test.go` CRLF 行尾漂移**：与 `.gitattributes` 的 `eol=lf` 约定不符（`git check-attr` 确认），归一化为 LF。
+- **`scripts/vendored-tests/main.go` gofmt 漂移**：`Wrote []string` 的 struct tag 注释错位，`gofmt -w` 修复。
+- **`upipe plugin uninstall`（带空格）无法使用**：`PluginCommand` 的 flag 解析器只认字面量 `install`，遇到 `uninstall` 直接报 `unexpected argument uninstall` 退出，而带短横线的 `plugin-uninstall` 一直可用——两种拼法行为不对称。现在 `PluginCommand.Run` 在解析任何 flag 之前先检查 `args[0] == "uninstall"`，命中就转发给 `PluginUninstallCommand().Run`，行为与 `plugin-uninstall` 完全一致。Synopsis 同步补上 `uninstall` 子命令形态。回归：`TestPluginCommandForwardsUninstall`。
+- **CHANGELOG.md 里 `## [0.1.11] - 2026-09-02` 标题在上一轮插入 `[Unreleased]` 段落时被误删**：`git diff` 显示该行被直接替换成了 `## [Unreleased]`，导致 0.1.11 原有的 `### Added`/`### Fixed` 内容失去自己的版本标题、悄悄并入 Unreleased 段落下。现已补回该标题，核对 tag（`v0.1.11` 已存在于 `origin`，指向 `19e86cf`，对应的 GitHub Release 也已发布）与 CHANGELOG 内容一致。
+- **`internal/commands/version.go` 过时的示例版本号注释**：doc comment 里 `-ldflags -X ...Version=v0.1.4` 的示例还停在多个版本以前，随本次发版更新为 `v0.1.12`。
+
 ## [0.1.11] - 2026-09-02
 
 ### Added
@@ -175,7 +200,9 @@
 - **分层强制**：`layering_test.go`（go/parser import lint）强制 `cli → commands → protocol ← transport` 单向依赖；`protocol` 层零 IO，为移植边界。
 - **文档**：`docs/PROTOCOL.md`（HTTP 协议实测参考）、`docs/MIGRATION.md`（自 rocwood / 官方 CLI 迁移）、`package/ADAPTATION-2022.md`（适配全记录）。
 
-[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/Kayungko/unity-pipe/compare/v0.1.12...HEAD
+[0.1.12]: https://github.com/Kayungko/unity-pipe/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/Kayungko/unity-pipe/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/Kayungko/unity-pipe/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/Kayungko/unity-pipe/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/Kayungko/unity-pipe/compare/v0.1.7...v0.1.8

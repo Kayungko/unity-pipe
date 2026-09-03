@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -71,5 +72,16 @@ func TestFindProjectRoot(t *testing.T) {
 	}
 	if _, ok := FindProjectRoot(`C:\elsewhere`, func(string) bool { return false }); ok {
 		t.Fatal("expected not found")
+	}
+}
+
+// TestProjectPortFile locks the port file path shape every caller (cli,
+// commands.PortFileSource, instances) depends on: Library/Pipeline/<name>
+// under the project root.
+func TestProjectPortFile(t *testing.T) {
+	got := ProjectPortFile(filepath.Join("E:", "proj"))
+	want := filepath.Join("E:", "proj", "Library", "Pipeline", PortFileName)
+	if got != want {
+		t.Fatalf("ProjectPortFile = %q, want %q", got, want)
 	}
 }

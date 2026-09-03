@@ -125,3 +125,117 @@ func TestPkgInstall_WritesAndRegistersProject(t *testing.T) {
 		t.Errorf("project path should be registered, registry content: %q", string(reg))
 	}
 }
+
+// TestPkgInstall_ReportsRemovedWithoutDeletingByDefault locks the safe
+// default for item 9: a stale target file absent from the tgz is reported
+// under "removed" but left on disk unless --prune is passed.
+func TestPkgInstall_ReportsRemovedWithoutDeletingByDefault(t *testing.T) {
+	project := t.TempDir()
+	target := filepath.Join(project, "Packages", "com.unity.pipeline")
+	if err := os.MkdirAll(filepath.Join(target, "Runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "Runtime", "stale.cs"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := filepath.Join(t.TempDir(), "projects.txt")
+	old := knownProjectsFile
+	knownProjectsFile = func() string { return registry }
+	defer func() { knownProjectsFile = old }()
+
+	tgz := buildTgz(t, map[string]string{
+		"package/package.json": `{"version":"9.9.9"}`,
+		// Runtime/stale.cs intentionally absent.
+	})
+
+	res, err := runPkgInstall(t, project, "--source", tgz)
+	if err != nil {
+		t.Fatalf("install should succeed: %v", err)
+	}
+	m, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", res)
+	}
+	removed, ok := m["removed"].([]string)
+	if !ok || len(removed) != 1 || removed[0] != "Runtime/stale.cs" {
+		t.Fatalf("expected removed=[Runtime/stale.cs], got %v", m["removed"])
+	}
+	if _, present := m["removedNote"]; !present {
+		t.Error("expected a removedNote hint about --prune when removed files exist and --prune was not passed")
+	}
+	if _, present := m["deleted"]; present {
+		t.Error("deleted key should not be present without --prune")
+	}
+	// The stale file must still exist on disk — default is report-only.
+	if _, err := os.Stat(filepath.Join(target, "Runtime", "stale.cs")); err != nil {
+		t.Fatal("stale.cs should NOT have been deleted without --prune")
+	}
+}
+
+// TestPkgInstall_PruneDeletesRemovedFiles locks the opt-in destructive path.
+func TestPkgInstall_PruneDeletesRemovedFiles(t *testing.T) {
+	project := t.TempDir()
+	target := filepath.Join(project, "Packages", "com.unity.pipeline")
+	if err := os.MkdirAll(filepath.Join(target, "Runtime"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "Runtime", "stale.cs"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := filepath.Join(t.TempDir(), "projects.txt")
+	old := knownProjectsFile
+	knownProjectsFile = func() string { return registry }
+	defer func() { knownProjectsFile = old }()
+
+	tgz := buildTgz(t, map[string]string{
+		"package/package.json": `{"version":"9.9.9"}`,
+	})
+
+	res, err := runPkgInstall(t, project, "--source", tgz, "--prune")
+	if err != nil {
+		t.Fatalf("install should succeed: %v", err)
+	}
+	m, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", res)
+	}
+	deleted, ok := m["deleted"].([]string)
+	if !ok || len(deleted) != 1 || deleted[0] != "Runtime/stale.cs" {
+		t.Fatalf("expected deleted=[Runtime/stale.cs], got %v", m["deleted"])
+	}
+	if _, err := os.Stat(filepath.Join(target, "Runtime", "stale.cs")); !os.IsNotExist(err) {
+		t.Fatal("stale.cs should have been deleted with --prune")
+	}
+}
+
+// TestPkgInstall_DryRunReportsRemovedWithoutDeleting locks that --dry-run
+// (no --prune) surfaces the removed list via the plan without touching disk,
+// same as the non-dry-run default.
+func TestPkgInstall_DryRunReportsRemovedWithoutDeleting(t *testing.T) {
+	project := t.TempDir()
+	target := filepath.Join(project, "Packages", "com.unity.pipeline")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "stale.cs"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tgz := buildTgz(t, map[string]string{"package/package.json": `{"version":"9.9.9"}`})
+
+	res, err := runPkgInstall(t, project, "--source", tgz, "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run should succeed: %v", err)
+	}
+	plan, ok := res.(*pkgPlan)
+	if !ok {
+		t.Fatalf("dry-run should return the plan, got %T", res)
+	}
+	if len(plan.Removed) != 1 || plan.Removed[0] != "stale.cs" {
+		t.Fatalf("expected plan.Removed=[stale.cs], got %v", plan.Removed)
+	}
+	if _, err := os.Stat(filepath.Join(target, "stale.cs")); err != nil {
+		t.Fatal("dry-run must not delete anything")
+	}
+}

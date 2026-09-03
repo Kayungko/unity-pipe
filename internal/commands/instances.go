@@ -64,6 +64,66 @@ func readKnownProjects() []string {
 	return out
 }
 
+// writeKnownProjects overwrites the registry with exactly the given project
+// list (one per line). Used by pruneKnownProjects; RegisterProject keeps
+// using its append-only path for the common case.
+func writeKnownProjects(projects []string) error {
+	path := knownProjectsFile()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, p := range projects {
+		b.WriteString(p)
+		b.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// deadProjectReason classifies a registry entry as dead ("" if still live):
+// its port file is missing/corrupt, or present but unreachable AND stale
+// (the same "definitely dead" bar the default `instances` listing uses to
+// hide leftovers). A reachable port (even with a stale heartbeat — an idle
+// editor stops ticking the heartbeat but keeps serving) counts as live.
+func deadProjectReason(root string, now time.Time) string {
+	data, err := os.ReadFile(protocol.ProjectPortFile(root))
+	if err != nil {
+		return "port file unreadable (project moved, deleted, or never installed)"
+	}
+	d, err := protocol.ParseDescriptor(data)
+	if err != nil {
+		return "port file corrupt"
+	}
+	if !portReachable(d.Port) && protocol.IsStale(d, now) {
+		return "port closed and heartbeat stale"
+	}
+	return ""
+}
+
+// pruneKnownProjects rewrites the registry keeping only projects that are
+// still live per deadProjectReason. Returns the removed entries (with their
+// reason) — best-effort, mirroring RegisterProject's philosophy: a failure to
+// persist is reported as an error to the caller (unlike registration, prune
+// is an explicit user action and should not fail silently).
+func pruneKnownProjects(now time.Time) (removed []map[string]string, err error) {
+	known := readKnownProjects()
+	var kept []string
+	for _, root := range known {
+		if reason := deadProjectReason(root, now); reason != "" {
+			removed = append(removed, map[string]string{"project": root, "reason": reason})
+			continue
+		}
+		kept = append(kept, root)
+	}
+	if len(removed) == 0 {
+		return removed, nil
+	}
+	if err := writeKnownProjects(kept); err != nil {
+		return nil, err
+	}
+	return removed, nil
+}
+
 // InstancesCommand lists every running pipeline instance known to this
 // machine: it reads the project registry, plus the project resolved from the
 // current directory, and probes each candidate's port file for a live
@@ -71,14 +131,25 @@ func readKnownProjects() []string {
 func InstancesCommand() SubCommand {
 	return SubCommand{
 		Name:      "instances",
-		Synopsis:  "list all running pipeline instances (known projects + cwd project)",
+		Synopsis:  "list all running pipeline instances (known projects + cwd project) [--all] [--prune]",
 		NoRuntime: true,
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe instances")
 			all := fs.Bool("all", false, "also show stale instances (heartbeat older than 30s)")
+			prune := fs.Bool("prune", false, "remove dead entries from the registry (port unreadable/corrupt, or unreachable+stale) before listing")
 			attachShared(fs, rt.Opts)
 			if _, err := parseArgs(fs, args); err != nil {
 				return nil, usageErr("instances: " + err.Error())
+			}
+
+			now := time.Now()
+			var pruned []map[string]string
+			if *prune {
+				removed, err := pruneKnownProjects(now)
+				if err != nil {
+					return nil, protocol.AsUpipeError(err)
+				}
+				pruned = removed
 			}
 
 			// Candidate roots: registry entries + cwd-resolved project (a
@@ -94,7 +165,6 @@ func InstancesCommand() SubCommand {
 				}
 			}
 
-			now := time.Now()
 			type instance struct {
 				Project     string `json:"project"`
 				ProjectName string `json:"projectName"`
@@ -149,6 +219,10 @@ func InstancesCommand() SubCommand {
 				"instances": found,
 				"count":     len(found),
 				"registry":  knownProjectsFile(),
+			}
+			if *prune {
+				result["pruned"] = pruned
+				result["prunedCount"] = len(pruned)
 			}
 			if len(found) == 0 {
 				result["hint"] = "no live instances. If a project is missing from the list, run any upipe command inside it once (or pkg-install it) so it gets registered."

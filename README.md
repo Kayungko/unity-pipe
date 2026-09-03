@@ -186,8 +186,11 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 | `test [--mode] [--filter] [--no-wait]` | `run_tests` 异步 + `test_status` 轮询 |
 | `audit [--no-wait]` | Project Auditor 扫描 + 轮询 |
 | `job <id>` / `job-cancel <id>` / `progress` | 分离式 job 模式与进度 |
-| `pkg-status` / `pkg-install` | 适配包版本查询 / diff 计划安装（P4 只读目标拒绝） |
+| `pkg-status` / `pkg-install [--prune]` | 适配包版本查询 / diff 计划安装（P4 只读目标拒绝；`removed`=不在 tgz 里的残留文件，默认只报告不删，`--prune` 才实际删除） |
 | `plugin install` | 安装 harness 技能到双 harness |
+| `plugin-uninstall` | 对称卸载：技能目录移入 backup（不硬删）；`--remove-rules` 额外剥离 CLAUDE.md/AGENTS.md 里的管理块 |
+| `instances [--all] [--prune]` | 列出本机已知的运行实例；`--prune` 清理登记表里已失效的工程路径 |
+| `version` | CLI 版本 + git commit + 构建时间 + vendored 适配包版本 |
 
 未封装的服务端命令一律走 `exec` 直通——这正是薄客户端契约：**子命令只封装等待策略，其余零改动跟进**（完整退出码表与信封格式见 [架构设计](docs/ARCHITECTURE.md)）。
 
@@ -213,8 +216,17 @@ co-use 白名单机制、序列化资产红线、MCP 8080 契约均维持既有�
 ```powershell
 go build ./...      # 构建
 go vet ./...        # 静态检查
+gofmt -l .           # 格式检查（CI 门禁；非空输出即 fail）
 go test ./...       # 协议单元 + httptest mock 端到端 + 分层 lint
 ```
+
+带版本信息的发版构建（`upipe version` 会回显）：
+
+```powershell
+go build -ldflags "-X github.com/Kayungko/unity-pipe/internal/commands.Version=v0.1.12 -X github.com/Kayungko/unity-pipe/internal/commands.Commit=$(git rev-parse --short HEAD) -X github.com/Kayungko/unity-pipe/internal/commands.BuildDate=$(Get-Date -AsUTC -Format o)" -o dist/upipe.exe ./cmd/upipe
+```
+
+**正式发版走 CI 自动化，不需要手敲上面的命令**：推 `vX.Y.Z` 形式的 tag 触发 `.github/workflows/release.yml`——先跑一遍 build/vet/test/gofmt 门禁，再交叉编译 windows/linux/darwin(amd64+arm64) 五份二进制（`-ldflags` 自动注入真实 commit/构建时间）、打包适配包 tgz、发布到对应 tag 的 GitHub Release（各产物附 `.sha256`）。本地手敲的命令仅用于开发调试或该 workflow 不可用时的应急发版。
 
 Go 工具链 ≥ 1.23；无 CGO、无第三方依赖、无生成代码。
 

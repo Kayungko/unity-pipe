@@ -85,7 +85,7 @@ const trimmedAsmdef = `{
 type stageManifest struct {
 	Project     string   `json:"project"`
 	Copied      []string `json:"copied"`
-	Wrote       []string `json:"wrote"` // generated files (asmdef etc.)
+	Wrote       []string `json:"wrote"`                // generated files (asmdef etc.)
 	ManifestHad string   `json:"manifestHadTestables"` // "" = had none
 }
 

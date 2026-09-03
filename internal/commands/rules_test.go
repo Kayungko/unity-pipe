@@ -181,3 +181,103 @@ func TestPreserveWhitelist(t *testing.T) {
 		t.Fatalf("render should be unchanged without old block: %q", got)
 	}
 }
+
+// removeRulesDoc is the inverse of applyRulesDoc; these tests lock its
+// contract across every state applyRulesDoc's own lifecycle test exercises.
+func TestRemoveRulesDocLifecycle(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Document does not exist -> "absent", no error, nothing written.
+	doc := filepath.Join(dir, "ABSENT.md")
+	status, backup, err := removeRulesDoc(doc, false)
+	if err != nil || status != "absent" || backup != "" {
+		t.Fatalf("absent: status=%q backup=%q err=%v", status, backup, err)
+	}
+
+	// 2. Document exists but was never touched by upipe -> "no-managed-block".
+	doc2 := filepath.Join(dir, "UNMANAGED.md")
+	if err := os.WriteFile(doc2, []byte("hand-written content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	status, backup, err = removeRulesDoc(doc2, false)
+	if err != nil || status != "no-managed-block" || backup != "" {
+		t.Fatalf("unmanaged: status=%q backup=%q err=%v", status, backup, err)
+	}
+	after, _ := os.ReadFile(doc2)
+	if string(after) != "hand-written content" {
+		t.Fatal("no-managed-block path must not touch the document")
+	}
+
+	// 3. Document created purely to hold the block (applyRulesDoc "created"
+	// path) -> stripping leaves it empty, so the file is deleted entirely.
+	doc3 := filepath.Join(dir, "CREATED.md")
+	if _, _, err := applyRulesDoc(doc3, "## 13. 规则", false); err != nil {
+		t.Fatal(err)
+	}
+	status, backup, err = removeRulesDoc(doc3, false)
+	if err != nil || status != "removed-file-deleted" || backup == "" {
+		t.Fatalf("created-then-removed: status=%q backup=%q err=%v", status, backup, err)
+	}
+	if _, serr := os.Stat(doc3); !os.IsNotExist(serr) {
+		t.Fatal("emptied document should have been deleted")
+	}
+	bak, _ := os.ReadFile(filepath.Join(dir, backup))
+	if !strings.Contains(string(bak), ruleBeginMarker) {
+		t.Fatal("backup should preserve the pre-removal content")
+	}
+
+	// 4. Document with surrounding user content -> block stripped, rest kept.
+	doc4 := filepath.Join(dir, "MIXED.md")
+	if err := os.WriteFile(doc4, []byte("existing content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := applyRulesDoc(doc4, "## 13. 规则", false); err != nil {
+		t.Fatal(err)
+	}
+	status, backup, err = removeRulesDoc(doc4, false)
+	if err != nil || status != "removed" || backup == "" {
+		t.Fatalf("mixed: status=%q backup=%q err=%v", status, backup, err)
+	}
+	out, _ := os.ReadFile(doc4)
+	if strings.Contains(string(out), ruleBeginMarker) {
+		t.Fatal("managed block should have been stripped")
+	}
+	if !strings.Contains(string(out), "existing content") {
+		t.Fatal("user content around the block should survive")
+	}
+
+	// 5. Dry-run never writes, for every state.
+	doc5 := filepath.Join(dir, "DRYRUN.md")
+	if _, _, err := applyRulesDoc(doc5, "## 13. 规则", false); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(doc5)
+	status, backup, err = removeRulesDoc(doc5, true)
+	if err != nil || status != "dry-run(remove)" || backup != "" {
+		t.Fatalf("dry-run remove: status=%q backup=%q err=%v", status, backup, err)
+	}
+	afterDry, _ := os.ReadFile(doc5)
+	if string(before) != string(afterDry) {
+		t.Fatal("dry-run must not mutate the document")
+	}
+}
+
+// TestReadBlockLines locks the thin readManagedBlock->lines wrapper used by
+// upgradeRulesDoc to diff customizations: absent block -> nil, present block
+// -> its lines.
+func TestReadBlockLines(t *testing.T) {
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "CLAUDE.md")
+
+	if got := readBlockLines(doc); got != nil {
+		t.Fatalf("missing document should yield nil lines, got %v", got)
+	}
+
+	if _, _, err := applyRulesDoc(doc, "line one\nline two", false); err != nil {
+		t.Fatal(err)
+	}
+	got := readBlockLines(doc)
+	if len(got) != 2 || got[0] != "line one" || got[1] != "line two" {
+		t.Fatalf("unexpected block lines: %v", got)
+	}
+}
