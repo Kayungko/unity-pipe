@@ -221,14 +221,14 @@ func TestFindRepoRootWalksUpToHarnessSkills(t *testing.T) {
 	}
 	gotAbs, _ := filepath.Abs(got)
 	repoAbs, _ := filepath.Abs(repo)
-	// os.Getwd returns the symlink-resolved path (macOS temp dirs live
-	// under /var, which is a symlink to /private/var), so the expected
-	// value must be resolved the same way or the compare fails on macOS.
-	if resolved, rerr := filepath.EvalSymlinks(repoAbs); rerr == nil {
-		repoAbs = resolved
-	}
-	if !strings.EqualFold(gotAbs, repoAbs) {
-		t.Fatalf("got %q, want %q", gotAbs, repoAbs)
+	// Compare by filesystem identity, not string equality: os.Getwd may
+	// return a differently-spelled path than t.TempDir did — symlink-
+	// resolved on macOS (/var -> /private/var), 8.3-short-named on
+	// Windows runners (C:\Users\RUNNER~1 for runneradmin).
+	gi, giErr := os.Stat(gotAbs)
+	ri, riErr := os.Stat(repoAbs)
+	if giErr != nil || riErr != nil || !os.SameFile(gi, ri) {
+		t.Fatalf("got %q, want %q (same dir)", gotAbs, repoAbs)
 	}
 }
 

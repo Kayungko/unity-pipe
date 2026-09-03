@@ -26,7 +26,7 @@
 - **`upipe plugin uninstall`（带空格）无法使用**：`PluginCommand` 的 flag 解析器只认字面量 `install`，遇到 `uninstall` 直接报 `unexpected argument uninstall` 退出，而带短横线的 `plugin-uninstall` 一直可用——两种拼法行为不对称。现在 `PluginCommand.Run` 在解析任何 flag 之前先检查 `args[0] == "uninstall"`，命中就转发给 `PluginUninstallCommand().Run`，行为与 `plugin-uninstall` 完全一致。Synopsis 同步补上 `uninstall` 子命令形态。回归：`TestPluginCommandForwardsUninstall`。
 - **CHANGELOG.md 里 `## [0.1.11] - 2026-09-02` 标题在上一轮插入 `[Unreleased]` 段落时被误删**：`git diff` 显示该行被直接替换成了 `## [Unreleased]`，导致 0.1.11 原有的 `### Added`/`### Fixed` 内容失去自己的版本标题、悄悄并入 Unreleased 段落下。现已补回该标题，核对 tag（`v0.1.11` 已存在于 `origin`，指向 `19e86cf`，对应的 GitHub Release 也已发布）与 CHANGELOG 内容一致。
 - **`internal/commands/version.go` 过时的示例版本号注释**：doc comment 里 `-ldflags -X ...Version=v0.1.4` 的示例还停在多个版本以前，随本次发版更新为 `v0.1.12`。
-- **macOS CI 首跑暴露两处测试路径比较缺陷**：`os.Getwd` 返回符号链接解析后的真实路径，而 macOS 临时目录 `/var/folders` 实为 `/private/var` 符号链接——`TestFindRepoRootWalksUpToHarnessSkills` / `TestResolveProjectPathFindsFromCwd` 的期望值未做同样的解析归一，字符串比较在 macos-latest 上必失败（生产代码行为正确，纯测试期望问题）。期望值改经 `filepath.EvalSymlinks` 归一。
+- **macOS/Windows CI 首跑暴露两处测试路径比较缺陷**：`os.Getwd` 返回的路径拼写可能与 `t.TempDir()` 不同——macOS 上是符号链接解析（`/var` → `/private/var`），Windows runner 上是 8.3 短名（`C:\Users\RUNNER~1` vs `runneradmin`；本地用户名短无别名故从未暴露）——`TestFindRepoRootWalksUpToHarnessSkills` / `TestResolveProjectPathFindsFromCwd` 的字符串比较在对应平台必失败（生产代码行为正确，纯测试断言问题）。改用 `os.SameFile` 按文件系统同一性断言，三平台免疫。
 - **`cmd/upipe` 从未入库**（发版工作流首跑暴露）：`.gitignore` 的裸 `upipe` 模式在任意层级匹配同名目录，自首个提交起就把 `cmd/upipe` 源码树整个屏蔽——本地磁盘有文件所以构建正常，fresh clone 却没有 main 包。模式改为根锚定（`/upipe`、`/upipe-*`），`cmd/upipe/main.go` 入库。
 
 ## [0.1.11] - 2026-09-02

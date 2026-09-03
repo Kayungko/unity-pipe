@@ -3,7 +3,6 @@ package commands
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -100,15 +99,15 @@ func TestResolveProjectPathFindsFromCwd(t *testing.T) {
 		t.Fatalf("ResolveProjectPath: %v", err)
 	}
 	rootAbs, _ := filepath.Abs(root)
-	// os.Getwd returns the symlink-resolved path (macOS temp dirs live
-	// under /var, which is a symlink to /private/var), so the expected
-	// value must be resolved the same way or the compare fails on macOS.
-	if resolved, rerr := filepath.EvalSymlinks(rootAbs); rerr == nil {
-		rootAbs = resolved
-	}
 	gotAbs, _ := filepath.Abs(got)
-	if !strings.EqualFold(gotAbs, rootAbs) {
-		t.Fatalf("got %q, want %q", gotAbs, rootAbs)
+	// Compare by filesystem identity, not string equality: os.Getwd may
+	// return a differently-spelled path than t.TempDir did — symlink-
+	// resolved on macOS (/var -> /private/var), 8.3-short-named on
+	// Windows runners (C:\Users\RUNNER~1 for runneradmin).
+	gi, giErr := os.Stat(gotAbs)
+	ri, riErr := os.Stat(rootAbs)
+	if giErr != nil || riErr != nil || !os.SameFile(gi, ri) {
+		t.Fatalf("got %q, want %q (same dir)", gotAbs, rootAbs)
 	}
 }
 
