@@ -100,6 +100,12 @@ func TestResolveProjectPathFindsFromCwd(t *testing.T) {
 		t.Fatalf("ResolveProjectPath: %v", err)
 	}
 	rootAbs, _ := filepath.Abs(root)
+	// os.Getwd returns the symlink-resolved path (macOS temp dirs live
+	// under /var, which is a symlink to /private/var), so the expected
+	// value must be resolved the same way or the compare fails on macOS.
+	if resolved, rerr := filepath.EvalSymlinks(rootAbs); rerr == nil {
+		rootAbs = resolved
+	}
 	gotAbs, _ := filepath.Abs(got)
 	if !strings.EqualFold(gotAbs, rootAbs) {
 		t.Fatalf("got %q, want %q", gotAbs, rootAbs)
