@@ -4,7 +4,7 @@
 
 | Harness | 全局文档 | 段落 | 模板 |
 |---|---|---|---|
-| AI Mana / Claude Code | `~/.claude/CLAUDE.md` | §13 Unity CLI / Pipeline 操作规范 | [`claude.md`](claude.md) |
+| AI Mana / Claude Code | `~/.claude/CLAUDE.md` | 6.4 Unity CLI / Pipeline 操作规范 | [`claude.md`](claude.md) |
 | Codex | `~/.codex/AGENTS.md` | 6.4 Unity CLI / Pipeline 操作规范 | [`agents.md`](agents.md) |
 
 ## 一键应用（推荐）

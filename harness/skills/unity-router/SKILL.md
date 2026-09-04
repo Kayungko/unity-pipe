@@ -10,7 +10,7 @@ description: Unity 编辑器操作路由与信道选择。操作Unity/改 prefab
 
 ## 0. 工程适用性检查（先于一切）
 
-co-use 由全局路径白名单触发（定义在 CLAUDE.md §13 / AGENTS.md 6.4），不读、不要求、不创建工程内声明文件：
+co-use 由全局路径白名单触发（定义在 CLAUDE.md 6.4 / AGENTS.md 6.4），不读、不要求、不创建工程内声明文件：
 
 - 当前工程路径命中白名单（如 `E:\P4\SGAME_*`）→ 进入 §1 以下路由。
 - 未命中 → **仅 pipeline**，不使用 Unity MCP，本技能其余各节不适用。

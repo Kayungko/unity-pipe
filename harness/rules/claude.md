@@ -1,9 +1,9 @@
-# CLAUDE.md §13 模板 — Unity CLI / Pipeline 操作规范
+# CLAUDE.md 6.4 模板 — Unity CLI / Pipeline 操作规范
 
-> 贴入 `~/.claude/CLAUDE.md`，作为其 §13（或新增章节）。替换 `{{...}}` 占位符（见本目录 [README.md](README.md)）。
+> 贴入 `~/.claude/CLAUDE.md`，作为其 6.4（或新增章节）。替换 `{{...}}` 占位符（见本目录 [README.md](README.md)）。
 
 ```markdown
-## 13. Unity CLI / Pipeline 操作规范
+### 6.4 Unity CLI / Pipeline 操作规范
 
 进行 Unity 开发时，默认通过自维护的 `upipe` CLI（github.com/Kayungko/unity-pipe 私有仓，本地 `{{UNITY_PIPE_REPO}}`，二进制在 `{{UPIPE_BIN}}`）驱动编辑器内 `com.unity.pipeline` 包，使用 `unity-pipeline` 技能。官方 `unity` CLI 若在 PATH 可兼容使用，但不是依赖。
 

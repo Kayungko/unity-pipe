@@ -22,8 +22,8 @@
 - [ ] 监听为通配绑定 + 应用层 loopback 检查（非 socket 级 loopback-only）。
 - [ ] Origin 拒绝测试被 `[Ignore("6.0 Issues")]` 长期禁用——安全控制无回归覆盖。
 - [ ] cli 与 commands 两层各有一份 flag 重排近似实现（reorderForFlags vs parseArgs）——双份维护漂移风险。
-- [ ] README 多处仍引用 0.5.0-2022.1 与"9 文件适配"。
-- [ ] CHANGELOG 底部 compare 链接停在 v0.1.5（缺 0.1.6/0.1.7）。
+- [ ] ~~README 多处仍引用 0.5.0-2022.1 与"9 文件适配"~~：已随 0.1.11 的 0.6 文档同步清理（2026-09-04 grep 复核零残留；ARCHITECTURE.md 残留的"5 处改动 × 9 文件"描述同轮修正为双层补丁表述）。
+- [ ] ~~CHANGELOG 底部 compare 链接停在 v0.1.5（缺 0.1.6/0.1.7）~~：已补齐至 v0.1.12（2026-09-04 复核）。
 - [ ] Documentation~ 全目录零覆盖 ArbitraryKeys 与 token 接缝剥离语义。
 - [ ] pkg-install 剔除集合与 package/build 不一致（Tests.meta/.signature/.attestation 会写入非本仓构建的 tgz）。
 - [ ] upipe.exe 与包版本间无协议兼容协商（PROTOCOL.md 无 enforced 契约）。

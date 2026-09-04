@@ -105,11 +105,11 @@ upipe pkg-install --project-path <project> --source <tgz路径> --dry-run   # �
 upipe 升级只需要替换 exe——不用 clone 仓库，一条 `gh release download` 搞定（前提：目标机器 `gh auth login` 过，仓库授权同一凭据即可，无需单独配 git clone 权限）：
 
 ```powershell
-gh release download v0.1.11 --repo Kayungko/unity-pipe --pattern upipe.exe --pattern upipe.exe.sha256 --output <你放 upipe.exe 的目录> --clobber
+gh release download v0.1.12 --repo Kayungko/unity-pipe --pattern upipe.exe --pattern upipe.exe.sha256 --output <你放 upipe.exe 的目录> --clobber
 upipe version   # 确认版本号已更新
 ```
 
-- 回滚同理：把 `v0.1.11` 换成任意历史 tag 重新下载即可（Release 保留全部历史版本）；
+- 回滚同理：把 `v0.1.12` 换成任意历史 tag 重新下载即可（Release 保留全部历史版本）；
 - 下载后可校验：`Get-FileHash upipe.exe -Algorithm SHA256` 与 `upipe.exe.sha256` 内容比对；
 - 适配包 tgz 同一个 Release 页面（`--pattern com.unity.pipeline-*.tgz`），装法见上面的 ②；
 - 规则模板有更新的机器，顺手跑 `upipe plugin install --upgrade-rules`（见 harness/rules/README.md）。
@@ -245,7 +245,7 @@ unity-pipe/
 │   ├── skills/         技能源（三技能）
 │   └── rules/          全局规则模板（claude.md / agents.md + 变量表）
 ├── assets/             logo 与配图
-├── docs/               ARCHITECTURE.md · PROTOCOL.md · MIGRATION.md
+├── docs/               ARCHITECTURE.md · PROTOCOL.md · MIGRATION.md · RECIPES.md · BACKLOG.md
 └── layering_test.go    分层依赖 lint（强制执行）
 ```
 
@@ -254,6 +254,8 @@ unity-pipe/
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — 架构设计：为什么自维护、客户端分层、域重载跟随、退出码契约
 - **[docs/PROTOCOL.md](docs/PROTOCOL.md)** — Pipeline HTTP 协议实测参考（端点、端口文件、域重载行为、job 模式、双重编码陷阱）
 - **[docs/MIGRATION.md](docs/MIGRATION.md)** — 从 rocwood / 官方 CLI 迁移；后续编辑器管理能力迁移路线
+- **[docs/RECIPES.md](docs/RECIPES.md)** — Agent 实测配方：回包判据、三种守门模式、eval 禁忌、大规模普查策略（只收实测判据，未验证项单列）
+- **[docs/BACKLOG.md](docs/BACKLOG.md)** — 深度评审沉淀的非阻塞项清单，完成一项划掉一项
 - **[package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)** — Unity 2022 适配全记录
 - **[harness/rules/README.md](harness/rules/README.md)** — 规则模板使用说明与变量对照表
 

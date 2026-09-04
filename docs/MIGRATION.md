@@ -62,7 +62,7 @@ upipe plugin install          # 双侧安装（~/.claude/skills + ~/.codex/skill
 
 - `unity-pipeline`：全部命令示例换 upipe 语法，新增退出码表（§0）与 HTTP 直连应急回退（§6）
 - `unity-router` / `unity-mcp-bridge`：仅探活与 editor_status 命令替换；co-use 白名单、MCP 契约不变
-- 全局规范（CLAUDE.md §13 / AGENTS.md 6.4 / UNITY-GUIDE.md）已同步切换 upipe 为默认入口
+- 全局规范（CLAUDE.md 6.4 / AGENTS.md 6.4 / UNITY-GUIDE.md）已同步切换 upipe 为默认入口
 - 规则文本的仓库镜像见 `harness/rules/`（claude.md / agents.md 模板 + README 变量表）——新机器部署时贴入对应全局文档即完成整套安装；两侧规则须手动保持镜像
 
 ## 4. 未来：编辑器管理能力迁移路线（M6+ 规划）

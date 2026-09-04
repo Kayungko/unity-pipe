@@ -75,5 +75,5 @@ flowchart LR
 
 - [PROTOCOL.md](PROTOCOL.md) — Pipeline HTTP 协议实测参考（端点、端口文件、域重载行为、job 模式、双重编码陷阱）
 - [MIGRATION.md](MIGRATION.md) — 从 rocwood / 官方 CLI 迁移；后续编辑器管理能力迁移路线
-- [../package/ADAPTATION-2022.md](../package/ADAPTATION-2022.md) — Unity 2022 适配全记录（5 处改动 × 9 文件）
+- [../package/ADAPTATION-2022.md](../package/ADAPTATION-2022.md) — Unity 2022 适配全记录（双层补丁：兼容层 + 演进层）
 - [CHANGELOG](../CHANGELOG.md) — 版本更新日志

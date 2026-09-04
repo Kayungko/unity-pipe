@@ -5,7 +5,7 @@ description: Unity MCP 执行契约。使用工程登记的 MCP 业务工具/rea
 
 # Unity MCP Bridge（执行契约）
 
-仅当当前工程命中全局路径白名单（co-use，见 CLAUDE.md §13 / AGENTS.md 6.4，如 `E:\P4\SGAME_*`）时适用；不依赖也不要求工程内声明文件。
+仅当当前工程命中全局路径白名单（co-use，见 CLAUDE.md 6.4 / AGENTS.md 6.4，如 `E:\P4\SGAME_*`）时适用；不依赖也不要求工程内声明文件。
 
 ## 1. 前置与启动
 

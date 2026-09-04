@@ -7,10 +7,10 @@ MIT License（见 LICENSE），Copyright (c) 2026 Kayungko。
 ## `package/` 目录 — com.unity.pipeline
 
 `package/upstream/` 与 `package/com.unity.pipeline/` 的内容来自 **Unity Technologies** 的
-`com.unity.pipeline` 0.5.0-exp.1（UPM 包，内部 git revision `17df0ac8d6533a8c22830c89dc85a24c01f30ade`），
+`com.unity.pipeline` 0.6.0-exp.1（UPM 包，内部 git revision `27af91a943315a5702ac7679241399b649d6a20d`），
 其版权与许可归 Unity Technologies 所有，**不适用本仓库 MIT 许可**。
 
-本仓库对其的修改（Unity 2022 适配，见 package/ADAPTATION-2022.md）仅限私有内部使用：
+本仓库对其的修改（Unity 2022 兼容层 + 本仓演进层，见 package/ADAPTATION-2022.md）仅限私有内部使用：
 
 - **本仓库必须保持 private，禁止转为 public**（再分发受 Unity 许可条款约束）。
 - `dist/*.tgz` 仅通过 GitHub 私有 Release 分发给有权限的成员。
