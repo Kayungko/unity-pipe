@@ -18,16 +18,17 @@ import (
 // mockEditor implements enough of the pipeline HTTP API to exercise the CLI
 // end-to-end: bearer auth, status, editor_status, commands and exec.
 type mockEditor struct {
-	srv     *httptest.Server
-	project string
-	token   string
+	srv        *httptest.Server
+	project    string
+	token      string
+	statusBody string
 	// execHandler lets individual tests override /api/exec behavior.
 	execHandler func(command string, params map[string]any, job bool) (int, string)
 }
 
 func newMockEditor(t *testing.T) *mockEditor {
 	t.Helper()
-	m := &mockEditor{token: "test-token"}
+	m := &mockEditor{token: "test-token", statusBody: `{"status":"running","version":"mock"}`}
 	dir := t.TempDir()
 	m.project = filepath.Join(dir, "FakeProj")
 	if err := os.MkdirAll(filepath.Join(m.project, "Library", "Pipeline"), 0o755); err != nil {
@@ -38,10 +39,14 @@ func newMockEditor(t *testing.T) *mockEditor {
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		m.authed(w, r)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"running","version":"mock"}`))
+		_, _ = w.Write([]byte(m.statusBody))
 	})
 	mux.HandleFunc("/api/editor_status", func(w http.ResponseWriter, r *http.Request) {
 		m.authed(w, r)
+		if strings.Contains(m.statusBody, "blocked_by_dialog") {
+			http.Error(w, "editor main thread is blocked", http.StatusServiceUnavailable)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"success":true,"command":"editor_status","result":{"state":"ready"}}`))
 	})
@@ -130,6 +135,21 @@ func TestStatusEndToEnd(t *testing.T) {
 	}
 	if _, has := ins["evalToken"]; has {
 		t.Fatal("evalToken must never appear in output")
+	}
+}
+
+func TestStatusReportsModalWithoutMainThread(t *testing.T) {
+	m := newMockEditor(t)
+	m.statusBody = `{"status":"blocked_by_dialog","dialog":{"title":"Fixture"}}`
+	code, env := runCLI(t, "--project-path", m.project, "--json", "status")
+	if code != 0 || env["ok"] != true {
+		t.Fatalf("exit=%d env=%v", code, env)
+	}
+	data := env["data"].(map[string]any)
+	server := data["server"].(map[string]any)
+	dialog := server["dialog"].(map[string]any)
+	if server["status"] != "blocked_by_dialog" || dialog["title"] != "Fixture" || data["editor"] != nil {
+		t.Fatalf("unexpected modal status: %v", data)
 	}
 }
 

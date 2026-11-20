@@ -1,7 +1,10 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Unity.Pipeline.Commands;
+using Unity.Pipeline.Console;
+using Unity.Pipeline.Editor.Console;
 
 namespace Unity.Pipeline.Editor.Commands.Observability
 {
@@ -45,6 +48,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
         public static object ClearConsole()
         {
             ConsoleLogBuffer.Clear();
+            ConsoleLogCapture.Buffer.Clear();
 
             // Best-effort: also clear Unity's own console window. UnityEditor.LogEntries is internal,
             // so reach it via reflection and swallow any failure (API is not part of the public contract).
@@ -61,6 +65,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 // Ignore — clearing the Editor console is auxiliary; the buffer is already cleared.
             }
 
+            EditorConsoleGroundTruth.ResampleAfterClear();
             return new { cleared = true };
         }
 
@@ -87,3 +92,4 @@ namespace Unity.Pipeline.Editor.Commands.Observability
         }
     }
 }
+#endif

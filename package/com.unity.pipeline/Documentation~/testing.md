@@ -1,5 +1,7 @@
 # Tests architecture
 
+Poll an asynchronous test run with `upipe exec test_status`. Use `--set detail=failures` for failed test details or `--set detail=summary` for counts only. The default `full` returns every result. Use `upipe test` to propagate a failed run to the process exit code.
+
 How the package's tests exercise commands. There are two complementary styles — **ViaClient** (over real HTTP, end-to-end) and **CommandDirect** (calling the static command method straight) — backed by a small set of shared test helpers.
 
 ## Two test styles

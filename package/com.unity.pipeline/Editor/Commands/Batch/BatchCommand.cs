@@ -138,9 +138,11 @@ namespace Unity.Pipeline.Editor.Commands.Batch
             // Assets & files (AssetDatabase ops / direct file IO).
             "create_asset", "import_asset", "move_asset", "copy_asset", "rename_asset", "delete_asset",
             "create_folder", "set_import_settings", "write_text_file", "create_script",
+            "capture_editor_window", "capture_editor_element", "capture_asset_preview",
+            "profiler_record", "profiler_cancel", "profiler_analyze", "memory_snapshot",
             // Prefab ASSET writes (scene-side prefab ops — instantiate/unpack/revert overrides — are
             // Undo-tracked and stay batchable).
-            "create_prefab", "create_prefab_variant", "apply_prefab_overrides", "save_prefab_contents",
+            "create_prefab", "create_prefab_variant", "apply_prefab_overrides", "save_prefab_contents", "set_prefab_serialized_field",
             // Scene persistence and Build Settings scene list.
             "save_scene", "save_all", "add_scene_to_build", "remove_scene_from_build", "set_build_settings",
             // Project settings (their own descriptions say "Not undoable via Ctrl+Z").

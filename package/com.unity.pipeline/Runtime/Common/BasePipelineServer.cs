@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -276,6 +277,9 @@ namespace Unity.Pipeline
             if (m_IsRunning)
                 return;
 
+            if (port != 0 && GetListeningPorts().Contains(port))
+                throw new InvalidOperationException($"Port {port} is already listening.");
+
             m_Port = port == 0 ? FindAvailablePort() : port;
             PortAutoAssigned = port == 0;
 
@@ -329,18 +333,13 @@ namespace Unity.Pipeline
         }
 
         /// <summary>
-        /// Bind a wildcard-host prefix so the listener accepts any Host header ("127.0.0.1",
-        /// "localhost", "::1") no matter how a client — or its DNS resolver — resolves the name.
-        /// This is required because Mono's HttpListener binds a hostname prefix to a single resolved
-        /// address family and then matches the request's Host <em>literally</em> per prefix: an
-        /// explicit "http://127.0.0.1/" prefix rejects "Host: localhost" (and vice-versa) with a
-        /// 400. A wildcard sidesteps that. The wildcard binds all interfaces at the socket level, so
-        /// access is confined to the local machine by the loopback check in
-        /// <see cref="ProcessRequest"/> (plus bearer-token auth).
+        /// Use literal loopback prefixes so remote interfaces are not served.
+        /// Retain localhost for older local clients that send that Host header.
         /// </summary>
         private static void AddLoopbackPrefixes(HttpListener listener, int port)
         {
-            listener.Prefixes.Add($"http://+:{port}/");
+            listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+            listener.Prefixes.Add($"http://localhost:{port}/");
         }
 
         /// <summary>
@@ -516,10 +515,7 @@ namespace Unity.Pipeline
 
             try
             {
-                // Confine access to the local machine. The listener binds a wildcard host (see
-                // AddLoopbackPrefixes) so it accepts any Host header, which also means it accepts
-                // connections on non-loopback interfaces — reject anything that isn't loopback
-                // before doing any other work. Bearer-token auth is still enforced below.
+                // Retain peer validation as well as the explicit loopback prefixes.
                 var remoteAddress = request.RemoteEndPoint?.Address;
                 if (remoteAddress == null || !IPAddress.IsLoopback(remoteAddress))
                 {
@@ -579,6 +575,8 @@ namespace Unity.Pipeline
 
                 // Route to appropriate endpoint
                 var path = request.Url.AbsolutePath.ToLowerInvariant();
+                if (path == "/api/status" || path == "/api/editor_status" || path == "/api/dialog" || path == "/api/exec")
+                    RefreshDialogState();
 
                 switch (path)
                 {
@@ -1700,6 +1698,8 @@ namespace Unity.Pipeline
         /// modals are covered; OS file/folder pickers and any other dialog mechanism are not. A
         /// caller still needs a fallback signal (e.g. a command timeout) for the uncovered cases.
         /// </summary>
+        protected virtual void RefreshDialogState() { }
+
         private async Task HandleDialogRequest(HttpListenerResponse response)
         {
             try
@@ -2692,16 +2692,25 @@ namespace Unity.Pipeline
         private int FindAvailablePort()
         {
             var (basePort, maxPort) = GetPortRange();
+            var listening = GetListeningPorts();
 
             for (int port = basePort; port <= maxPort; port++)
             {
-                if (IsPortAvailable(port))
+                if (!listening.Contains(port) && IsPortAvailable(port))
                 {
                     return port;
                 }
             }
 
             throw new InvalidOperationException($"No available ports in range {basePort}-{maxPort}");
+        }
+
+        // Mono can bind 127.0.0.1 on top of an older wildcard listener.
+        // Do not share a port with an older Pipeline instance or another process.
+        private static HashSet<int> GetListeningPorts()
+        {
+            return new HashSet<int>(IPGlobalProperties.GetIPGlobalProperties()
+                .GetActiveTcpListeners().Select(endpoint => endpoint.Port));
         }
 
         /// <summary>

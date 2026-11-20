@@ -2,16 +2,17 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本：**0.6.0-2022.2**（适配 Unity 2022.3.23f1；隔离编译门见本轮 cowork 目录，未进 SGAME/P4）。
+本仓库 vendored 版本为 **0.6.0-2022.3**，适配 Unity 2022.3.23f1。回移功能取自官方 1.0.1，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
-## 补丁分层（upstream → vendored 的两类 diff，升级时处理策略不同）
+## 补丁分层
 
 | 层 | patch | 语义 | 上游升级时 |
 |---|---|---|---|
 | 兼容层 | `patches/0001-adapt-unity-2022.patch` | 纯 Unity 2022 API 兼容（package.json unity 版本、asmdef 去 InputSystem、PhysicsMaterial 别名、rawRenderQueue、GraphicsSettings、4 个 PluginImporter meta） | **须重放**到新树，冲突处审读 API 差异 |
 | 演进层 | `patches/0002-evolution.patch` | 本仓功能演进：token 接缝剥离 + ArbitraryKeys 豁免、prefab/场景命令族 confirm 守门、test_status 陈旧结果修复、BuildOptions U6 API 规避、包内 CHANGELOG/版本号、Tests 演进用例 | **须保留**——新树重放 0001 后应用本层；与本仓新演进冲突时以演进层为准合并 |
+| 回移层 | `patches/0003-editor-lifecycle.patch` 至 `patches/0006-profiler-and-release.patch` | Play Mode、等待、连接、Console、测试状态、截图、Prefab 字段和性能分析 | 按序重放并核对 Unity 2022 API 差异 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

@@ -202,8 +202,8 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.2`**：基于官方 `0.6.0-exp.1`（upstream revision `27af91a9`），适配 Unity 2022.3 + 本仓演进层（写面守门 / token 接缝剥离 / 演进层测试恢复，详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)）。0.6 新增 `batch`（事务性批量操作）/ `run_script`（文件式内存执行）/ `commandLine`+`argv` 直连 / 瘦信封 / Runtime Pipeline settings；IlInterpreter 树保留但 IL2CPP 热重载不作承诺
-- 版本命名策略：semver 预发布段 `"2022.1" > "exp.1"`，UPM 视 vendored 版本更高，**不会被 registry 误"升级"覆盖**
+- **`0.6.0-2022.3`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3，并回移了官方 1.0.1 的 Editor 生命周期、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）
 

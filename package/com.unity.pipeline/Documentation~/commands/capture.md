@@ -27,6 +27,7 @@ For visual verification, set `require_fresh_frame=true`. A cached or unverified 
 **Returns:** `CaptureResult`
 
 ### `capture_scene_view`
+The default `source=camera` renders the scene camera. Use `source=screen` for the drawn Scene View with gizmos and toolbars. Screen captures use the window's dimensions.
 Render the active Scene View to a PNG. Same result contract and parameter interactions as `capture_game_view`: inline base64, or path-only when `save_path` is set (opt back in with `include_inline_image=true`; `max_resolution` has no effect when `save_path` is set without it).
 
 | Parameter | Required | Default | Description |
@@ -39,17 +40,25 @@ Render the active Scene View to a PNG. Same result contract and parameter intera
 
 **Returns:** `CaptureResult`
 
+### `capture_editor_window`
+
+Read the pixels of an open window. Pass its title or type as `window`. The command restores the previously visible tab in the same dock area.
+
 ### `capture_editor_element`
-Capture a UI Toolkit VisualElement (by selector) from an EditorWindow to a PNG; returns path + base64.
+
+Crop the visible portion of a UI Toolkit element from a drawn Editor window. The window and element commands require a graphical Editor session.
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `window` | yes | `–` | EditorWindow type name (e.g. InspectorWindow) or window title to capture from. |
-| `selector` | yes | `–` | Element selector: '#name', '.class', a type name (e.g. Button), descendant (space) / child ('>') chains, optional pseudo-states (:checked,:hover,:focus,:active,:enabled,:disabled,:not(...)). |
-| `output` | no | `–` | Output PNG path (absolute, or relative to the project root). Defaults to a timestamped file under <project>/Temp/pipeline-screenshots/. |
+| `selector` | yes | `–` | `#name` or `.class`. |
+| `save_path` | no | `–` | Optional PNG path under the authoring root. |
 
-**Returns:** `CaptureElementResponse`
-**Notes:** `MainThreadRequired = true`. Unity 6000.7+ only.
+**Returns:** `CaptureResult`
+
+### `capture_asset_preview`
+
+Pass an imported asset reference as `asset` to capture its texture or Unity-generated preview. For previews generated asynchronously, retry after Unity loads the thumbnail. The standard `save_path`, `include_inline_image` and `max_resolution` arguments apply.
 
 ### `capture_runtime_element`
 Capture a UI Toolkit VisualElement (by selector) from a live runtime panel (UIDocument or PanelRenderer) to a PNG; returns path + base64.

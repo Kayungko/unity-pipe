@@ -1,14 +1,17 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using Newtonsoft.Json;
 using Unity.Pipeline.Commands;
 using Unity.Pipeline.Editor.Authoring;
+using Unity.Pipeline.Models;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.UIElements;
 using Object = UnityEngine.Object;
 
 namespace Unity.Pipeline.Editor.Commands.Capture
@@ -84,24 +87,366 @@ namespace Unity.Pipeline.Editor.Commands.Capture
             }
         }
 
-        [CliCommand("capture_scene_view", "Render the active Scene View to a PNG. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
+        [CliCommand("capture_scene_view", "Capture the active Scene View to PNG. Use source=screen for its displayed window with gizmos and toolbars. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
         public static CaptureResult CaptureSceneView(
             [CliArg("width", "Output width in px (default 1280; capped 4096).")] int width = 1280,
             [CliArg("height", "Output height in px (default 720; capped 4096).")] int height = 720,
             [CliArg("save_path", "Optional project-relative path to write the PNG (e.g. Screenshots/foo.png). When set, the result omits the inline base64 image unless include_inline_image=true.")] string savePath = null,
             [CliArg("include_inline_image", "Also return the image inline as base64 when save_path is set (default false: path-only result). Only meaningful together with save_path.")] bool includeInlineImage = false,
-            [CliArg("max_resolution", "Cap on the inline image's longest edge (e.g. 512). Only applies when an inline image is returned (no save_path, or save_path + include_inline_image=true); the save_path file keeps the requested resolution.")] int maxResolution = 0)
+            [CliArg("max_resolution", "Cap on the inline image's longest edge (e.g. 512). Only applies when an inline image is returned (no save_path, or save_path + include_inline_image=true); the save_path file keeps the requested resolution.")] int maxResolution = 0,
+            [CliArg("source", "camera (default) renders the scene camera; screen reads the displayed Scene View window.")] string source = "camera")
         {
-            GuardHasGpu();
+            var src = (source ?? "camera").Trim().ToLowerInvariant();
+            if (src != "camera" && src != "screen")
+                throw new ArgumentException("Use 'camera' or 'screen' as the source.");
+            if (src == "screen")
+                GuardWindowCapture();
+            else
+                GuardHasGpu();
 
             var sv = SceneView.lastActiveSceneView;
             if (sv == null || sv.camera == null)
                 throw new ArgumentException("No active Scene View to capture.");
 
+            if (src == "screen")
+                return CaptureWindow(sv, OpenWindows(), "sceneView:screen", savePath, includeInlineImage, maxResolution);
+
             var cam = sv.camera;
             return Capture((w, h) => EncodeCameraToPng(cam, w, h), "sceneView",
                 width, height, savePath, includeInlineImage, maxResolution);
         }
+
+        [CliCommand("capture_editor_window", "Capture the pixels of an open Editor window by type or title.", Tags = new[] { "capture" })]
+        public static CaptureResult CaptureEditorWindow(
+            [CliArg("window", "An open Editor window title or type.", Required = true)] string window,
+            [CliArg("save_path", "Optional project-relative PNG path.")] string savePath = null,
+            [CliArg("include_inline_image", "Also return the image inline when saving.")] bool includeInlineImage = false,
+            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0)
+        {
+            GuardWindowCapture();
+            var windows = OpenWindows();
+            var target = RequireWindow(windows, window);
+            return CaptureWindow(target, windows, $"window:{target.titleContent.text}", savePath, includeInlineImage, maxResolution);
+        }
+
+        [CliCommand("capture_editor_element", "Crop a visible UI Toolkit element from an open Editor window.", Tags = new[] { "capture", "ui" })]
+        public static CaptureResult CaptureEditorElement(
+            [CliArg("window", "An open Editor window title or type.", Required = true)] string window,
+            [CliArg("selector", "A UI Toolkit #name or .class selector.", Required = true)] string selector,
+            [CliArg("save_path", "Optional project-relative PNG path.")] string savePath = null,
+            [CliArg("include_inline_image", "Also return the image inline when saving.")] bool includeInlineImage = false,
+            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0)
+        {
+            GuardWindowCapture();
+            var windows = OpenWindows();
+            var target = RequireWindow(windows, window);
+            if (string.IsNullOrWhiteSpace(selector) || selector.Length < 2 || (selector[0] != '#' && selector[0] != '.'))
+                throw new ArgumentException("Use a #name or .class selector.");
+
+            var previousFront = windows.FirstOrDefault(w => w != target && IsFrontTab(w) && SameHost(w, target));
+            try
+            {
+                target.ShowTab();
+                RepaintImmediately(target);
+                var root = target.rootVisualElement;
+                var element = selector[0] == '#' ? root.Q(selector.Substring(1)) : root.Q(className: selector.Substring(1));
+                if (element == null || element.panel == null)
+                    throw new ArgumentException($"No attached element matches '{selector}'.");
+                var bounds = element.worldBound;
+                for (var parent = element; parent != null; parent = parent.parent)
+                {
+                    var style = parent.resolvedStyle;
+                    if (style.display == DisplayStyle.None || style.visibility != Visibility.Visible || style.opacity <= 0)
+                        throw new InvalidOperationException($"Element '{selector}' is hidden.");
+                    if (parent == root || parent is ScrollView || parent.style.overflow.value == Overflow.Hidden)
+                    {
+                        var clip = parent.worldBound;
+                        bounds = Rect.MinMaxRect(Mathf.Max(bounds.xMin, clip.xMin), Mathf.Max(bounds.yMin, clip.yMin),
+                            Mathf.Min(bounds.xMax, clip.xMax), Mathf.Min(bounds.yMax, clip.yMax));
+                    }
+                }
+
+                var scale = EditorGUIUtility.pixelsPerPoint;
+                var (pixelW, pixelH) = WindowPixelSize(target);
+                var left = Mathf.Clamp(Mathf.FloorToInt(bounds.xMin * scale), 0, pixelW);
+                var right = Mathf.Clamp(Mathf.CeilToInt(bounds.xMax * scale), 0, pixelW);
+                var top = Mathf.Clamp(Mathf.FloorToInt(bounds.yMin * scale), 0, pixelH);
+                var bottom = Mathf.Clamp(Mathf.CeilToInt(bounds.yMax * scale), 0, pixelH);
+                if (right <= left || bottom <= top)
+                    throw new InvalidOperationException($"Element '{selector}' has no visible pixels.");
+
+                var windowImage = RenderTexture.GetTemporary(pixelW, pixelH, 0, RenderTextureFormat.ARGB32);
+                try
+                {
+                    if (!GrabEditorWindow(target, windowImage))
+                        throw new InvalidOperationException($"Unable to read window '{window}'.");
+                    var crop = new Rect((float)left / pixelW, (float)(pixelH - bottom) / pixelH,
+                        (float)(right - left) / pixelW, (float)(bottom - top) / pixelH);
+                    return Capture((w, h) => EncodeTextureRegion(windowImage, crop, w, h),
+                        $"element:{target.titleContent.text}:{selector}", right - left, bottom - top, savePath, includeInlineImage, maxResolution);
+                }
+                finally
+                {
+                    RenderTexture.ReleaseTemporary(windowImage);
+                }
+            }
+            finally
+            {
+                if (previousFront != null)
+                    previousFront.ShowTab();
+            }
+        }
+
+        [CliCommand("capture_asset_preview", "Capture an imported texture or Unity-generated asset thumbnail to PNG.", Tags = new[] { "capture", "assets" })]
+        public static CaptureResult CaptureAssetPreview(
+            [CliArg("asset", "Asset reference by path, global ID or GUID.", Required = true)] ObjectRef asset,
+            [CliArg("save_path", "Optional project-relative PNG path.")] string savePath = null,
+            [CliArg("include_inline_image", "Also return the image inline when saving.")] bool includeInlineImage = false,
+            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0)
+        {
+            GuardHasGpu();
+            if (!ObjectResolver.TryResolve(asset, out var obj, out var error))
+                throw new ArgumentException(error);
+            if (!EditorUtility.IsPersistent(obj))
+                throw new ArgumentException("Expected an imported asset.");
+            var preview = obj as Texture2D ?? AssetPreview.GetAssetPreview(obj);
+            if (preview == null)
+                throw new InvalidOperationException("Unity has no rendered preview yet. Retry after the preview has loaded.");
+            var (width, height) = ClampToLongEdge(preview.width, preview.height, MaxDimension);
+            return Capture((w, h) => EncodeTextureRegion(preview, new Rect(0, 0, 1, 1), w, h),
+                $"asset:{AssetDatabase.GetAssetPath(obj)}", width, height, savePath, includeInlineImage, maxResolution);
+        }
+
+        private static byte[] EncodeTextureRegion(Texture source, Rect crop, int width, int height)
+        {
+            var target = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+            var previous = RenderTexture.active;
+            var image = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            try
+            {
+                Graphics.Blit(source, target, crop.size, crop.position);
+                RenderTexture.active = target;
+                image.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                image.Apply();
+                return image.EncodeToPNG();
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(target);
+                Object.DestroyImmediate(image);
+            }
+        }
+
+        private static EditorWindow[] OpenWindows() => Resources.FindObjectsOfTypeAll<EditorWindow>();
+
+        private static EditorWindow RequireWindow(EditorWindow[] windows, string window)
+        {
+            if (string.IsNullOrWhiteSpace(window))
+                throw new ArgumentException("An Editor window title or type is required.");
+            return FindEditorWindow(windows, window)
+                ?? throw new ArgumentException($"No open Editor window matches '{window}'.");
+        }
+
+        private static void GuardWindowCapture()
+        {
+            if (Application.isBatchMode)
+                throw new InvalidOperationException("Editor windows are not drawn in batch mode.");
+            GuardHasGpu();
+        }
+
+        /// <summary>
+        /// Capture <paramref name="target"/> as drawn, at its size in pixels. Only the visible tab of a
+        /// dock area has pixels: a background tab is brought to the front and drawn now, so its back
+        /// buffer holds the window when it is read, then the tab that was in front is put back.
+        /// <paramref name="windows"/> are the open windows, to find that tab.
+        /// </summary>
+        private static CaptureResult CaptureWindow(UnityEditor.EditorWindow target, IEnumerable<UnityEditor.EditorWindow> windows,
+            string source, string savePath, bool includeInlineImage, int maxResolution)
+        {
+            var previousFront = windows.FirstOrDefault(w => w != target && IsFrontTab(w) && SameHost(w, target));
+            target.ShowTab();
+            RepaintImmediately(target);
+            try
+            {
+                // The window is grabbed at its full size; only the image is capped, keeping its aspect.
+                var (pixelW, pixelH) = WindowPixelSize(target);
+                var (outW, outH) = ClampToLongEdge(pixelW, pixelH, MaxDimension);
+                return Capture((w, h) => EncodeEditorWindowToPng(target, w, h), source,
+                    outW, outH, savePath, includeInlineImage, maxResolution);
+            }
+            finally
+            {
+                if (previousFront != null)
+                    previousFront.ShowTab();
+            }
+        }
+
+        // The view hosting the window: the dock area for a docked tab. Null when the window is closed.
+        private static Object HostView(UnityEditor.EditorWindow window)
+            => typeof(UnityEditor.EditorWindow).GetField("m_Parent", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(window) as Object;
+
+        private static bool IsFrontTab(EditorWindow window)
+        {
+            var host = HostView(window);
+            return host?.GetType().GetProperty("actualView", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                ?.GetValue(host) as EditorWindow == window;
+        }
+
+        private static bool SameHost(UnityEditor.EditorWindow a, UnityEditor.EditorWindow b)
+        {
+            var host = HostView(a);
+            return host != null && host == HostView(b);
+        }
+
+        /// <summary>
+        /// The open window <paramref name="window"/> names, by title or type name (case-insensitive),
+        /// or null. <c>FindObjectsOfTypeAll</c> also returns closed windows still waiting to be
+        /// destroyed, so only a window in a dock area or window of its own is a match; among matches,
+        /// the one already in front wins.
+        /// </summary>
+        internal static UnityEditor.EditorWindow FindEditorWindow(IEnumerable<UnityEditor.EditorWindow> windows, string window)
+        {
+            var name = window.Trim();
+            return windows
+                .Where(IsDrawable)
+                .Where(w => string.Equals(w.titleContent?.text, name, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(w.GetType().Name, name, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(IsFrontTab)
+                .FirstOrDefault();
+        }
+
+        // A window with no host view is closed or not shown yet: it has nothing to draw.
+        private static bool IsDrawable(UnityEditor.EditorWindow window)
+            => window != null && window.position.width >= 1f && window.position.height >= 1f && HostView(window) != null;
+
+        /// <summary>
+        /// The window's size in pixels: its position is in points, scaled by the display's DPI.
+        /// <c>pixelsPerPoint</c> is the scale of the last view drawn, so this is right for a window on
+        /// any monitor only because the window has just been drawn (see <see cref="CaptureWindow"/>).
+        /// Not capped: it is the grab rectangle, and a smaller one would crop the window.
+        /// </summary>
+        private static (int w, int h) WindowPixelSize(UnityEditor.EditorWindow window)
+        {
+            var scale = EditorGUIUtility.pixelsPerPoint;
+            return (Mathf.Max(1, Mathf.RoundToInt(window.position.width * scale)),
+                Mathf.Max(1, Mathf.RoundToInt(window.position.height * scale)));
+        }
+
+        /// <summary>
+        /// Copy the window's back buffer into <paramref name="target"/>, sized in pixels, the way
+        /// <c>InternalEditorUtility.CaptureEditorWindow</c> does: grab it from the window's host view,
+        /// then blit it through the same material, which flips it where the graphics API needs it.
+        /// That public method passes the window's size in points as the grab rect, which crops the
+        /// window whenever the display is scaled (at 150% it reads two thirds of it), so it is only
+        /// the fallback when the internal grab is unavailable. Returns false when the window is not
+        /// the visible tab of its dock area.
+        /// </summary>
+        private static bool GrabEditorWindow(UnityEditor.EditorWindow window, RenderTexture target)
+        {
+            if (!IsFrontTab(window))
+                return false;
+
+            object parent = null;
+            MethodInfo grab = null;
+            Material blit = null;
+            try
+            {
+                parent = HostView(window);
+                grab = parent?.GetType().GetMethod("GrabPixels", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                blit = EditorGUIUtility.LoadRequired("SceneView/BlitSceneViewCapture.mat") as Material;
+            }
+            catch
+            {
+                // Internal API changed: fall back to the public capture below.
+            }
+
+            if (grab == null || blit == null)
+            {
+                // Through reflection too: the public method is newer than the oldest supported Editor.
+                var capture = typeof(UnityEditorInternal.InternalEditorUtility).GetMethod("CaptureEditorWindow",
+                    BindingFlags.Static | BindingFlags.Public, null, new[] { typeof(UnityEditor.EditorWindow), typeof(RenderTexture) }, null);
+                return capture != null && (bool)capture.Invoke(null, new object[] { window, target });
+            }
+
+            var grabbed = RenderTexture.GetTemporary(target.descriptor);
+            try
+            {
+                grab.Invoke(parent, new object[] { grabbed, new Rect(0, 0, target.width, target.height) });
+                Graphics.Blit(grabbed, target, blit);
+                return true;
+            }
+            finally
+            {
+                RenderTexture.ReleaseTemporary(grabbed);
+            }
+        }
+
+        // Draws the window now. False when the internal API is unavailable: the window then still holds
+        // its last drawn frame.
+        private static bool RepaintImmediately(UnityEditor.EditorWindow window)
+        {
+            try
+            {
+                var repaint = typeof(UnityEditor.EditorWindow).GetMethod("RepaintImmediately", BindingFlags.Instance | BindingFlags.NonPublic);
+                if (repaint == null)
+                    return false;
+
+                repaint.Invoke(window, null);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Read the window's back buffer, orient it, then scale it to <paramref name="w"/> x
+        /// <paramref name="h"/> and encode it. See <see cref="GrabEditorWindow"/>.
+        /// </summary>
+        private static byte[] EncodeEditorWindowToPng(UnityEditor.EditorWindow window, int w, int h)
+        {
+            var (pixelW, pixelH) = WindowPixelSize(window);
+            var grabRt = RenderTexture.GetTemporary(pixelW, pixelH, 0, RenderTextureFormat.ARGB32);
+            RenderTexture outRt = null;
+            var prevActive = RenderTexture.active;
+            try
+            {
+                if (!GrabEditorWindow(window, grabRt))
+                    throw new InvalidOperationException($"'{window.titleContent.text}' could not be read: it is not the visible tab of its window.");
+
+                var readRt = grabRt;
+                if (w != pixelW || h != pixelH)
+                {
+                    outRt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
+                    Graphics.Blit(grabRt, outRt);
+                    readRt = outRt;
+                }
+
+                RenderTexture.active = readRt;
+                var tex = new Texture2D(w, h, TextureFormat.RGB24, false);
+                try
+                {
+                    tex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                    tex.Apply();
+                    return ImageConversion.EncodeToPNG(tex);
+                }
+                finally
+                {
+                    Object.DestroyImmediate(tex);
+                }
+            }
+            finally
+            {
+                RenderTexture.active = prevActive;
+                RenderTexture.ReleaseTemporary(grabRt);
+                if (outRt != null)
+                    RenderTexture.ReleaseTemporary(outRt);
+            }
+        }
+
 
         /// <summary>
         /// Shared capture core. Renders at the requested (clamped) size via <paramref name="renderPng"/>

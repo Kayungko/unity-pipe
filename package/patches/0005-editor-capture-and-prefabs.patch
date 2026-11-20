@@ -1,0 +1,789 @@
+diff --git a/com.unity.pipeline/Documentation~/commands/capture.md b/com.unity.pipeline/Documentation~/commands/capture.md
+index c5646ca..b4e405c 100644
+--- a/com.unity.pipeline/Documentation~/commands/capture.md
++++ b/com.unity.pipeline/Documentation~/commands/capture.md
+@@ -27,6 +27,7 @@ For visual verification, set `require_fresh_frame=true`. A cached or unverified
+ **Returns:** `CaptureResult`
+
+ ### `capture_scene_view`
++The default `source=camera` renders the scene camera. Use `source=screen` for the drawn Scene View with gizmos and toolbars. Screen captures use the window's dimensions.
+ Render the active Scene View to a PNG. Same result contract and parameter interactions as `capture_game_view`: inline base64, or path-only when `save_path` is set (opt back in with `include_inline_image=true`; `max_resolution` has no effect when `save_path` is set without it).
+
+ | Parameter | Required | Default | Description |
+@@ -39,17 +40,25 @@ Render the active Scene View to a PNG. Same result contract and parameter intera
+
+ **Returns:** `CaptureResult`
+
++### `capture_editor_window`
++
++Read the pixels of an open window. Pass its title or type as `window`. The command restores the previously visible tab in the same dock area.
++
+ ### `capture_editor_element`
+-Capture a UI Toolkit VisualElement (by selector) from an EditorWindow to a PNG; returns path + base64.
++
++Crop the visible portion of a UI Toolkit element from a drawn Editor window. The window and element commands require a graphical Editor session.
+
+ | Parameter | Required | Default | Description |
+ |-----------|----------|---------|-------------|
+ | `window` | yes | `–` | EditorWindow type name (e.g. InspectorWindow) or window title to capture from. |
+-| `selector` | yes | `–` | Element selector: '#name', '.class', a type name (e.g. Button), descendant (space) / child ('>') chains, optional pseudo-states (:checked,:hover,:focus,:active,:enabled,:disabled,:not(...)). |
+-| `output` | no | `–` | Output PNG path (absolute, or relative to the project root). Defaults to a timestamped file under <project>/Temp/pipeline-screenshots/. |
++| `selector` | yes | `–` | `#name` or `.class`. |
++| `save_path` | no | `–` | Optional PNG path under the authoring root. |
+
+-**Returns:** `CaptureElementResponse`
+-**Notes:** `MainThreadRequired = true`. Unity 6000.7+ only.
++**Returns:** `CaptureResult`
++
++### `capture_asset_preview`
++
++Pass an imported asset reference as `asset` to capture its texture or Unity-generated preview. For previews generated asynchronously, retry after Unity loads the thumbnail. The standard `save_path`, `include_inline_image` and `max_resolution` arguments apply.
+
+ ### `capture_runtime_element`
+ Capture a UI Toolkit VisualElement (by selector) from a live runtime panel (UIDocument or PanelRenderer) to a PNG; returns path + base64.
+diff --git a/com.unity.pipeline/Documentation~/commands/prefabs.md b/com.unity.pipeline/Documentation~/commands/prefabs.md
+index 1ceff58..40fad5c 100644
+--- a/com.unity.pipeline/Documentation~/commands/prefabs.md
++++ b/com.unity.pipeline/Documentation~/commands/prefabs.md
+@@ -2,6 +2,8 @@
+
+ Commands covering the prefab lifecycle an agent needs to build content procedurally: saving a configured GameObject as a prefab asset, instantiating it into a scene, deriving a variant, applying/reverting instance overrides, unpacking, and editing prefab contents through the prefab stage. Asset paths are sandboxed to the authoring root; scene-side mutations are Undo-able, but prefab asset writes are AssetDatabase operations and are not part of Unity's Undo system.
+
++Use a target such as `Assets/Screen.prefab:Root/Body` with `get_serialized_fields` to inspect a component inside a Prefab asset. Use `set_prefab_serialized_field` with `target`, `component`, `field` and `value` to save the field. The command opens and unloads isolated Prefab contents, and nested instance edits are saved as overrides on the containing asset. Use `set_serialized_field` for scene objects and standalone serialized assets.
++
+ ### `create_prefab`
+ Save a GameObject as a prefab asset at a project path; the source becomes a connected instance.
+
+diff --git a/com.unity.pipeline/Editor/Authoring/ObjectResolver.cs b/com.unity.pipeline/Editor/Authoring/ObjectResolver.cs
+index eddac8f..8e9d976 100644
+--- a/com.unity.pipeline/Editor/Authoring/ObjectResolver.cs
++++ b/com.unity.pipeline/Editor/Authoring/ObjectResolver.cs
+@@ -1,3 +1,5 @@
++#if UNITY_EDITOR
++using System;
+ using Unity.Pipeline.Models;
+ using UnityEditor;
+ using UnityEngine;
+@@ -56,6 +58,20 @@ namespace Unity.Pipeline.Editor.Authoring
+             if (!string.IsNullOrEmpty(handle.Path))
+             {
+                 var raw = handle.Path;
++                if (TrySplitPrefabPath(raw, out var prefabPath, out var childPath))
++                {
++                    var path = IsExplicitlyRooted(prefabPath) ? prefabPath : ProjectPaths.Resolve(prefabPath, out _);
++                    var root = string.IsNullOrEmpty(path) ? null : AssetDatabase.LoadAssetAtPath<GameObject>(path);
++                    if (root == null)
++                    {
++                        error = $"No prefab asset at '{prefabPath}'.";
++                        return false;
++                    }
++
++                    obj = FindPrefabChild(root, childPath, out error);
++                    return obj != null;
++                }
++
+                 var explicitlyRooted = IsExplicitlyRooted(raw);
+                 var assetPath = raw;
+                 if (!explicitlyRooted)
+@@ -201,6 +217,53 @@ namespace Unity.Pipeline.Editor.Authoring
+             || path.StartsWith("Assets/", System.StringComparison.Ordinal)
+             || path.StartsWith("Packages/", System.StringComparison.Ordinal);
+
++        internal static bool TrySplitPrefabPath(string path, out string assetPath, out string childPath)
++        {
++            assetPath = childPath = null;
++            var separator = path?.IndexOf(".prefab:", StringComparison.OrdinalIgnoreCase) ?? -1;
++            if (separator < 0)
++                return false;
++
++            assetPath = path.Substring(0, separator + ".prefab".Length);
++            childPath = path.Substring(assetPath.Length + 1);
++            return true;
++        }
++
++        internal static GameObject FindPrefabChild(GameObject root, string childPath, out string error)
++        {
++            error = null;
++            var relative = (childPath ?? string.Empty).Trim('/');
++            if (relative == root.name || string.IsNullOrEmpty(relative))
++                return root;
++
++            var current = root.transform;
++            if (relative.StartsWith(root.name + "/", StringComparison.Ordinal))
++                relative = relative.Substring(root.name.Length + 1);
++            foreach (var segment in relative.Split('/'))
++            {
++                Transform match = null;
++                foreach (Transform child in current)
++                {
++                    if (child.name != segment)
++                        continue;
++                    if (match != null)
++                    {
++                        error = $"Prefab path '{childPath}' is ambiguous at '{segment}'.";
++                        return null;
++                    }
++                    match = child;
++                }
++
++                if (match == null)
++                {
++                    error = $"No child '{segment}' in prefab path '{childPath}'.";
++                    return null;
++                }
++                current = match;
++            }
++            return current.gameObject;
++        }
++
+         private static GameObject FindByHierarchyPath(string path)
+         {
+             var parts = path.Trim('/').Split('/');
+@@ -254,3 +317,4 @@ namespace Unity.Pipeline.Editor.Authoring
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs b/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
+index 511c776..8fb4a05 100644
+--- a/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
+@@ -138,9 +138,11 @@ namespace Unity.Pipeline.Editor.Commands.Batch
+             // Assets & files (AssetDatabase ops / direct file IO).
+             "create_asset", "import_asset", "move_asset", "copy_asset", "rename_asset", "delete_asset",
+             "create_folder", "set_import_settings", "write_text_file", "create_script",
++            "capture_editor_window", "capture_editor_element", "capture_asset_preview",
++            "profiler_record", "profiler_cancel", "profiler_analyze", "memory_snapshot",
+             // Prefab ASSET writes (scene-side prefab ops — instantiate/unpack/revert overrides — are
+             // Undo-tracked and stay batchable).
+-            "create_prefab", "create_prefab_variant", "apply_prefab_overrides", "save_prefab_contents",
++            "create_prefab", "create_prefab_variant", "apply_prefab_overrides", "save_prefab_contents", "set_prefab_serialized_field",
+             // Scene persistence and Build Settings scene list.
+             "save_scene", "save_all", "add_scene_to_build", "remove_scene_from_build", "set_build_settings",
+             // Project settings (their own descriptions say "Not undoable via Ctrl+Z").
+diff --git a/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs b/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs
+index 9d568da..175381d 100644
+--- a/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs
+@@ -1,14 +1,17 @@
+ #if UNITY_EDITOR
+ using System;
++using System.Collections.Generic;
+ using System.IO;
+ using System.Linq;
+ using System.Reflection;
+ using Newtonsoft.Json;
+ using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Editor.Authoring;
++using Unity.Pipeline.Models;
+ using UnityEditor;
+ using UnityEngine;
+ using UnityEngine.Rendering;
++using UnityEngine.UIElements;
+ using Object = UnityEngine.Object;
+
+ namespace Unity.Pipeline.Editor.Commands.Capture
+@@ -84,25 +87,367 @@ namespace Unity.Pipeline.Editor.Commands.Capture
+             }
+         }
+
+-        [CliCommand("capture_scene_view", "Render the active Scene View to a PNG. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
++        [CliCommand("capture_scene_view", "Capture the active Scene View to PNG. Use source=screen for its displayed window with gizmos and toolbars. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
+         public static CaptureResult CaptureSceneView(
+             [CliArg("width", "Output width in px (default 1280; capped 4096).")] int width = 1280,
+             [CliArg("height", "Output height in px (default 720; capped 4096).")] int height = 720,
+             [CliArg("save_path", "Optional project-relative path to write the PNG (e.g. Screenshots/foo.png). When set, the result omits the inline base64 image unless include_inline_image=true.")] string savePath = null,
+             [CliArg("include_inline_image", "Also return the image inline as base64 when save_path is set (default false: path-only result). Only meaningful together with save_path.")] bool includeInlineImage = false,
+-            [CliArg("max_resolution", "Cap on the inline image's longest edge (e.g. 512). Only applies when an inline image is returned (no save_path, or save_path + include_inline_image=true); the save_path file keeps the requested resolution.")] int maxResolution = 0)
++            [CliArg("max_resolution", "Cap on the inline image's longest edge (e.g. 512). Only applies when an inline image is returned (no save_path, or save_path + include_inline_image=true); the save_path file keeps the requested resolution.")] int maxResolution = 0,
++            [CliArg("source", "camera (default) renders the scene camera; screen reads the displayed Scene View window.")] string source = "camera")
+         {
+-            GuardHasGpu();
++            var src = (source ?? "camera").Trim().ToLowerInvariant();
++            if (src != "camera" && src != "screen")
++                throw new ArgumentException("Use 'camera' or 'screen' as the source.");
++            if (src == "screen")
++                GuardWindowCapture();
++            else
++                GuardHasGpu();
+
+             var sv = SceneView.lastActiveSceneView;
+             if (sv == null || sv.camera == null)
+                 throw new ArgumentException("No active Scene View to capture.");
+
++            if (src == "screen")
++                return CaptureWindow(sv, OpenWindows(), "sceneView:screen", savePath, includeInlineImage, maxResolution);
++
+             var cam = sv.camera;
+             return Capture((w, h) => EncodeCameraToPng(cam, w, h), "sceneView",
+                 width, height, savePath, includeInlineImage, maxResolution);
+         }
+
++        [CliCommand("capture_editor_window", "Capture the pixels of an open Editor window by type or title.", Tags = new[] { "capture" })]
++        public static CaptureResult CaptureEditorWindow(
++            [CliArg("window", "An open Editor window title or type.", Required = true)] string window,
++            [CliArg("save_path", "Optional project-relative PNG path.")] string savePath = null,
++            [CliArg("include_inline_image", "Also return the image inline when saving.")] bool includeInlineImage = false,
++            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0)
++        {
++            GuardWindowCapture();
++            var windows = OpenWindows();
++            var target = RequireWindow(windows, window);
++            return CaptureWindow(target, windows, $"window:{target.titleContent.text}", savePath, includeInlineImage, maxResolution);
++        }
++
++        [CliCommand("capture_editor_element", "Crop a visible UI Toolkit element from an open Editor window.", Tags = new[] { "capture", "ui" })]
++        public static CaptureResult CaptureEditorElement(
++            [CliArg("window", "An open Editor window title or type.", Required = true)] string window,
++            [CliArg("selector", "A UI Toolkit #name or .class selector.", Required = true)] string selector,
++            [CliArg("save_path", "Optional project-relative PNG path.")] string savePath = null,
++            [CliArg("include_inline_image", "Also return the image inline when saving.")] bool includeInlineImage = false,
++            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0)
++        {
++            GuardWindowCapture();
++            var windows = OpenWindows();
++            var target = RequireWindow(windows, window);
++            if (string.IsNullOrWhiteSpace(selector) || selector.Length < 2 || (selector[0] != '#' && selector[0] != '.'))
++                throw new ArgumentException("Use a #name or .class selector.");
++
++            var previousFront = windows.FirstOrDefault(w => w != target && IsFrontTab(w) && SameHost(w, target));
++            try
++            {
++                target.ShowTab();
++                RepaintImmediately(target);
++                var root = target.rootVisualElement;
++                var element = selector[0] == '#' ? root.Q(selector.Substring(1)) : root.Q(className: selector.Substring(1));
++                if (element == null || element.panel == null)
++                    throw new ArgumentException($"No attached element matches '{selector}'.");
++                var bounds = element.worldBound;
++                for (var parent = element; parent != null; parent = parent.parent)
++                {
++                    var style = parent.resolvedStyle;
++                    if (style.display == DisplayStyle.None || style.visibility != Visibility.Visible || style.opacity <= 0)
++                        throw new InvalidOperationException($"Element '{selector}' is hidden.");
++                    if (parent == root || parent is ScrollView || parent.style.overflow.value == Overflow.Hidden)
++                    {
++                        var clip = parent.worldBound;
++                        bounds = Rect.MinMaxRect(Mathf.Max(bounds.xMin, clip.xMin), Mathf.Max(bounds.yMin, clip.yMin),
++                            Mathf.Min(bounds.xMax, clip.xMax), Mathf.Min(bounds.yMax, clip.yMax));
++                    }
++                }
++
++                var scale = EditorGUIUtility.pixelsPerPoint;
++                var (pixelW, pixelH) = WindowPixelSize(target);
++                var left = Mathf.Clamp(Mathf.FloorToInt(bounds.xMin * scale), 0, pixelW);
++                var right = Mathf.Clamp(Mathf.CeilToInt(bounds.xMax * scale), 0, pixelW);
++                var top = Mathf.Clamp(Mathf.FloorToInt(bounds.yMin * scale), 0, pixelH);
++                var bottom = Mathf.Clamp(Mathf.CeilToInt(bounds.yMax * scale), 0, pixelH);
++                if (right <= left || bottom <= top)
++                    throw new InvalidOperationException($"Element '{selector}' has no visible pixels.");
++
++                var windowImage = RenderTexture.GetTemporary(pixelW, pixelH, 0, RenderTextureFormat.ARGB32);
++                try
++                {
++                    if (!GrabEditorWindow(target, windowImage))
++                        throw new InvalidOperationException($"Unable to read window '{window}'.");
++                    var crop = new Rect((float)left / pixelW, (float)(pixelH - bottom) / pixelH,
++                        (float)(right - left) / pixelW, (float)(bottom - top) / pixelH);
++                    return Capture((w, h) => EncodeTextureRegion(windowImage, crop, w, h),
++                        $"element:{target.titleContent.text}:{selector}", right - left, bottom - top, savePath, includeInlineImage, maxResolution);
++                }
++                finally
++                {
++                    RenderTexture.ReleaseTemporary(windowImage);
++                }
++            }
++            finally
++            {
++                if (previousFront != null)
++                    previousFront.ShowTab();
++            }
++        }
++
++        [CliCommand("capture_asset_preview", "Capture an imported texture or Unity-generated asset thumbnail to PNG.", Tags = new[] { "capture", "assets" })]
++        public static CaptureResult CaptureAssetPreview(
++            [CliArg("asset", "Asset reference by path, global ID or GUID.", Required = true)] ObjectRef asset,
++            [CliArg("save_path", "Optional project-relative PNG path.")] string savePath = null,
++            [CliArg("include_inline_image", "Also return the image inline when saving.")] bool includeInlineImage = false,
++            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0)
++        {
++            GuardHasGpu();
++            if (!ObjectResolver.TryResolve(asset, out var obj, out var error))
++                throw new ArgumentException(error);
++            if (!EditorUtility.IsPersistent(obj))
++                throw new ArgumentException("Expected an imported asset.");
++            var preview = obj as Texture2D ?? AssetPreview.GetAssetPreview(obj);
++            if (preview == null)
++                throw new InvalidOperationException("Unity has no rendered preview yet. Retry after the preview has loaded.");
++            var (width, height) = ClampToLongEdge(preview.width, preview.height, MaxDimension);
++            return Capture((w, h) => EncodeTextureRegion(preview, new Rect(0, 0, 1, 1), w, h),
++                $"asset:{AssetDatabase.GetAssetPath(obj)}", width, height, savePath, includeInlineImage, maxResolution);
++        }
++
++        private static byte[] EncodeTextureRegion(Texture source, Rect crop, int width, int height)
++        {
++            var target = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
++            var previous = RenderTexture.active;
++            var image = new Texture2D(width, height, TextureFormat.RGBA32, false);
++            try
++            {
++                Graphics.Blit(source, target, crop.size, crop.position);
++                RenderTexture.active = target;
++                image.ReadPixels(new Rect(0, 0, width, height), 0, 0);
++                image.Apply();
++                return image.EncodeToPNG();
++            }
++            finally
++            {
++                RenderTexture.active = previous;
++                RenderTexture.ReleaseTemporary(target);
++                Object.DestroyImmediate(image);
++            }
++        }
++
++        private static EditorWindow[] OpenWindows() => Resources.FindObjectsOfTypeAll<EditorWindow>();
++
++        private static EditorWindow RequireWindow(EditorWindow[] windows, string window)
++        {
++            if (string.IsNullOrWhiteSpace(window))
++                throw new ArgumentException("An Editor window title or type is required.");
++            return FindEditorWindow(windows, window)
++                ?? throw new ArgumentException($"No open Editor window matches '{window}'.");
++        }
++
++        private static void GuardWindowCapture()
++        {
++            if (Application.isBatchMode)
++                throw new InvalidOperationException("Editor windows are not drawn in batch mode.");
++            GuardHasGpu();
++        }
++
++        /// <summary>
++        /// Capture <paramref name="target"/> as drawn, at its size in pixels. Only the visible tab of a
++        /// dock area has pixels: a background tab is brought to the front and drawn now, so its back
++        /// buffer holds the window when it is read, then the tab that was in front is put back.
++        /// <paramref name="windows"/> are the open windows, to find that tab.
++        /// </summary>
++        private static CaptureResult CaptureWindow(UnityEditor.EditorWindow target, IEnumerable<UnityEditor.EditorWindow> windows,
++            string source, string savePath, bool includeInlineImage, int maxResolution)
++        {
++            var previousFront = windows.FirstOrDefault(w => w != target && IsFrontTab(w) && SameHost(w, target));
++            target.ShowTab();
++            RepaintImmediately(target);
++            try
++            {
++                // The window is grabbed at its full size; only the image is capped, keeping its aspect.
++                var (pixelW, pixelH) = WindowPixelSize(target);
++                var (outW, outH) = ClampToLongEdge(pixelW, pixelH, MaxDimension);
++                return Capture((w, h) => EncodeEditorWindowToPng(target, w, h), source,
++                    outW, outH, savePath, includeInlineImage, maxResolution);
++            }
++            finally
++            {
++                if (previousFront != null)
++                    previousFront.ShowTab();
++            }
++        }
++
++        // The view hosting the window: the dock area for a docked tab. Null when the window is closed.
++        private static Object HostView(UnityEditor.EditorWindow window)
++            => typeof(UnityEditor.EditorWindow).GetField("m_Parent", BindingFlags.Instance | BindingFlags.NonPublic)
++                ?.GetValue(window) as Object;
++
++        private static bool IsFrontTab(EditorWindow window)
++        {
++            var host = HostView(window);
++            return host?.GetType().GetProperty("actualView", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
++                ?.GetValue(host) as EditorWindow == window;
++        }
++
++        private static bool SameHost(UnityEditor.EditorWindow a, UnityEditor.EditorWindow b)
++        {
++            var host = HostView(a);
++            return host != null && host == HostView(b);
++        }
++
++        /// <summary>
++        /// The open window <paramref name="window"/> names, by title or type name (case-insensitive),
++        /// or null. <c>FindObjectsOfTypeAll</c> also returns closed windows still waiting to be
++        /// destroyed, so only a window in a dock area or window of its own is a match; among matches,
++        /// the one already in front wins.
++        /// </summary>
++        internal static UnityEditor.EditorWindow FindEditorWindow(IEnumerable<UnityEditor.EditorWindow> windows, string window)
++        {
++            var name = window.Trim();
++            return windows
++                .Where(IsDrawable)
++                .Where(w => string.Equals(w.titleContent?.text, name, StringComparison.OrdinalIgnoreCase)
++                    || string.Equals(w.GetType().Name, name, StringComparison.OrdinalIgnoreCase))
++                .OrderByDescending(IsFrontTab)
++                .FirstOrDefault();
++        }
++
++        // A window with no host view is closed or not shown yet: it has nothing to draw.
++        private static bool IsDrawable(UnityEditor.EditorWindow window)
++            => window != null && window.position.width >= 1f && window.position.height >= 1f && HostView(window) != null;
++
++        /// <summary>
++        /// The window's size in pixels: its position is in points, scaled by the display's DPI.
++        /// <c>pixelsPerPoint</c> is the scale of the last view drawn, so this is right for a window on
++        /// any monitor only because the window has just been drawn (see <see cref="CaptureWindow"/>).
++        /// Not capped: it is the grab rectangle, and a smaller one would crop the window.
++        /// </summary>
++        private static (int w, int h) WindowPixelSize(UnityEditor.EditorWindow window)
++        {
++            var scale = EditorGUIUtility.pixelsPerPoint;
++            return (Mathf.Max(1, Mathf.RoundToInt(window.position.width * scale)),
++                Mathf.Max(1, Mathf.RoundToInt(window.position.height * scale)));
++        }
++
++        /// <summary>
++        /// Copy the window's back buffer into <paramref name="target"/>, sized in pixels, the way
++        /// <c>InternalEditorUtility.CaptureEditorWindow</c> does: grab it from the window's host view,
++        /// then blit it through the same material, which flips it where the graphics API needs it.
++        /// That public method passes the window's size in points as the grab rect, which crops the
++        /// window whenever the display is scaled (at 150% it reads two thirds of it), so it is only
++        /// the fallback when the internal grab is unavailable. Returns false when the window is not
++        /// the visible tab of its dock area.
++        /// </summary>
++        private static bool GrabEditorWindow(UnityEditor.EditorWindow window, RenderTexture target)
++        {
++            if (!IsFrontTab(window))
++                return false;
++
++            object parent = null;
++            MethodInfo grab = null;
++            Material blit = null;
++            try
++            {
++                parent = HostView(window);
++                grab = parent?.GetType().GetMethod("GrabPixels", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
++                blit = EditorGUIUtility.LoadRequired("SceneView/BlitSceneViewCapture.mat") as Material;
++            }
++            catch
++            {
++                // Internal API changed: fall back to the public capture below.
++            }
++
++            if (grab == null || blit == null)
++            {
++                // Through reflection too: the public method is newer than the oldest supported Editor.
++                var capture = typeof(UnityEditorInternal.InternalEditorUtility).GetMethod("CaptureEditorWindow",
++                    BindingFlags.Static | BindingFlags.Public, null, new[] { typeof(UnityEditor.EditorWindow), typeof(RenderTexture) }, null);
++                return capture != null && (bool)capture.Invoke(null, new object[] { window, target });
++            }
++
++            var grabbed = RenderTexture.GetTemporary(target.descriptor);
++            try
++            {
++                grab.Invoke(parent, new object[] { grabbed, new Rect(0, 0, target.width, target.height) });
++                Graphics.Blit(grabbed, target, blit);
++                return true;
++            }
++            finally
++            {
++                RenderTexture.ReleaseTemporary(grabbed);
++            }
++        }
++
++        // Draws the window now. False when the internal API is unavailable: the window then still holds
++        // its last drawn frame.
++        private static bool RepaintImmediately(UnityEditor.EditorWindow window)
++        {
++            try
++            {
++                var repaint = typeof(UnityEditor.EditorWindow).GetMethod("RepaintImmediately", BindingFlags.Instance | BindingFlags.NonPublic);
++                if (repaint == null)
++                    return false;
++
++                repaint.Invoke(window, null);
++                return true;
++            }
++            catch
++            {
++                return false;
++            }
++        }
++
++        /// <summary>
++        /// Read the window's back buffer, orient it, then scale it to <paramref name="w"/> x
++        /// <paramref name="h"/> and encode it. See <see cref="GrabEditorWindow"/>.
++        /// </summary>
++        private static byte[] EncodeEditorWindowToPng(UnityEditor.EditorWindow window, int w, int h)
++        {
++            var (pixelW, pixelH) = WindowPixelSize(window);
++            var grabRt = RenderTexture.GetTemporary(pixelW, pixelH, 0, RenderTextureFormat.ARGB32);
++            RenderTexture outRt = null;
++            var prevActive = RenderTexture.active;
++            try
++            {
++                if (!GrabEditorWindow(window, grabRt))
++                    throw new InvalidOperationException($"'{window.titleContent.text}' could not be read: it is not the visible tab of its window.");
++
++                var readRt = grabRt;
++                if (w != pixelW || h != pixelH)
++                {
++                    outRt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
++                    Graphics.Blit(grabRt, outRt);
++                    readRt = outRt;
++                }
++
++                RenderTexture.active = readRt;
++                var tex = new Texture2D(w, h, TextureFormat.RGB24, false);
++                try
++                {
++                    tex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
++                    tex.Apply();
++                    return ImageConversion.EncodeToPNG(tex);
++                }
++                finally
++                {
++                    Object.DestroyImmediate(tex);
++                }
++            }
++            finally
++            {
++                RenderTexture.active = prevActive;
++                RenderTexture.ReleaseTemporary(grabRt);
++                if (outRt != null)
++                    RenderTexture.ReleaseTemporary(outRt);
++            }
++        }
++
++
+         /// <summary>
+         /// Shared capture core. Renders at the requested (clamped) size via <paramref name="renderPng"/>
+         /// and writes the file when <paramref name="savePath"/> is set. The image is inlined as base64
+diff --git a/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs b/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs
+index 31b1c98..b5c1b91 100644
+--- a/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs
+@@ -45,6 +45,9 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+                 throw new ArgumentException("set_serialized_field 'field' is required.");
+
+             var obj = ResolveSerializable(target, component);
++            if (obj is Component && EditorUtility.IsPersistent(obj)
++                && AssetDatabase.GetAssetPath(obj).EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
++                throw new ArgumentException("Use set_prefab_serialized_field for a component in a prefab asset.");
+
+             using (new AuthoringUndoScope($"Set {field}"))
+             {
+@@ -68,6 +71,49 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+             return result;
+         }
+
++        [CliCommand("set_prefab_serialized_field", "Edit and save a field on a Prefab component in isolated Prefab contents.", Tags = new[] { "scripts", "prefabs" })]
++        public static AuthoringResult SetPrefabSerializedField(
++            [CliArg("target", "Prefab asset path and child, e.g. Assets/UI.prefab:Root/Child.", Required = true)] string target,
++            [CliArg("component", "Component type on the Prefab object.", Required = true)] string component,
++            [CliArg("field", "Unity SerializedProperty path.", Required = true)] string field,
++            [CliArg("value", "JSON value to write.", Required = true, ArbitraryKeys = true)] JToken value)
++        {
++            if (!ObjectResolver.TrySplitPrefabPath(target, out var path, out var childPath))
++                throw new ArgumentException("Use a path such as 'Assets/UI.prefab:Root/Child' for target.");
++            var assetPath = ProjectPaths.Resolve(path, out var error);
++            if (assetPath == null)
++                throw new ArgumentException(error);
++            if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) == null)
++                throw new ArgumentException($"No Prefab at '{assetPath}'.");
++
++            var root = PrefabUtility.LoadPrefabContents(assetPath);
++            try
++            {
++                var node = ObjectResolver.FindPrefabChild(root, childPath, out error);
++                if (node == null)
++                    throw new ArgumentException(error);
++                var obj = ResolveSerializable(new ObjectRef { InstanceId = PipelineUtils.GetObjectId(node) }, component);
++                using (var data = new SerializedObject(obj))
++                {
++                    var property = data.FindProperty(field);
++                    if (property == null)
++                        throw new ArgumentException($"Field '{field}' was not found on '{obj.GetType().Name}'.");
++                    SerializedPropertyConverter.SetValue(property, value);
++                    data.ApplyModifiedPropertiesWithoutUndo();
++                }
++                PrefabUtility.SaveAsPrefabAsset(root, assetPath, out var saved);
++                if (!saved)
++                    throw new InvalidOperationException($"Failed to save '{assetPath}'.");
++            }
++            finally
++            {
++                PrefabUtility.UnloadPrefabContents(root);
++            }
++
++            var persistent = ResolveSerializable(new ObjectRef { Path = $"{assetPath}:{childPath}" }, component);
++            return ObjectResolver.Describe(persistent);
++        }
++
+         [CliCommand("get_serialized_fields",
+             "Read serialized fields of a component/asset. Returns each top-level field's name, type and value " +
+             "(object references are returned as re-usable handles). Pass 'field' to read a single SerializedProperty path. " +
+diff --git a/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs b/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs
+index 9fc1ccb..23bb3b1 100644
+--- a/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs
++++ b/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using Newtonsoft.Json.Linq;
+ using Unity.Pipeline.Editor.Authoring;
+@@ -88,6 +89,17 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+                     // Resizing an array via "<field>.Array.size" — the property is an int under the hood.
+                     prop.intValue = value.ToObject<int>();
+                     break;
++                case SerializedPropertyType.Generic:
++                    if (!(value is JObject members))
++                        throw new ArgumentException($"Field '{prop.propertyPath}' requires a JSON object.");
++                    foreach (var member in members.Properties())
++                    {
++                        var child = prop.FindPropertyRelative(member.Name);
++                        if (child == null)
++                            throw new ArgumentException($"Field '{prop.propertyPath}' has no member '{member.Name}'.");
++                        SetValue(child, member.Value);
++                    }
++                    break;
+                 default:
+                     throw new ArgumentException(
+                         $"Field '{prop.propertyPath}' has unsupported type '{prop.propertyType}'. " +
+@@ -149,6 +161,21 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+                     return ObjectResolver.Describe(prop.objectReferenceValue);
+                 case SerializedPropertyType.ArraySize:
+                     return prop.intValue;
++                case SerializedPropertyType.Generic:
++                case SerializedPropertyType.ManagedReference:
++                    if (prop.propertyType == SerializedPropertyType.ManagedReference && prop.managedReferenceValue == null)
++                        return null;
++                    var fields = new JObject();
++                    var cursor = prop.Copy();
++                    var end = cursor.GetEndProperty();
++                    var traverseChildren = true;
++                    while (cursor.NextVisible(traverseChildren) && !SerializedProperty.EqualContents(cursor, end))
++                    {
++                        var childValue = GetValue(cursor);
++                        fields[cursor.name] = childValue == null ? JValue.CreateNull() : JToken.FromObject(childValue);
++                        traverseChildren = false;
++                    }
++                    return fields;
+                 default:
+                     // Unknown/unsupported types are reported by kind rather than failing a whole read.
+                     return new { unsupported = prop.propertyType.ToString() };
+@@ -235,3 +262,4 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/EditorDialogStateMirror.cs b/com.unity.pipeline/Editor/EditorDialogStateMirror.cs
+index afbcf78..d0a74d5 100644
+--- a/com.unity.pipeline/Editor/EditorDialogStateMirror.cs
++++ b/com.unity.pipeline/Editor/EditorDialogStateMirror.cs
+@@ -50,3 +50,79 @@ namespace Unity.Pipeline.Editor
+     }
+ }
+ #endif
++
++#if UNITY_EDITOR_WIN && !UNITY_6000_7_OR_NEWER
++namespace Unity.Pipeline.Editor
++{
++    using System;
++    using System.Collections.Generic;
++    using System.Runtime.InteropServices;
++    using System.Text;
++
++    /// <summary>Reads owned, visible Windows modal dialogs without dispatching to the Editor thread.</summary>
++    internal sealed class WindowsEditorDialogMirror
++    {
++        const uint OwnerWindow = 4;
++        readonly uint m_ProcessId = GetCurrentProcessId();
++        readonly object m_Gate = new object();
++        readonly HashSet<int> m_Reported = new HashSet<int>();
++
++        internal void Refresh(DialogStateTracker tracker)
++        {
++            lock (m_Gate)
++            {
++                var seen = new HashSet<int>();
++                var now = DateTime.UtcNow;
++                var caption = new StringBuilder(512);
++                var className = new StringBuilder(128);
++                if (!EnumWindows((window, state) =>
++                {
++                    GetWindowThreadProcessId(window, out var pid);
++                    if (pid != m_ProcessId || !IsWindowVisible(window) || !IsWindowEnabled(window))
++                        return true;
++                    className.Clear();
++                    GetClassName(window, className, className.Capacity);
++                    if (!string.Equals(className.ToString(), "#32770", StringComparison.Ordinal))
++                        return true;
++
++                    var owner = GetWindow(window, OwnerWindow);
++                    if (owner == IntPtr.Zero || IsWindowEnabled(owner))
++                        return true;
++                    GetWindowThreadProcessId(owner, out var ownerPid);
++                    if (ownerPid != m_ProcessId)
++                        return true;
++
++                    caption.Clear();
++                    SendMessageTimeout(window, 0x000D, (UIntPtr)(uint)caption.Capacity, caption, 0x0002, 50, out _);
++                    if (caption.Length == 0)
++                        return true;
++                    var id = unchecked((int)window.ToInt64());
++                    seen.Add(id);
++                    if (m_Reported.Add(id))
++                        tracker.OnShown(id, "windows", caption.ToString(), null, Array.Empty<string>(), null, now);
++                    return true;
++                }, IntPtr.Zero))
++                    return;
++
++                foreach (var id in m_Reported)
++                    if (!seen.Contains(id))
++                        tracker.OnDismissed(id, now);
++                m_Reported.IntersectWith(seen);
++            }
++        }
++
++        delegate bool WindowVisitor(IntPtr window, IntPtr state);
++        [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
++        [DllImport("user32.dll")] static extern bool EnumWindows(WindowVisitor visitor, IntPtr state);
++        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
++        [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
++        [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr window, uint command);
++        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
++        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
++        static extern int GetClassName(IntPtr window, StringBuilder className, int length);
++        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
++        static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr capacity, StringBuilder caption,
++            uint flags, uint timeoutMs, out UIntPtr result);
++    }
++}
++#endif
+diff --git a/com.unity.pipeline/Editor/EditorPipelineServer.cs b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+index 5157c57..9d0b0da 100644
+--- a/com.unity.pipeline/Editor/EditorPipelineServer.cs
++++ b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+@@ -17,6 +17,12 @@ namespace Unity.Pipeline.Editor
+ #endif
+     class EditorPipelineServer : BasePipelineServer
+     {
++#if UNITY_EDITOR_WIN && !UNITY_6000_7_OR_NEWER
++        private readonly WindowsEditorDialogMirror m_NativeDialogs = new WindowsEditorDialogMirror();
++
++        protected override void RefreshDialogState() => m_NativeDialogs.Refresh(Dialogs);
++#endif
++
+         private InstanceDescriptor m_InstanceDescriptor;
+
+         /// <summary>
+diff --git a/com.unity.pipeline/Runtime/Models/ObjectRefConverter.cs b/com.unity.pipeline/Runtime/Models/ObjectRefConverter.cs
+index 2e70544..2147b31 100644
+--- a/com.unity.pipeline/Runtime/Models/ObjectRefConverter.cs
++++ b/com.unity.pipeline/Runtime/Models/ObjectRefConverter.cs
+@@ -189,7 +189,8 @@ namespace Unity.Pipeline.Models
+             // normalize it under the authoring root. A leading "/" always means a scene hierarchy path,
+             // and an extension-less string ("Player", "Root/Child") stays one. Dotted GameObject names
+             // ("Cube.001") land here too, but the resolver falls back to a hierarchy lookup for those.
+-            if (!s.StartsWith("/", StringComparison.Ordinal) && Path.HasExtension(s))
++            if (!s.StartsWith("/", StringComparison.Ordinal) &&
++                (Path.HasExtension(s) || s.IndexOf(".prefab:", StringComparison.OrdinalIgnoreCase) >= 0))
+                 return new ObjectRef { Path = s };
+
+             // Leading-"/" canonical paths and bare names resolve as a scene hierarchy path.

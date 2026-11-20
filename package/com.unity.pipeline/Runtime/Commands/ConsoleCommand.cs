@@ -1,3 +1,4 @@
+using System;
 using Unity.Pipeline.Commands;
 using Unity.Pipeline.Console;
 using Unity.Pipeline.Models;
@@ -31,7 +32,8 @@ namespace Unity.Pipeline.Runtime.Commands
         public static ConsoleLogResponse GetConsole(
             [CliArg("tail", "Maximum number of most-recent entries to return")] int tail = DefaultTail,
             [CliArg("level", "Minimum severity to include: log | warn | error")] string level = ConsoleLogBuffer.LevelLog,
-            [CliArg("since", "Cursor: only return entries newer than this seq. Use the 'cursor' from a previous response to follow.")] long since = -1)
+            [CliArg("since", "Cursor: only return entries newer than this seq. Use the 'cursor' from a previous response to follow.")] long since = -1,
+            [CliArg("since-session", "Session from the previous response. A stale cursor returns a fresh tail and reset=true.")] string since_session = null)
         {
             // Guard against nonsensical tail values; <= 0 would otherwise mean "unlimited" in the
             // buffer, which is not what a caller passing e.g. --tail 0 expects.
@@ -39,7 +41,41 @@ namespace Unity.Pipeline.Runtime.Commands
                 tail = DefaultTail;
 
             var minSeverity = ConsoleLogBuffer.SeverityFromLevelName(level);
-            return ConsoleLogCapture.Buffer.Query(since, tail, minSeverity);
+            var response = ConsoleLogCapture.Buffer.Query(since, tail, minSeverity, since_session);
+            response.GroundTruth = ReadGroundTruth();
+            return response;
+        }
+
+        [CliCommand("console_status", "Read retained severity counts, cursor and the most recent Editor console and compiler sample.", MainThreadRequired = false, Tags = new[] { "observability/console" })]
+        public static ConsoleLogResponse GetStatus()
+        {
+            var response = ConsoleLogCapture.Buffer.Stats();
+            response.GroundTruth = ReadGroundTruth();
+            return response;
+        }
+
+        /// <summary>
+        /// A copy of the last ground-truth sample with its age filled in. Copied rather than
+        /// returned directly so the published snapshot stays immutable and shared between callers.
+        /// </summary>
+        static ConsoleGroundTruth ReadGroundTruth()
+        {
+            var sample = ConsoleLogCapture.GroundTruth;
+            if (sample == null)
+                return null;
+
+            var ageMs = (long)(DateTime.UtcNow - sample.SampledUtc).TotalMilliseconds;
+            return new ConsoleGroundTruth
+            {
+                SampledUtc = sample.SampledUtc,
+                AgeMs = ageMs < 0 ? 0 : ageMs,
+                CompilationFailed = sample.CompilationFailed,
+                Compiling = sample.Compiling,
+                ConsoleErrors = sample.ConsoleErrors,
+                ConsoleWarnings = sample.ConsoleWarnings,
+                ConsoleLogs = sample.ConsoleLogs,
+                Seeded = sample.Seeded
+            };
         }
     }
 }

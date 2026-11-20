@@ -127,15 +127,16 @@ namespace Unity.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void Query_SinceBeyondCursor_DoesNotOverflowDroppedCheck()
+        public void Query_SinceBeyondCursor_ReturnsFreshTailWithReset()
         {
             var buffer = NewBuffer();
             buffer.Add(LogType.Log, "a", null, k_Ts);
 
             var response = buffer.Query(long.MaxValue, 100, ConsoleLogBuffer.SeverityLog);
 
-            Assert.AreEqual(0, response.Returned);
-            Assert.IsFalse(response.Dropped);
+            Assert.AreEqual(1, response.Returned);
+            Assert.IsTrue(response.Dropped);
+            Assert.IsTrue(response.Reset);
         }
 
         [Test]

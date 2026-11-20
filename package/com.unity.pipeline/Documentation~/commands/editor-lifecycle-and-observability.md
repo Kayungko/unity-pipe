@@ -3,9 +3,11 @@
 Commands to control Editor play mode, focus, and menus, and to observe the Editor's state, console, and performance.
 
 ### `editor_play`
-Enter Unity Editor play mode.
+Enter Unity Editor play mode. Returns a command failure when scripts have compiler errors or are still compiling.
 
-No parameters.
+| Parameter | Default | Description |
+|---|---|---|
+| `run_in_background` | `true` | Keep the game running while the Editor is unfocused for this Play Mode session. The prior value is restored on exit. |
 
 **Returns:** `string`
 
@@ -29,6 +31,18 @@ Get detailed Unity Editor status and state information.
 No parameters.
 
 **Returns:** `StatusResponse`
+
+### `wait`
+Wait for an Editor condition without blocking the Unity main thread. The command holds the execution gate while it waits, so use it for changes driven by the Editor, the user or existing callbacks.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `condition` | required | `editor_ready`, `playing`, `stopped`, `not_compiling`, `asset_exists`, or `object_active` |
+| `path` | – | Asset path for `asset_exists`. |
+| `target` | – | Scene object reference for `object_active`. |
+| `timeout_ms` | `10000` | Condition budget from 1 to 600000 milliseconds. Set the CLI `--timeout` higher than this value. |
+
+A match returns `status=matched`. A condition timeout exits 21. Use `--job` to submit a cancellable wait and `upipe job-cancel` to stop it. Detached jobs belong to the current Editor domain.
 
 ### `editor_focus`
 Bring the Unity Editor window to the foreground.
@@ -75,6 +89,11 @@ Keep the editor ticking while unfocused by forcing EditorApplication.SignalTick 
 
 Use `persist=false` for a change you only want in effect until the next unrelated recompile — e.g. a short profiling run at `interval_ms=0` (pegs a CPU core) or a one-off test/CI script — so it can't outlive its purpose and silently burn CPU for the rest of the session. Leave `persist` at its default `true` for a setting you want to remain in effect across recompiles, such as the normal always-on 16ms tick.
 
+### `console` and `console_status`
+Use `console` for cursor-based reads across Editor reloads and in a Development Player. Pass the returned `cursor` as `since` and `session` as `since-session`. If either refers to an expired cursor, the response includes a fresh tail with `reset=true`.
+
+Use `console_status` to read the cursor and retained severity counts without fetching logs. In the Editor, `groundTruth` includes native Console counts, the compiler state and the age of the last main-thread sample. Entries recovered from the native Console store have `seeded=true`.
+
 ### `get_console_logs`
 Read recently captured Editor console logs (structured).
 
@@ -98,6 +117,14 @@ Read render, memory, and frame-timing stats (structured, read-only).
 No parameters.
 
 **Returns:** `PerformanceStats`
+
+### Profiler recordings and memory snapshots
+
+- `profiler_targets` lists the local Editor and discoverable Development Players. Pass a Player's ID as `player_id` to `profiler_record`, or omit it to record the Editor. Set `file` to a `.data` filename and poll `profiler_record_status`. Use `profiler_cancel` to stop an in-progress recording.
+- `profiler_analyze` loads a saved `.data` file and returns frame times, GC allocation and marker hot spots for the selected thread. Loading or recording over existing Profiler history requires `confirm=true`. Recording restores the previous target and Profiler settings.
+- `memory_snapshot` takes an Editor memory snapshot. Pass a `.snap` filename and poll `memory_snapshot_status`.
+
+The files are saved under `Library/Pipeline/Profiles/`. Copy captures out of `Library` before cleaning the project cache.
 
 ### `audit`
 Run a Project Auditor static-analysis scan. Returns immediately; poll `audit_status` until status is `completed`, then read the CSV.

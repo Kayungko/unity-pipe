@@ -1,0 +1,356 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index 4189c51..dee1246 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
++## [0.6.0-2022.3] - Local candidate
++
++- Backport Unity 1.0.1 Editor lifecycle, Console, capture, Prefab addressing and Profiler features for Unity 2022.3.
++- Bind Pipeline listeners to loopback and avoid ports already held by another listener.
++
+ ## [0.6.0-2022.1] - 2026-09-02
+
+ Unity 2022.3 adaptation of upstream 0.6.0-exp.1 (rev `27af91a9`). See `package/ADAPTATION-2022.md`.
+diff --git a/com.unity.pipeline/Editor/Commands/Observability/PerformanceCommands.cs b/com.unity.pipeline/Editor/Commands/Observability/PerformanceCommands.cs
+index 7ea0bf3..8c86624 100644
+--- a/com.unity.pipeline/Editor/Commands/Observability/PerformanceCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Observability/PerformanceCommands.cs
+@@ -1,7 +1,12 @@
++#if UNITY_EDITOR
+ using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
+ using Newtonsoft.Json;
+ using Unity.Pipeline.Commands;
+ using UnityEditor;
++using UnityEditorInternal;
+ using UnityEngine;
+ using UnityEngine.Profiling;
+
+@@ -168,4 +173,309 @@ namespace Unity.Pipeline.Editor.Commands.Observability
+             return new FrameTimingStats { Available = false };
+         }
+     }
++
++    [InitializeOnLoad]
++    static class ProfilerCaptureCommands
++    {
++        const int EditorTargetId = -1;
++
++        static Recording s_Recording;
++        static object s_RecordResult = new { status = "idle" };
++        static bool s_SnapshotRunning;
++        static object s_SnapshotResult = new { status = "idle" };
++
++        sealed class Recording
++        {
++            public string Path;
++            public int FrameTarget;
++            public double Deadline;
++            public bool WasEnabled;
++            public bool WasProfilingEditor;
++            public int PreviousTarget;
++            public bool WasCpuEnabled;
++            public bool WasMemoryEnabled;
++        }
++
++        static ProfilerCaptureCommands()
++        {
++            AssemblyReloadEvents.beforeAssemblyReload += RestoreProfiler;
++            EditorApplication.quitting += RestoreProfiler;
++        }
++
++        [CliCommand("profiler_targets", "List local Editor and discovered Unity Profiler targets.", Tags = new[] { "observability/profiling" })]
++        public static object Targets()
++        {
++            return new
++            {
++                editor = new { current = ProfilerDriver.profileEditor },
++                players = ProfilerDriver.GetAvailableProfilers().Where(id => id != EditorTargetId && ProfilerDriver.IsIdentifierConnectable(id))
++                    .Select(id => new { id, name = ProfilerDriver.GetConnectionIdentifier(id), current = !ProfilerDriver.profileEditor && id == ProfilerDriver.connectedProfiler }).ToArray()
++            };
++        }
++
++        [CliCommand("profiler_record", "Record Editor or selected development Player frames to a local .data file. Poll profiler_record_status.", Tags = new[] { "observability/profiling" })]
++        public static object Record(
++            [CliArg("file", "File name ending in .data under Library/Pipeline/Profiles.", Required = true)] string file,
++            [CliArg("frames", "Number of frames to record, 3 through 200.")] int frames = 30,
++            [CliArg("player_id", "Target ID from profiler_targets. Omit for the Editor.")] int? playerId = null,
++            [CliArg("confirm", "Allow replacing the Editor Profiler's current recording/history and existing output.")] bool confirm = false)
++        {
++            RequireIdle();
++            if (frames < 3 || frames > 200)
++                throw new ArgumentOutOfRangeException(nameof(frames), "Use 3 through 200 frames.");
++            var path = ProfilePath(file, ".data");
++            if (!confirm && (ProfilerDriver.enabled || ProfilerDriver.lastFrameIndex >= 0 || File.Exists(path)))
++                throw new InvalidOperationException("Pass confirm=true to replace Profiler history or an existing capture.");
++            if (playerId.HasValue && (playerId.Value == EditorTargetId || !ProfilerDriver.GetAvailableProfilers().Contains(playerId.Value) ||
++                !ProfilerDriver.IsIdentifierConnectable(playerId.Value)))
++                throw new ArgumentException("The selected Player is no longer available. Refresh profiler_targets.");
++
++            s_Recording = new Recording
++            {
++                Path = path,
++                FrameTarget = frames,
++                Deadline = EditorApplication.timeSinceStartup + 30,
++                WasEnabled = ProfilerDriver.enabled,
++                WasProfilingEditor = ProfilerDriver.profileEditor,
++                PreviousTarget = ProfilerDriver.connectedProfiler,
++                WasCpuEnabled = ProfilerDriver.IsAreaEnabled(ProfilerArea.CPU),
++                WasMemoryEnabled = ProfilerDriver.IsAreaEnabled(ProfilerArea.Memory)
++            };
++            try
++            {
++                ProfilerDriver.enabled = false;
++                ProfilerDriver.profileEditor = !playerId.HasValue;
++                if (playerId.HasValue)
++                {
++                    ProfilerDriver.connectedProfiler = playerId.Value;
++                    if (ProfilerDriver.connectedProfiler != playerId.Value)
++                        throw new InvalidOperationException("Unity did not attach to the selected Player.");
++                }
++                ProfilerDriver.SetAreaEnabled(ProfilerArea.CPU, true);
++                ProfilerDriver.SetAreaEnabled(ProfilerArea.Memory, true);
++                ProfilerDriver.ClearAllFrames();
++                ProfilerDriver.enabled = true;
++                EditorApplication.update += UpdateRecording;
++                s_RecordResult = new { status = "recording", target = playerId.HasValue ? $"player:{playerId.Value}" : "editor", frames };
++                return s_RecordResult;
++            }
++            catch
++            {
++                RestoreProfiler();
++                throw;
++            }
++        }
++
++        [CliCommand("profiler_record_status", "Read the current recording status or completed .data path.", MainThreadRequired = false, Tags = new[] { "observability/profiling" })]
++        public static object RecordStatus() => System.Threading.Volatile.Read(ref s_RecordResult);
++
++        [CliCommand("profiler_cancel", "Cancel a Pipeline recording and restore the previous Profiler settings.", Tags = new[] { "observability/profiling" })]
++        public static object CancelRecord()
++        {
++            if (s_Recording != null)
++            {
++                RestoreProfiler();
++                s_RecordResult = new { status = "cancelled" };
++            }
++            return s_RecordResult;
++        }
++
++        static void UpdateRecording()
++        {
++            var recording = s_Recording;
++            var first = ProfilerDriver.firstFrameIndex;
++            var last = ProfilerDriver.lastFrameIndex;
++            var count = first >= 0 && last >= first ? last - first + 1 : 0;
++            if (count < recording.FrameTarget && EditorApplication.timeSinceStartup < recording.Deadline)
++                return;
++
++            try
++            {
++                if (count < recording.FrameTarget)
++                    throw new InvalidOperationException($"Only {count} frames arrived within 30 seconds.");
++                ProfilerDriver.enabled = false;
++                Directory.CreateDirectory(Path.GetDirectoryName(recording.Path));
++                var staging = Path.Combine(Path.GetDirectoryName(recording.Path), $".{Guid.NewGuid():N}.data");
++                try
++                {
++                    ProfilerDriver.SaveProfile(staging);
++                    if (!File.Exists(staging) || new FileInfo(staging).Length == 0)
++                        throw new IOException("Unity did not write the Profiler capture.");
++                    if (File.Exists(recording.Path))
++                        File.Replace(staging, recording.Path, null);
++                    else
++                        File.Move(staging, recording.Path);
++                }
++                finally
++                {
++                    if (File.Exists(staging))
++                        File.Delete(staging);
++                }
++                s_RecordResult = new { status = "completed", path = recording.Path, frames = count, firstFrame = first, lastFrame = last };
++            }
++            catch (Exception ex)
++            {
++                s_RecordResult = new { status = "failed", message = ex.Message };
++            }
++            finally
++            {
++                RestoreProfiler();
++            }
++        }
++
++        static void RestoreProfiler()
++        {
++            if (s_Recording == null)
++                return;
++            var recording = s_Recording;
++            EditorApplication.update -= UpdateRecording;
++            s_Recording = null;
++            ProfilerDriver.enabled = false;
++            if (recording.PreviousTarget != ProfilerDriver.connectedProfiler)
++                ProfilerDriver.connectedProfiler = recording.PreviousTarget;
++            ProfilerDriver.profileEditor = recording.WasProfilingEditor;
++            ProfilerDriver.SetAreaEnabled(ProfilerArea.CPU, recording.WasCpuEnabled);
++            ProfilerDriver.SetAreaEnabled(ProfilerArea.Memory, recording.WasMemoryEnabled);
++            ProfilerDriver.enabled = recording.WasEnabled;
++        }
++
++        [CliCommand("profiler_analyze", "Read frame timings, GC allocation and marker hot spots from a saved .data capture.", Tags = new[] { "observability/profiling" })]
++        public static object Analyze(
++            [CliArg("file", "Saved .data file under Library/Pipeline/Profiles.", Required = true)] string file,
++            [CliArg("first_frame", "Optional first frame index.")] int? firstFrame = null,
++            [CliArg("max_frames", "Maximum frames to read, 1 through 300.")] int maxFrames = 120,
++            [CliArg("thread", "Profiler thread index. Defaults to 0.")] int thread = 0,
++            [CliArg("top", "Maximum number of markers to return, 1 through 50.")] int top = 15,
++            [CliArg("confirm", "Allow replacing existing Profiler history with the file.")] bool confirm = false)
++        {
++            RequireIdle();
++            if (ProfilerDriver.enabled)
++                throw new InvalidOperationException("Stop the active Profiler recording before loading a capture.");
++            if (ProfilerDriver.lastFrameIndex >= 0 && !confirm)
++                throw new InvalidOperationException("Pass confirm=true to replace existing Profiler history.");
++            if (maxFrames < 1 || maxFrames > 300 || top < 1 || top > 50 || thread < 0)
++                throw new ArgumentException("Use 1–300 frames, 1–50 markers and a non-negative thread index.");
++            var path = ProfilePath(file, ".data");
++            if (!File.Exists(path) || !ProfilerDriver.LoadProfile(path, false))
++                throw new IOException($"Unity could not open '{file}' as a Profiler capture.");
++
++            var markers = new Dictionary<string, MarkerTotals>(StringComparer.Ordinal);
++            var frames = new List<object>();
++            var first = firstFrame ?? ProfilerDriver.firstFrameIndex;
++            var last = ProfilerDriver.lastFrameIndex;
++            if (first < ProfilerDriver.firstFrameIndex || first > last)
++                throw new ArgumentException("The requested first frame is outside the capture.");
++            var maxDuration = 0f;
++            double totalDuration = 0;
++            long totalGc = 0;
++            var gcFrames = 0;
++            var end = first + Math.Min(maxFrames - 1, last - first);
++            for (var frame = first; frame <= end; frame++)
++            {
++                using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
++                {
++                    if (!data.valid)
++                        continue;
++                    var gcMarker = data.GetMarkerId("GC Allocated In Frame");
++                    long? gcBytes = gcMarker >= 0 ? Math.Max(0, data.GetCounterValueAsLong(gcMarker)) : (long?)null;
++                    if (gcBytes.HasValue)
++                    {
++                        gcFrames++;
++                        totalGc += gcBytes.Value;
++                    }
++                    frames.Add(new { frame, thread = data.threadName, ms = data.frameTimeMs, gcBytes });
++                    maxDuration = Math.Max(maxDuration, data.frameTimeMs);
++                    totalDuration += data.frameTimeMs;
++                    for (var sample = 0; sample < data.sampleCount; sample++)
++                    {
++                        var name = data.GetSampleName(sample);
++                        if (string.IsNullOrEmpty(name))
++                            continue;
++                        if (!markers.TryGetValue(name, out var sum))
++                            markers.Add(name, sum = new MarkerTotals());
++                        var inclusive = data.GetSampleTimeMs(sample);
++                        var self = inclusive;
++                        var child = sample + 1;
++                        var children = data.GetSampleChildrenCount(sample);
++                        for (var n = 0; n < children && child < data.sampleCount; n++)
++                        {
++                            self -= data.GetSampleTimeMs(child);
++                            child += 1 + data.GetSampleChildrenCountRecursive(child);
++                        }
++                        sum.Calls++;
++                        sum.TotalMs += inclusive;
++                        sum.SelfMs += Math.Max(0, self);
++                    }
++                }
++            }
++
++            if (frames.Count == 0)
++                throw new InvalidOperationException("This capture has no frames for the requested thread.");
++            return new
++            {
++                frames,
++                summary = new { frameCount = frames.Count, averageMs = totalDuration / frames.Count, maxMs = maxDuration,
++                    gcFrames, gcBytes = gcFrames > 0 ? totalGc : (long?)null, truncated = end < last },
++                hotspots = markers.OrderByDescending(pair => pair.Value.SelfMs).ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(top).Select(pair =>
++                    new { marker = pair.Key, calls = pair.Value.Calls, selfMs = pair.Value.SelfMs, totalMs = pair.Value.TotalMs }).ToArray()
++            };
++        }
++
++        sealed class MarkerTotals
++        {
++            public int Calls;
++            public double TotalMs;
++            public double SelfMs;
++        }
++
++        [CliCommand("memory_snapshot", "Take a .snap memory snapshot of the Editor process. Poll memory_snapshot_status.", Tags = new[] { "observability/profiling" })]
++        public static object Snapshot(
++            [CliArg("file", "File name ending in .snap under Library/Pipeline/Profiles.", Required = true)] string file)
++        {
++            RequireIdle();
++            var path = ProfilePath(file, ".snap");
++            if (File.Exists(path))
++                throw new IOException("The snapshot file already exists. Choose a new file name.");
++            Directory.CreateDirectory(Path.GetDirectoryName(path));
++            s_SnapshotRunning = true;
++            s_SnapshotResult = new { status = "capturing", path };
++            try
++            {
++                Unity.Profiling.Memory.MemoryProfiler.TakeSnapshot(path, (written, success) =>
++                {
++                    s_SnapshotRunning = false;
++                    if (success && File.Exists(written))
++                        s_SnapshotResult = new { status = "completed", path = written, bytes = new FileInfo(written).Length };
++                    else
++                        s_SnapshotResult = new { status = "failed", path, message = "Unity did not write the memory snapshot." };
++                }, Unity.Profiling.Memory.CaptureFlags.ManagedObjects | Unity.Profiling.Memory.CaptureFlags.NativeObjects);
++            }
++            catch
++            {
++                s_SnapshotRunning = false;
++                s_SnapshotResult = new { status = "failed", path };
++                throw;
++            }
++            return s_SnapshotResult;
++        }
++
++        [CliCommand("memory_snapshot_status", "Read memory snapshot progress or its completed path.", MainThreadRequired = false, Tags = new[] { "observability/profiling" })]
++        public static object SnapshotStatus() => System.Threading.Volatile.Read(ref s_SnapshotResult);
++
++        static void RequireIdle()
++        {
++            if (s_Recording != null || s_SnapshotRunning)
++                throw new InvalidOperationException("A Pipeline Profiler capture or memory snapshot is already active.");
++        }
++
++        static string ProfilePath(string file, string extension)
++        {
++            if (string.IsNullOrWhiteSpace(file) || file != Path.GetFileName(file) ||
++                file.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
++                !string.Equals(Path.GetExtension(file), extension, StringComparison.OrdinalIgnoreCase))
++                throw new ArgumentException($"Provide a file name ending in '{extension}' without a directory.");
++            return Path.Combine(Path.GetDirectoryName(Application.dataPath), "Library", "Pipeline", "Profiles", file);
++        }
++    }
+ }
++#endif
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index e26a1cb..ebe67c5 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.2",
++  "version": "0.6.0-2022.3",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

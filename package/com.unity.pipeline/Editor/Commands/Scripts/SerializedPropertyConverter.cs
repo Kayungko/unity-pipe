@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using Newtonsoft.Json.Linq;
 using Unity.Pipeline.Editor.Authoring;
@@ -88,6 +89,17 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
                     // Resizing an array via "<field>.Array.size" — the property is an int under the hood.
                     prop.intValue = value.ToObject<int>();
                     break;
+                case SerializedPropertyType.Generic:
+                    if (!(value is JObject members))
+                        throw new ArgumentException($"Field '{prop.propertyPath}' requires a JSON object.");
+                    foreach (var member in members.Properties())
+                    {
+                        var child = prop.FindPropertyRelative(member.Name);
+                        if (child == null)
+                            throw new ArgumentException($"Field '{prop.propertyPath}' has no member '{member.Name}'.");
+                        SetValue(child, member.Value);
+                    }
+                    break;
                 default:
                     throw new ArgumentException(
                         $"Field '{prop.propertyPath}' has unsupported type '{prop.propertyType}'. " +
@@ -149,6 +161,21 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
                     return ObjectResolver.Describe(prop.objectReferenceValue);
                 case SerializedPropertyType.ArraySize:
                     return prop.intValue;
+                case SerializedPropertyType.Generic:
+                case SerializedPropertyType.ManagedReference:
+                    if (prop.propertyType == SerializedPropertyType.ManagedReference && prop.managedReferenceValue == null)
+                        return null;
+                    var fields = new JObject();
+                    var cursor = prop.Copy();
+                    var end = cursor.GetEndProperty();
+                    var traverseChildren = true;
+                    while (cursor.NextVisible(traverseChildren) && !SerializedProperty.EqualContents(cursor, end))
+                    {
+                        var childValue = GetValue(cursor);
+                        fields[cursor.name] = childValue == null ? JValue.CreateNull() : JToken.FromObject(childValue);
+                        traverseChildren = false;
+                    }
+                    return fields;
                 default:
                     // Unknown/unsupported types are reported by kind rather than failing a whole read.
                     return new { unsupported = prop.propertyType.ToString() };
@@ -235,3 +262,4 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
         }
     }
 }
+#endif

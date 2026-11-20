@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Reflection;
 using Unity.Pipeline.Commands;
@@ -38,6 +39,10 @@ namespace Unity.Pipeline.Editor.Commands
         private static Action s_SignalTick;
         private static EditorApplication.CallbackFunction s_Pump;
         private static readonly System.Diagnostics.Stopwatch s_Stopwatch = new System.Diagnostics.Stopwatch();
+        private static readonly System.Diagnostics.Stopwatch DelayClock = System.Diagnostics.Stopwatch.StartNew();
+        private static readonly Action CallDelayFunctions = (Action)typeof(EditorApplication)
+            .GetMethod("Internal_CallDelayFunctions", BindingFlags.Static | BindingFlags.NonPublic)
+            ?.CreateDelegate(typeof(Action));
         private static long s_IntervalMs;
 
         internal static bool IsEnabled => s_Enabled;
@@ -170,6 +175,14 @@ namespace Unity.Pipeline.Editor.Commands
                 s_Stopwatch.Restart();
                 s_Pump = () =>
                 {
+                    if (CallDelayFunctions != null && DelayClock.ElapsedMilliseconds >= 150 &&
+                        !UnityEditorInternal.InternalEditorUtility.isApplicationActive &&
+                        (!EditorApplication.isPlaying || EditorApplication.isPaused))
+                    {
+                        DelayClock.Restart();
+                        CallDelayFunctions();
+                    }
+
                     if (s_IntervalMs <= 0 || s_Stopwatch.ElapsedMilliseconds >= s_IntervalMs)
                     {
                         s_Stopwatch.Restart();
@@ -192,3 +205,4 @@ namespace Unity.Pipeline.Editor.Commands
         }
     }
 }
+#endif

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -192,6 +193,15 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 	// A small margin is added so the server can deliver its own timeout
 	// envelope before the client gives up.
 	roundTrip := timeout + 30*time.Second
+	if command == "wait" && !opts.Job {
+		// A domain reload can orphan a pending response. Retry this read-only
+		// request promptly once its condition deadline has elapsed.
+		budget := 10 * time.Second
+		if ms, err := strconv.ParseInt(fmt.Sprint(opts.Parameters["timeout_ms"]), 10, 64); err == nil && ms >= 1 && ms <= 600000 {
+			budget = time.Duration(ms) * time.Millisecond
+		}
+		roundTrip = min(timeout, budget+2*time.Second)
+	}
 	resp, err := c.do(http.MethodPost, "/api/exec", raw, roundTrip)
 	if err != nil {
 		return nil, err

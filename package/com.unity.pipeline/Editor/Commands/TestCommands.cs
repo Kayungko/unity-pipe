@@ -1,7 +1,10 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Unity.Pipeline.Commands;
 using Unity.Pipeline.Editor.Testing;
 using Unity.Pipeline.Models;
@@ -97,10 +100,28 @@ namespace Unity.Pipeline.Editor.Commands
         /// Get current test status for async test execution
         /// </summary>
         [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Tags = new[] { "tests" })]
-        public static string GetTestStatus()
+        public static string GetTestStatus(
+            [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full")
         {
-            var status = PipelineTestRunner.GetTestStatus();
-            return status ?? "{\"status\":\"no_tests\",\"message\":\"No test run in progress\"}";
+            var projection = (detail ?? "full").Trim().ToLowerInvariant();
+            if (projection != "full" && projection != "failures" && projection != "summary")
+                throw new ArgumentException("Use 'full', 'failures' or 'summary'.", nameof(detail));
+
+            var status = PipelineTestRunner.GetTestStatus()
+                ?? "{\"status\":\"no_tests\",\"message\":\"No test run in progress\"}";
+            if (projection == "full")
+                return status;
+
+            var report = JObject.Parse(status);
+            if (report["results"] is JArray results)
+            {
+                report["results"] = projection == "summary"
+                    ? new JArray()
+                    : new JArray(results.OfType<JObject>().Where(result =>
+                        string.Equals((string)result.GetValue("status", StringComparison.OrdinalIgnoreCase),
+                            "Failed", StringComparison.OrdinalIgnoreCase)));
+            }
+            return report.ToString(Formatting.None);
         }
 
         /// <summary>
@@ -217,3 +238,4 @@ namespace Unity.Pipeline.Editor.Commands
         public bool Explicit { get; set; }
     }
 }
+#endif

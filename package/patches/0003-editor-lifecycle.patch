@@ -1,0 +1,410 @@
+diff --git a/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md b/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md
+index a021a32..9518197 100644
+--- a/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md
++++ b/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md
+@@ -3,9 +3,11 @@
+ Commands to control Editor play mode, focus, and menus, and to observe the Editor's state, console, and performance.
+
+ ### `editor_play`
+-Enter Unity Editor play mode.
++Enter Unity Editor play mode. Returns a command failure when scripts have compiler errors or are still compiling.
+
+-No parameters.
++| Parameter | Default | Description |
++|---|---|---|
++| `run_in_background` | `true` | Keep the game running while the Editor is unfocused for this Play Mode session. The prior value is restored on exit. |
+
+ **Returns:** `string`
+
+@@ -30,6 +32,18 @@ No parameters.
+
+ **Returns:** `StatusResponse`
+
++### `wait`
++Wait for an Editor condition without blocking the Unity main thread. The command holds the execution gate while it waits, so use it for changes driven by the Editor, the user or existing callbacks.
++
++| Parameter | Default | Description |
++|---|---|---|
++| `condition` | required | `editor_ready`, `playing`, `stopped`, `not_compiling`, `asset_exists`, or `object_active` |
++| `path` | – | Asset path for `asset_exists`. |
++| `target` | – | Scene object reference for `object_active`. |
++| `timeout_ms` | `10000` | Condition budget from 1 to 600000 milliseconds. Set the CLI `--timeout` higher than this value. |
++
++A match returns `status=matched`. A condition timeout exits 21. Use `--job` to submit a cancellable wait and `upipe job-cancel` to stop it. Detached jobs belong to the current Editor domain.
++
+ ### `editor_focus`
+ Bring the Unity Editor window to the foreground.
+
+@@ -75,6 +89,11 @@ Keep the editor ticking while unfocused by forcing EditorApplication.SignalTick
+
+ Use `persist=false` for a change you only want in effect until the next unrelated recompile — e.g. a short profiling run at `interval_ms=0` (pegs a CPU core) or a one-off test/CI script — so it can't outlive its purpose and silently burn CPU for the rest of the session. Leave `persist` at its default `true` for a setting you want to remain in effect across recompiles, such as the normal always-on 16ms tick.
+
++### `console` and `console_status`
++Use `console` for cursor-based reads across Editor reloads and in a Development Player. Pass the returned `cursor` as `since` and `session` as `since-session`. If either refers to an expired cursor, the response includes a fresh tail with `reset=true`.
++
++Use `console_status` to read the cursor and retained severity counts without fetching logs. In the Editor, `groundTruth` includes native Console counts, the compiler state and the age of the last main-thread sample. Entries recovered from the native Console store have `seeded=true`.
++
+ ### `get_console_logs`
+ Read recently captured Editor console logs (structured).
+
+@@ -99,6 +118,14 @@ No parameters.
+
+ **Returns:** `PerformanceStats`
+
++### Profiler recordings and memory snapshots
++
++- `profiler_targets` lists the local Editor and discoverable Development Players. Pass a Player's ID as `player_id` to `profiler_record`, or omit it to record the Editor. Set `file` to a `.data` filename and poll `profiler_record_status`. Use `profiler_cancel` to stop an in-progress recording.
++- `profiler_analyze` loads a saved `.data` file and returns frame times, GC allocation and marker hot spots for the selected thread. Loading or recording over existing Profiler history requires `confirm=true`. Recording restores the previous target and Profiler settings.
++- `memory_snapshot` takes an Editor memory snapshot. Pass a `.snap` filename and poll `memory_snapshot_status`.
++
++The files are saved under `Library/Pipeline/Profiles/`. Copy captures out of `Library` before cleaning the project cache.
++
+ ### `audit`
+ Run a Project Auditor static-analysis scan. Returns immediately; poll `audit_status` until status is `completed`, then read the CSV.
+
+diff --git a/com.unity.pipeline/Editor/Commands/AutoTickCommand.cs b/com.unity.pipeline/Editor/Commands/AutoTickCommand.cs
+index 7961582..c4a5a5e 100644
+--- a/com.unity.pipeline/Editor/Commands/AutoTickCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/AutoTickCommand.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Reflection;
+ using Unity.Pipeline.Commands;
+@@ -38,6 +39,10 @@ namespace Unity.Pipeline.Editor.Commands
+         private static Action s_SignalTick;
+         private static EditorApplication.CallbackFunction s_Pump;
+         private static readonly System.Diagnostics.Stopwatch s_Stopwatch = new System.Diagnostics.Stopwatch();
++        private static readonly System.Diagnostics.Stopwatch DelayClock = System.Diagnostics.Stopwatch.StartNew();
++        private static readonly Action CallDelayFunctions = (Action)typeof(EditorApplication)
++            .GetMethod("Internal_CallDelayFunctions", BindingFlags.Static | BindingFlags.NonPublic)
++            ?.CreateDelegate(typeof(Action));
+         private static long s_IntervalMs;
+
+         internal static bool IsEnabled => s_Enabled;
+@@ -170,6 +175,14 @@ namespace Unity.Pipeline.Editor.Commands
+                 s_Stopwatch.Restart();
+                 s_Pump = () =>
+                 {
++                    if (CallDelayFunctions != null && DelayClock.ElapsedMilliseconds >= 150 &&
++                        !UnityEditorInternal.InternalEditorUtility.isApplicationActive &&
++                        (!EditorApplication.isPlaying || EditorApplication.isPaused))
++                    {
++                        DelayClock.Restart();
++                        CallDelayFunctions();
++                    }
++
+                     if (s_IntervalMs <= 0 || s_Stopwatch.ElapsedMilliseconds >= s_IntervalMs)
+                     {
+                         s_Stopwatch.Restart();
+@@ -192,3 +205,4 @@ namespace Unity.Pipeline.Editor.Commands
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs b/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
+index 2035d81..1597f96 100644
+--- a/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
+@@ -1,5 +1,8 @@
++#if UNITY_EDITOR
+ using System;
+ using System.IO;
++using System.Threading.Tasks;
++using Unity.Pipeline.Editor.Authoring;
+ using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Models;
+ using UnityEditor;
+@@ -29,6 +32,81 @@ namespace Unity.Pipeline.Editor.Commands
+             };
+         }
+
++        [CliCommand("wait", "Wait for an Editor, asset, or scene object condition without blocking the main thread.", Tags = new[] { "editor" })]
++        public static Task<object> Wait(
++            [CliArg("condition", "editor_ready, playing, stopped, not_compiling, asset_exists, or object_active.", Required = true)] string condition,
++            [CliArg("path", "Asset path for asset_exists.")] string path = null,
++            [CliArg("target", "Scene object reference for object_active.")] ObjectRef target = null,
++            [CliArg("timeout_ms", "Wait budget in milliseconds (1 to 600000).")] int timeoutMs = 10000)
++        {
++            if (timeoutMs < 1 || timeoutMs > 600000)
++                throw new ArgumentOutOfRangeException(nameof(timeoutMs));
++
++            Func<bool> probe;
++            switch (condition)
++            {
++                case "editor_ready":
++                    probe = () => !EditorApplication.isCompiling && !EditorApplication.isUpdating &&
++                        EditorApplication.isPlayingOrWillChangePlaymode == EditorApplication.isPlaying;
++                    break;
++                case "playing":
++                    probe = () => EditorApplication.isPlaying;
++                    break;
++                case "stopped":
++                    probe = () => !EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode;
++                    break;
++                case "not_compiling":
++                    probe = () => !EditorApplication.isCompiling;
++                    break;
++                case "asset_exists":
++                    var resolved = ProjectPaths.Resolve(path, out var error);
++                    if (resolved == null)
++                        throw new ArgumentException(error, nameof(path));
++                    probe = () => AssetDatabase.LoadMainAssetAtPath(resolved) != null;
++                    break;
++                case "object_active":
++                    if (target == null || target.IsEmpty)
++                        throw new ArgumentException("target is required for object_active.", nameof(target));
++                    probe = () => ObjectResolver.TryResolve(target, out var obj, out _) &&
++                        obj is GameObject go && go.scene.IsValid() && go.activeInHierarchy;
++                    break;
++                default:
++                    throw new ArgumentException($"Unknown wait condition: {condition}", nameof(condition));
++            }
++
++            var completion = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
++            var clock = System.Diagnostics.Stopwatch.StartNew();
++            var job = BasePipelineServer.CurrentServer?.JobRegistry.CurrentRunning;
++            EditorApplication.update += Poll;
++            Poll();
++            return completion.Task;
++
++            void Poll()
++            {
++                try
++                {
++                    if (job != null && job.CancellationRequested)
++                        completion.TrySetCanceled();
++                    // The transitioning domain cannot keep this HTTP request alive.
++                    else if (EditorApplication.isPlayingOrWillChangePlaymode != EditorApplication.isPlaying)
++                        completion.TrySetResult(new { status = "transitioning", condition });
++                    else if (clock.ElapsedMilliseconds >= timeoutMs)
++                        completion.TrySetResult(new { status = "timed_out", condition, elapsedMs = clock.ElapsedMilliseconds });
++                    else if (probe())
++                        completion.TrySetResult(new { status = "matched", condition, elapsedMs = clock.ElapsedMilliseconds });
++                }
++                catch (Exception ex)
++                {
++                    completion.TrySetException(ex);
++                }
++                finally
++                {
++                    if (completion.Task.IsCompleted)
++                        EditorApplication.update -= Poll;
++                }
++            }
++        }
++
+         /// <summary>
+         /// Get overall Editor status based on current state.
+         /// </summary>
+@@ -60,4 +138,5 @@ namespace Unity.Pipeline.Editor.Commands
+             return "stopped";
+         }
+     }
+-}
+\ No newline at end of file
++}
++#endif
+diff --git a/com.unity.pipeline/Editor/Commands/PlayModeCommands.cs b/com.unity.pipeline/Editor/Commands/PlayModeCommands.cs
+index b06d056..46adb04 100644
+--- a/com.unity.pipeline/Editor/Commands/PlayModeCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/PlayModeCommands.cs
+@@ -1,3 +1,5 @@
++#if UNITY_EDITOR
++using System;
+ using Unity.Pipeline.Commands;
+ using UnityEditor;
+ using UnityEngine;
+@@ -8,21 +10,75 @@ namespace Unity.Pipeline.Editor.Commands
+     /// Commands for controlling Unity Editor play mode state.
+     /// Enables automation workflows to control Editor play/stop/pause from CLI tools.
+     /// </summary>
++    [InitializeOnLoad]
+     static class PlayModeCommands
+     {
+-        // TODO Pipeline: should all commands have name with namespace: editor.play build.generate instead of using _
++        private const string RestoreBackground = "Unity.Pipeline.PlayMode.RestoreBackground";
++        private const string OriginalBackground = "Unity.Pipeline.PlayMode.OriginalBackground";
++
++        static PlayModeCommands()
++        {
++            EditorApplication.playModeStateChanged += OnPlayModeChanged;
++            if (SessionState.GetBool(RestoreBackground, false))
++                EditorApplication.update += MaintainBackground;
++        }
+
+         [CliCommand("editor_play", "Enter Unity Editor play mode", Tags = new[] { "editor/playmode" })]
+-        public static string EnterPlayMode()
++        public static string EnterPlayMode(
++            [CliArg("run_in_background", "Keep the game running while the Editor is unfocused for this Play Mode session.", DefaultValue = true)] bool runInBackground = true)
+         {
++            if (EditorUtility.scriptCompilationFailed || EditorApplication.isCompiling)
++                throw new InvalidOperationException("Cannot enter Play Mode while scripts have compiler errors or are compiling.");
+             if (EditorApplication.isPlaying)
+-            {
+-                Debug.LogWarning("Editor is already in play mode");
+                 return "Already in play mode";
++            if (EditorApplication.isPlayingOrWillChangePlaymode)
++                return "Play mode transition already requested";
++
++            if (runInBackground)
++            {
++                SessionState.SetBool(OriginalBackground, Application.runInBackground);
++                SessionState.SetBool(RestoreBackground, true);
++                Application.runInBackground = true;
++                EditorApplication.update += MaintainBackground;
++            }
++
++            try
++            {
++                EditorApplication.isPlaying = true;
++                return "Entered play mode";
++            }
++            catch
++            {
++                RestoreOriginalBackground();
++                throw;
+             }
++        }
++
++        private static void OnPlayModeChanged(PlayModeStateChange state)
++        {
++            if (state == PlayModeStateChange.EnteredPlayMode && SessionState.GetBool(RestoreBackground, false))
++                Application.runInBackground = true;
++            if (state == PlayModeStateChange.EnteredEditMode)
++                RestoreOriginalBackground();
++        }
++
++        private static void MaintainBackground()
++        {
++            if (EditorApplication.isPlaying)
++                return;
++            if (!EditorApplication.isPlayingOrWillChangePlaymode)
++                RestoreOriginalBackground();
++        }
++
++        private static void RestoreOriginalBackground()
++        {
++            EditorApplication.update -= MaintainBackground;
++            if (!SessionState.GetBool(RestoreBackground, false))
++                return;
+
+-            EditorApplication.isPlaying = true;
+-            return "Entered play mode";
++            Application.runInBackground = SessionState.GetBool(OriginalBackground, false);
++            SessionState.EraseBool(RestoreBackground);
++            SessionState.EraseBool(OriginalBackground);
+         }
+
+         [CliCommand("editor_stop", "Exit Unity Editor play mode", Tags = new[] { "editor/playmode" })]
+@@ -52,4 +108,5 @@ namespace Unity.Pipeline.Editor.Commands
+             return $"Play mode {state}";
+         }
+     }
+-}
+\ No newline at end of file
++}
++#endif
+diff --git a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+index 9176abf..7425582 100644
+--- a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
++++ b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+@@ -3,6 +3,7 @@ using System.Collections.Generic;
+ using System.IO;
+ using System.Linq;
+ using System.Net;
++using System.Net.NetworkInformation;
+ using System.Text;
+ using System.Threading;
+ using System.Threading.Tasks;
+@@ -276,6 +277,9 @@ namespace Unity.Pipeline
+             if (m_IsRunning)
+                 return;
+
++            if (port != 0 && GetListeningPorts().Contains(port))
++                throw new InvalidOperationException($"Port {port} is already listening.");
++
+             m_Port = port == 0 ? FindAvailablePort() : port;
+             PortAutoAssigned = port == 0;
+
+@@ -329,18 +333,13 @@ namespace Unity.Pipeline
+         }
+
+         /// <summary>
+-        /// Bind a wildcard-host prefix so the listener accepts any Host header ("127.0.0.1",
+-        /// "localhost", "::1") no matter how a client — or its DNS resolver — resolves the name.
+-        /// This is required because Mono's HttpListener binds a hostname prefix to a single resolved
+-        /// address family and then matches the request's Host <em>literally</em> per prefix: an
+-        /// explicit "http://127.0.0.1/" prefix rejects "Host: localhost" (and vice-versa) with a
+-        /// 400. A wildcard sidesteps that. The wildcard binds all interfaces at the socket level, so
+-        /// access is confined to the local machine by the loopback check in
+-        /// <see cref="ProcessRequest"/> (plus bearer-token auth).
++        /// Use literal loopback prefixes so remote interfaces are not served.
++        /// Retain localhost for older local clients that send that Host header.
+         /// </summary>
+         private static void AddLoopbackPrefixes(HttpListener listener, int port)
+         {
+-            listener.Prefixes.Add($"http://+:{port}/");
++            listener.Prefixes.Add($"http://127.0.0.1:{port}/");
++            listener.Prefixes.Add($"http://localhost:{port}/");
+         }
+
+         /// <summary>
+@@ -516,10 +515,7 @@ namespace Unity.Pipeline
+
+             try
+             {
+-                // Confine access to the local machine. The listener binds a wildcard host (see
+-                // AddLoopbackPrefixes) so it accepts any Host header, which also means it accepts
+-                // connections on non-loopback interfaces — reject anything that isn't loopback
+-                // before doing any other work. Bearer-token auth is still enforced below.
++                // Retain peer validation as well as the explicit loopback prefixes.
+                 var remoteAddress = request.RemoteEndPoint?.Address;
+                 if (remoteAddress == null || !IPAddress.IsLoopback(remoteAddress))
+                 {
+@@ -579,6 +575,8 @@ namespace Unity.Pipeline
+
+                 // Route to appropriate endpoint
+                 var path = request.Url.AbsolutePath.ToLowerInvariant();
++                if (path == "/api/status" || path == "/api/editor_status" || path == "/api/dialog" || path == "/api/exec")
++                    RefreshDialogState();
+
+                 switch (path)
+                 {
+@@ -1700,6 +1698,8 @@ namespace Unity.Pipeline
+         /// modals are covered; OS file/folder pickers and any other dialog mechanism are not. A
+         /// caller still needs a fallback signal (e.g. a command timeout) for the uncovered cases.
+         /// </summary>
++        protected virtual void RefreshDialogState() { }
++
+         private async Task HandleDialogRequest(HttpListenerResponse response)
+         {
+             try
+@@ -2692,10 +2692,11 @@ namespace Unity.Pipeline
+         private int FindAvailablePort()
+         {
+             var (basePort, maxPort) = GetPortRange();
++            var listening = GetListeningPorts();
+
+             for (int port = basePort; port <= maxPort; port++)
+             {
+-                if (IsPortAvailable(port))
++                if (!listening.Contains(port) && IsPortAvailable(port))
+                 {
+                     return port;
+                 }
+@@ -2704,6 +2705,14 @@ namespace Unity.Pipeline
+             throw new InvalidOperationException($"No available ports in range {basePort}-{maxPort}");
+         }
+
++        // Mono can bind 127.0.0.1 on top of an older wildcard listener.
++        // Do not share a port with an older Pipeline instance or another process.
++        private static HashSet<int> GetListeningPorts()
++        {
++            return new HashSet<int>(IPGlobalProperties.GetIPGlobalProperties()
++                .GetActiveTcpListeners().Select(endpoint => endpoint.Port));
++        }
++
+         /// <summary>
+         /// Check if a specific port is available for binding.
+         /// </summary>

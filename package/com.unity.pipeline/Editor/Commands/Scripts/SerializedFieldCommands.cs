@@ -45,6 +45,9 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
                 throw new ArgumentException("set_serialized_field 'field' is required.");
 
             var obj = ResolveSerializable(target, component);
+            if (obj is Component && EditorUtility.IsPersistent(obj)
+                && AssetDatabase.GetAssetPath(obj).EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Use set_prefab_serialized_field for a component in a prefab asset.");
 
             using (new AuthoringUndoScope($"Set {field}"))
             {
@@ -66,6 +69,49 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
 
             var result = ObjectResolver.Describe(obj) ?? new AuthoringResult { Type = obj.GetType().Name };
             return result;
+        }
+
+        [CliCommand("set_prefab_serialized_field", "Edit and save a field on a Prefab component in isolated Prefab contents.", Tags = new[] { "scripts", "prefabs" })]
+        public static AuthoringResult SetPrefabSerializedField(
+            [CliArg("target", "Prefab asset path and child, e.g. Assets/UI.prefab:Root/Child.", Required = true)] string target,
+            [CliArg("component", "Component type on the Prefab object.", Required = true)] string component,
+            [CliArg("field", "Unity SerializedProperty path.", Required = true)] string field,
+            [CliArg("value", "JSON value to write.", Required = true, ArbitraryKeys = true)] JToken value)
+        {
+            if (!ObjectResolver.TrySplitPrefabPath(target, out var path, out var childPath))
+                throw new ArgumentException("Use a path such as 'Assets/UI.prefab:Root/Child' for target.");
+            var assetPath = ProjectPaths.Resolve(path, out var error);
+            if (assetPath == null)
+                throw new ArgumentException(error);
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(assetPath) == null)
+                throw new ArgumentException($"No Prefab at '{assetPath}'.");
+
+            var root = PrefabUtility.LoadPrefabContents(assetPath);
+            try
+            {
+                var node = ObjectResolver.FindPrefabChild(root, childPath, out error);
+                if (node == null)
+                    throw new ArgumentException(error);
+                var obj = ResolveSerializable(new ObjectRef { InstanceId = PipelineUtils.GetObjectId(node) }, component);
+                using (var data = new SerializedObject(obj))
+                {
+                    var property = data.FindProperty(field);
+                    if (property == null)
+                        throw new ArgumentException($"Field '{field}' was not found on '{obj.GetType().Name}'.");
+                    SerializedPropertyConverter.SetValue(property, value);
+                    data.ApplyModifiedPropertiesWithoutUndo();
+                }
+                PrefabUtility.SaveAsPrefabAsset(root, assetPath, out var saved);
+                if (!saved)
+                    throw new InvalidOperationException($"Failed to save '{assetPath}'.");
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+
+            var persistent = ResolveSerializable(new ObjectRef { Path = $"{assetPath}:{childPath}" }, component);
+            return ObjectResolver.Describe(persistent);
         }
 
         [CliCommand("get_serialized_fields",

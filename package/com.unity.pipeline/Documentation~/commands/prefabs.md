@@ -2,6 +2,8 @@
 
 Commands covering the prefab lifecycle an agent needs to build content procedurally: saving a configured GameObject as a prefab asset, instantiating it into a scene, deriving a variant, applying/reverting instance overrides, unpacking, and editing prefab contents through the prefab stage. Asset paths are sandboxed to the authoring root; scene-side mutations are Undo-able, but prefab asset writes are AssetDatabase operations and are not part of Unity's Undo system.
 
+Use a target such as `Assets/Screen.prefab:Root/Body` with `get_serialized_fields` to inspect a component inside a Prefab asset. Use `set_prefab_serialized_field` with `target`, `component`, `field` and `value` to save the field. The command opens and unloads isolated Prefab contents, and nested instance edits are saved as overrides on the containing asset. Use `set_serialized_field` for scene objects and standalone serialized assets.
+
 ### `create_prefab`
 Save a GameObject as a prefab asset at a project path; the source becomes a connected instance.
 

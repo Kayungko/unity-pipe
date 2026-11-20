@@ -189,7 +189,8 @@ namespace Unity.Pipeline.Models
             // normalize it under the authoring root. A leading "/" always means a scene hierarchy path,
             // and an extension-less string ("Player", "Root/Child") stays one. Dotted GameObject names
             // ("Cube.001") land here too, but the resolver falls back to a hierarchy lookup for those.
-            if (!s.StartsWith("/", StringComparison.Ordinal) && Path.HasExtension(s))
+            if (!s.StartsWith("/", StringComparison.Ordinal) &&
+                (Path.HasExtension(s) || s.IndexOf(".prefab:", StringComparison.OrdinalIgnoreCase) >= 0))
                 return new ObjectRef { Path = s };
 
             // Leading-"/" canonical paths and bare names resolve as a scene hierarchy path.

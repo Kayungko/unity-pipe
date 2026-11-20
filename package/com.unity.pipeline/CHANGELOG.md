@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-2022.3] - Local candidate
+
+- Backport Unity 1.0.1 Editor lifecycle, Console, capture, Prefab addressing and Profiler features for Unity 2022.3.
+- Bind Pipeline listeners to loopback and avoid ports already held by another listener.
+
 ## [0.6.0-2022.1] - 2026-09-02
 
 Unity 2022.3 adaptation of upstream 0.6.0-exp.1 (rev `27af91a9`). See `package/ADAPTATION-2022.md`.

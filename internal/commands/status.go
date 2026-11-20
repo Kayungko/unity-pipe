@@ -30,9 +30,12 @@ func StatusCommand() SubCommand {
 			if err != nil {
 				return nil, err
 			}
-			editor, err := rt.Client.EditorStatus()
-			if err != nil {
-				return nil, err
+			var editor *protocol.ExecResponse
+			if protocol.ExtractStatus(server) != "blocked_by_dialog" {
+				editor, err = rt.Client.EditorStatus()
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			return map[string]any{

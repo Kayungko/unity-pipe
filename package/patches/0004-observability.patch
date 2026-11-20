@@ -1,0 +1,1117 @@
+diff --git a/com.unity.pipeline/Documentation~/testing.md b/com.unity.pipeline/Documentation~/testing.md
+index 5825b2f..ffabc74 100644
+--- a/com.unity.pipeline/Documentation~/testing.md
++++ b/com.unity.pipeline/Documentation~/testing.md
+@@ -1,5 +1,7 @@
+ # Tests architecture
+
++Poll an asynchronous test run with `upipe exec test_status`. Use `--set detail=failures` for failed test details or `--set detail=summary` for counts only. The default `full` returns every result. Use `upipe test` to propagate a failed run to the process exit code.
++
+ How the package's tests exercise commands. There are two complementary styles — **ViaClient** (over real HTTP, end-to-end) and **CommandDirect** (calling the static command method straight) — backed by a small set of shared test helpers.
+
+ ## Two test styles
+diff --git a/com.unity.pipeline/Editor/Commands/Observability/ConsoleCommands.cs b/com.unity.pipeline/Editor/Commands/Observability/ConsoleCommands.cs
+index 12b89b9..3616c1e 100644
+--- a/com.unity.pipeline/Editor/Commands/Observability/ConsoleCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Observability/ConsoleCommands.cs
+@@ -1,7 +1,10 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using System.Reflection;
+ using Unity.Pipeline.Commands;
++using Unity.Pipeline.Console;
++using Unity.Pipeline.Editor.Console;
+
+ namespace Unity.Pipeline.Editor.Commands.Observability
+ {
+@@ -45,6 +48,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
+         public static object ClearConsole()
+         {
+             ConsoleLogBuffer.Clear();
++            ConsoleLogCapture.Buffer.Clear();
+
+             // Best-effort: also clear Unity's own console window. UnityEditor.LogEntries is internal,
+             // so reach it via reflection and swallow any failure (API is not part of the public contract).
+@@ -61,6 +65,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
+                 // Ignore — clearing the Editor console is auxiliary; the buffer is already cleared.
+             }
+
++            EditorConsoleGroundTruth.ResampleAfterClear();
+             return new { cleared = true };
+         }
+
+@@ -87,3 +92,4 @@ namespace Unity.Pipeline.Editor.Commands.Observability
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/Commands/TestCommands.cs b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+index 8c425b4..98e591f 100644
+--- a/com.unity.pipeline/Editor/Commands/TestCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+@@ -1,7 +1,10 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using System.Linq;
+ using System.Threading.Tasks;
++using Newtonsoft.Json;
++using Newtonsoft.Json.Linq;
+ using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Editor.Testing;
+ using Unity.Pipeline.Models;
+@@ -97,10 +100,28 @@ namespace Unity.Pipeline.Editor.Commands
+         /// Get current test status for async test execution
+         /// </summary>
+         [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Tags = new[] { "tests" })]
+-        public static string GetTestStatus()
++        public static string GetTestStatus(
++            [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full")
+         {
+-            var status = PipelineTestRunner.GetTestStatus();
+-            return status ?? "{\"status\":\"no_tests\",\"message\":\"No test run in progress\"}";
++            var projection = (detail ?? "full").Trim().ToLowerInvariant();
++            if (projection != "full" && projection != "failures" && projection != "summary")
++                throw new ArgumentException("Use 'full', 'failures' or 'summary'.", nameof(detail));
++
++            var status = PipelineTestRunner.GetTestStatus()
++                ?? "{\"status\":\"no_tests\",\"message\":\"No test run in progress\"}";
++            if (projection == "full")
++                return status;
++
++            var report = JObject.Parse(status);
++            if (report["results"] is JArray results)
++            {
++                report["results"] = projection == "summary"
++                    ? new JArray()
++                    : new JArray(results.OfType<JObject>().Where(result =>
++                        string.Equals((string)result.GetValue("status", StringComparison.OrdinalIgnoreCase),
++                            "Failed", StringComparison.OrdinalIgnoreCase)));
++            }
++            return report.ToString(Formatting.None);
+         }
+
+         /// <summary>
+@@ -217,3 +238,4 @@ namespace Unity.Pipeline.Editor.Commands
+         public bool Explicit { get; set; }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/Console/EditorConsoleCaptureBootstrap.cs b/com.unity.pipeline/Editor/Console/EditorConsoleCaptureBootstrap.cs
+index 9db7a95..a2c3dc3 100644
+--- a/com.unity.pipeline/Editor/Console/EditorConsoleCaptureBootstrap.cs
++++ b/com.unity.pipeline/Editor/Console/EditorConsoleCaptureBootstrap.cs
+@@ -1,3 +1,10 @@
++#if UNITY_EDITOR
++using System;
++using System.Collections.Generic;
++using System.Reflection;
++using Unity.Pipeline.Models;
++using UnityEngine;
++using System.Globalization;
+ using UnityEditor;
+ using Unity.Pipeline.Console;
+
+@@ -15,6 +22,8 @@ namespace Unity.Pipeline.Editor.Console
+     ///    <see cref="UnityEngine.Application.logMessageReceivedThreaded"/>'s subscribers on play-mode
+     ///    exit even though exiting play mode does not reload the domain, so capture would otherwise go
+     ///    dead until the next recompile.
++    ///  - A session identifier and a sequence floor in <see cref="SessionState"/>, so a client can
++    ///    tell a cursor this editor session issued from one an earlier session did.
+     ///
+     /// The static constructor restores the persisted buffer first, then starts capture, so logs are
+     /// never appended ahead of a restore.
+@@ -26,10 +35,30 @@ namespace Unity.Pipeline.Editor.Console
+         // survives domain reloads, and never committed.
+         internal const string PersistencePath = "Temp/pipeline_console_log.json";
+
++        // SessionState survives domain reloads and is cleared when the Editor restarts, which is
++        // exactly the lifetime of the Temp file the buffer persists to. Both therefore start over
++        // together, and the session identifier is what tells a client that happened.
++        internal const string SessionKey = "pipeline.console.session";
++        internal const string SeqFloorKey = "pipeline.console.seq";
++
+         static EditorConsoleCaptureBootstrap()
+         {
+-            // Restore before capture starts so restored entries precede any newly captured ones.
++            var session = SessionState.GetString(SessionKey, string.Empty);
++            if (string.IsNullOrEmpty(session))
++            {
++                session = System.Guid.NewGuid().ToString("N");
++                SessionState.SetString(SessionKey, session);
++            }
++
++            ConsoleLogCapture.Buffer.SetSession(session);
++
++            // Restore before capture starts so restored entries precede any newly captured ones, and
++            // load before raising the floor: the floor is the same value the snapshot recorded, so
++            // raising it first would make every snapshot entry look already-issued and drop it.
+             ConsoleLogCapture.Buffer.Load(PersistencePath);
++            if (long.TryParse(SessionState.GetString(SeqFloorKey, "0"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var floor))
++                ConsoleLogCapture.Buffer.RaiseLastSeq(floor);
++
+             ConsoleLogCapture.EnsureCapturing();
+
+             AssemblyReloadEvents.beforeAssemblyReload -= Persist;
+@@ -45,8 +74,425 @@ namespace Unity.Pipeline.Editor.Console
+         static void Persist()
+         {
+             ConsoleLogCapture.Buffer.Save(PersistencePath);
++            SessionState.SetString(SeqFloorKey, ConsoleLogCapture.Buffer.LastSeq.ToString(CultureInfo.InvariantCulture));
+         }
+
+         static void OnPlayModeStateChanged(PlayModeStateChange state) => ConsoleLogCapture.EnsureCapturing();
+     }
++
++    /// <summary>
++    /// Samples what the Editor knows about the console — the compile-failure flag and the console's
++    /// own entry counts — and publishes it for the <c>console</c> and <c>recompile_status</c>
++    /// commands. Those commands are deliberately not main-thread commands, because clients poll
++    /// them while the Editor is blocked compiling or importing, so they cannot read this state
++    /// themselves; sampling it here and handing over an immutable snapshot is what lets them report
++    /// it at all.
++    ///
++    /// The same pass does two more jobs that need the same main-thread tick:
++    ///  - Backfills the buffer from the console's own store once per session, so sticky compile
++    ///    errors logged before capture started are visible (see <see cref="EditorConsoleEntries"/>).
++    ///  - Watches for the console gaining entries while the buffer's cursor stands still, which is
++    ///    the only observable symptom of the log-callback subscription having been dropped, and
++    ///    re-arms capture when it sees it.
++    ///
++    /// Sampling runs on the Editor update loop even when the Console window is closed.
++    /// </summary>
++    [InitializeOnLoad]
++    static class EditorConsoleGroundTruth
++    {
++        const string SeededKey = "pipeline.console.seeded";
++        const double SampleIntervalSeconds = 0.25;
++        const double ReseedCooldownSeconds = 5.0;
++
++        static double s_NextSampleTime;
++        static double s_NextReseedTime;
++        static int s_LastConsoleTotal = -1;
++        static long s_LastBufferSeq = -1;
++        static bool s_GapPending;
++        static long s_GapSeq;
++        static bool s_Seeded;
++
++        static EditorConsoleGroundTruth()
++        {
++            s_Seeded = SessionState.GetBool(SeededKey, false);
++
++            EditorApplication.update -= Sample;
++            EditorApplication.update += Sample;
++
++            AssemblyReloadEvents.afterAssemblyReload -= OnAfterAssemblyReload;
++            AssemblyReloadEvents.afterAssemblyReload += OnAfterAssemblyReload;
++        }
++
++        static void Sample()
++        {
++            if (EditorApplication.timeSinceStartup < s_NextSampleTime)
++                return;
++            s_NextSampleTime = EditorApplication.timeSinceStartup + SampleIntervalSeconds;
++
++            // Seed before publishing, so the first snapshot a client sees already reports whether
++            // the backfill happened.
++            if (!s_Seeded)
++                TrySeed();
++
++            EditorConsoleEntries.ReadCounts(out var errors, out var warnings, out var logs);
++            var total = errors + warnings + logs;
++            var seq = ConsoleLogCapture.Buffer.LastSeq;
++
++            // The console gained entries while the buffer's cursor stood still. Unity unregisters
++            // the native log callback on domain unload and on play-mode exit, while the managed
++            // event keeps its subscriber list, so capture can be dead with nothing to test directly.
++            //
++            // A gap is confirmed by the cursor still sitting where it was one sample later, not by
++            // the console count growing again: a dead subscription that missed a single burst — a
++            // failed compile, say — would otherwise be spotted once and then forgotten. Waiting for
++            // the second sample keeps a console entry that legitimately never reaches the managed
++            // callback from re-arming on its own. A Clear lowers the counts, so it can never be
++            // mistaken for a gap.
++            if (s_GapPending && seq == s_GapSeq)
++            {
++                if (EditorApplication.timeSinceStartup >= s_NextReseedTime)
++                {
++                    ConsoleLogCapture.EnsureCapturing();
++                    Reseed();
++                    seq = ConsoleLogCapture.Buffer.LastSeq;
++                    s_NextReseedTime = EditorApplication.timeSinceStartup + ReseedCooldownSeconds;
++                    s_GapPending = false;
++                }
++            }
++            else if (s_LastConsoleTotal >= 0 && total > s_LastConsoleTotal && seq == s_LastBufferSeq)
++            {
++                s_GapSeq = seq;
++                s_GapPending = true;
++            }
++            else
++            {
++                // The buffer caught up on its own.
++                s_GapPending = false;
++            }
++
++            s_LastConsoleTotal = total;
++            s_LastBufferSeq = seq;
++
++            ConsoleLogCapture.GroundTruth = new ConsoleGroundTruth
++            {
++                SampledUtc = DateTime.UtcNow,
++                CompilationFailed = EditorUtility.scriptCompilationFailed,
++                Compiling = EditorApplication.isCompiling,
++                ConsoleErrors = errors,
++                ConsoleWarnings = warnings,
++                ConsoleLogs = logs,
++                Seeded = s_Seeded
++            };
++        }
++
++        static void OnAfterAssemblyReload()
++        {
++            ConsoleLogCapture.EnsureCapturing();
++
++            // The snapshot describes the domain that just went away, and on 6000.5+ it survives the
++            // reload with the rest of the statics. Drop it so nothing reads it as current until the
++            // next sample replaces it.
++            ConsoleLogCapture.GroundTruth = null;
++
++            // Let the next sample establish a fresh baseline instead of comparing against counts
++            // and a cursor from before the reload, which would look like a gap.
++            s_LastConsoleTotal = -1;
++            s_LastBufferSeq = -1;
++            s_GapPending = false;
++            s_GapSeq = 0;
++        }
++
++        static void TrySeed()
++        {
++            if (!Reseed())
++                return;
++
++            s_Seeded = true;
++            SessionState.SetBool(SeededKey, true);
++        }
++
++        internal static void ResampleAfterClear()
++        {
++            // Unity retains sticky compiler errors when the Console is cleared.
++            s_Seeded = !EditorUtility.scriptCompilationFailed;
++            s_NextSampleTime = 0;
++        }
++
++        /// <summary>
++        /// Copy console entries the buffer does not already hold into it. Entries are matched on type
++        /// and message, the only fields both sides record identically. A log type never contains "|",
++        /// so the first one always terminates it and the key is unambiguous.
++        ///
++        /// Matching counts occurrences rather than presence, because the console holds repeated
++        /// messages by design. Treating a key as seen-or-not lets a row the buffer already has cancel
++        /// out an identical row it missed, and that row is then never recovered.
++        /// </summary>
++        static bool Reseed()
++        {
++            var entries = new List<EditorConsoleEntries.Entry>();
++            if (!EditorConsoleEntries.TryReadRecent(ConsoleLogBuffer.Capacity, entries))
++                return false;
++
++            var held = new Dictionary<string, int>();
++            foreach (var entry in ConsoleLogCapture.Buffer.Query(-1, 0, ConsoleLogBuffer.SeverityLog).Entries)
++            {
++                var key = Key(entry.LogType, entry.Message);
++                held.TryGetValue(key, out var count);
++                held[key] = count + 1;
++            }
++
++            var now = DateTime.UtcNow;
++            foreach (var entry in entries)
++            {
++                var key = Key(entry.Type.ToString(), entry.Message);
++
++                // Consume one occurrence the buffer already holds; whatever the console has beyond
++                // that is what capture missed.
++                if (held.TryGetValue(key, out var remaining) && remaining > 0)
++                {
++                    held[key] = remaining - 1;
++                    continue;
++                }
++
++                ConsoleLogCapture.Buffer.Add(entry.Type, entry.Message, entry.StackTrace, now, seeded: true);
++            }
++
++            return true;
++        }
++
++        static string Key(string logType, string message) => logType + "|" + message;
++    }
++
++    /// <summary>
++    /// Reads the Editor console's own entry store through UnityEditor.LogEntries.
++    ///
++    /// This is the only way to see entries the package's log-callback capture never received.
++    /// Editor compile errors are logged with a sticky flag, and the console's Clear skips sticky
++    /// entries, so they survive the Clear button, Clear on Play, Clear on Build and Clear on
++    /// Recompile — only the next completed compile removes them. They can therefore stand in the
++    /// console long after the callback-fed buffer evicted them or was never subscribed.
++    ///
++    /// Reflection rather than a direct reference, because LogEntries is internal. Any failure
++    /// disables this permanently for the session and callers report the console as unseeded.
++    /// </summary>
++    static class EditorConsoleEntries
++    {
++        // ConsoleMode bits from Unity's native EditorMonoConsole (mirrored by the internal
++        // ConsoleWindow.ConsoleFlags): the three level toggles the console filter checks, and
++        // Collapse, which folds identical entries into a single row.
++        const int LevelFlags = (1 << 7) | (1 << 8) | (1 << 9);
++        const int CollapseFlag = 1 << 0;
++
++        // LogMessageFlags bits, grouped exactly as Unity's own LogModeToLogType groups them.
++        const int ModeScriptingException = 1 << 17;
++        const int ModeErrors = (1 << 0) | (1 << 4) | (1 << 8) | (1 << 11) | (1 << 6);
++        const int ModeAsserts = (1 << 1) | (1 << 21);
++        const int ModeWarnings = (1 << 9) | (1 << 12) | (1 << 7);
++
++        static readonly MethodInfo k_GetCountsByType;
++        static readonly MethodInfo k_StartGettingEntries;
++        static readonly MethodInfo k_EndGettingEntries;
++        static readonly MethodInfo k_GetEntryInternal;
++        static readonly MethodInfo k_GetFilteringText;
++        static readonly MethodInfo k_SetFilteringText;
++        static readonly MethodInfo k_GetConsoleFlags;
++        static readonly MethodInfo k_SetConsoleFlags;
++        static readonly Type k_LogEntryType;
++        static readonly FieldInfo k_MessageField;
++        static readonly FieldInfo k_ModeField;
++        static readonly FieldInfo k_CallstackStartField;
++
++        static bool s_Disabled;
++
++        /// <summary>An entry as it stands in the Editor console.</summary>
++        internal struct Entry
++        {
++            public LogType Type;
++            public string Message;
++            public string StackTrace;
++        }
++
++        static EditorConsoleEntries()
++        {
++            // LogEntries and LogEntry are internal, and LogEntries' members are static and
++            // non-public, so NonPublic is mandatory in the binding flags — GetMethod without it
++            // silently returns null.
++            const BindingFlags statics = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
++
++            var logEntries = Type.GetType("UnityEditor.LogEntries,UnityEditor");
++            k_LogEntryType = Type.GetType("UnityEditor.LogEntry,UnityEditor");
++            if (logEntries == null || k_LogEntryType == null)
++                return;
++
++            k_GetCountsByType = logEntries.GetMethod("GetCountsByType", statics);
++            k_StartGettingEntries = logEntries.GetMethod("StartGettingEntries", statics);
++            k_EndGettingEntries = logEntries.GetMethod("EndGettingEntries", statics);
++            k_GetEntryInternal = logEntries.GetMethod("GetEntryInternal", statics);
++            k_GetFilteringText = logEntries.GetMethod("GetFilteringText", statics);
++            k_SetFilteringText = logEntries.GetMethod("SetFilteringText", statics);
++
++            var consoleFlags = logEntries.GetProperty("consoleFlags", statics);
++            k_GetConsoleFlags = consoleFlags?.GetGetMethod(true);
++            k_SetConsoleFlags = consoleFlags?.GetSetMethod(true);
++
++            const BindingFlags fields = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
++            k_MessageField = k_LogEntryType.GetField("message", fields);
++            k_ModeField = k_LogEntryType.GetField("mode", fields);
++            k_CallstackStartField = k_LogEntryType.GetField("callstackTextStartUTF16", fields);
++        }
++
++        /// <summary>
++        /// True when every member this reads was found and no read has failed yet.
++        /// </summary>
++        internal static bool Available =>
++            !s_Disabled
++            && k_StartGettingEntries != null && k_EndGettingEntries != null && k_GetEntryInternal != null
++            && k_GetFilteringText != null && k_SetFilteringText != null
++            && k_GetConsoleFlags != null && k_SetConsoleFlags != null
++            && k_MessageField != null && k_ModeField != null && k_CallstackStartField != null;
++
++        /// <summary>
++        /// Read up to <paramref name="max"/> most recent console entries, oldest first. Returns
++        /// false when the internal API is unavailable or the read failed, in which case
++        /// <paramref name="into"/> is left untouched. Main thread only.
++        /// </summary>
++        /// <param name="max">Maximum number of entries to read, taken from the end of the console.</param>
++        /// <param name="into">Receives the entries read.</param>
++        /// <returns>True when entries were read.</returns>
++        internal static bool TryReadRecent(int max, List<Entry> into)
++        {
++            if (!Available || max <= 0)
++                return false;
++
++            var flags = 0;
++            var filter = string.Empty;
++            var flagsMutated = false;
++            var filterMutated = false;
++
++            try
++            {
++                flags = (int)k_GetConsoleFlags.Invoke(null, null);
++                filter = (string)k_GetFilteringText.Invoke(null, null) ?? string.Empty;
++
++                // The console's row list is filtered by the level toggles and the search box, and
++                // Collapse folds repeats into one row, so a user who has any of them set would
++                // otherwise hide entries from this read. Open the view only when it is actually
++                // restricted: in the default state this mutates nothing and avoids two native
++                // re-filter passes.
++                //
++                // Collapse matters because the caller counts occurrences to work out what it missed;
++                // a collapsed row reports one where the console holds several.
++                //
++                // Both must happen outside the StartGettingEntries bracket: setting them rebuilds
++                // the filtered index, and reordering it under a live snapshot invalidates the row
++                // indices the read below uses.
++                var opened = (flags | LevelFlags) & ~CollapseFlag;
++                if (opened != flags)
++                {
++                    k_SetConsoleFlags.Invoke(null, new object[] { opened });
++                    flagsMutated = true;
++                }
++
++                if (!string.IsNullOrEmpty(filter))
++                {
++                    k_SetFilteringText.Invoke(null, new object[] { string.Empty });
++                    filterMutated = true;
++                }
++
++                // StartGettingEntries returns the row count and pins it for the duration; GetCount
++                // would report that same pinned value, so there is no reason to ask twice.
++                var total = (int)k_StartGettingEntries.Invoke(null, null);
++                try
++                {
++                    var entry = Activator.CreateInstance(k_LogEntryType);
++                    var args = new object[2];
++                    for (var row = Math.Max(0, total - max); row < total; row++)
++                    {
++                        args[0] = row;
++                        args[1] = entry;
++                        if (!(bool)k_GetEntryInternal.Invoke(null, args))
++                            continue;
++
++                        into.Add(ToEntry(entry));
++                    }
++                }
++                finally
++                {
++                    // Leaving the snapshot open pins the console's row count for every other reader
++                    // and makes Unity warn on the next StartGettingEntries.
++                    k_EndGettingEntries.Invoke(null, null);
++                }
++
++                return true;
++            }
++            catch (Exception ex)
++            {
++                s_Disabled = true;
++                Debug.LogWarning($"[Pipeline] Cannot read the Editor console store; console entries logged before capture started will not be reported: {ex.Message}");
++                return false;
++            }
++            finally
++            {
++                if (filterMutated)
++                    TryRestore(k_SetFilteringText, filter);
++                if (flagsMutated)
++                    TryRestore(k_SetConsoleFlags, flags);
++            }
++        }
++
++        internal static void ReadCounts(out int errors, out int warnings, out int logs)
++        {
++            errors = warnings = logs = 0;
++            if (k_GetCountsByType == null)
++                return;
++
++            var counts = new object[] { 0, 0, 0 };
++            k_GetCountsByType.Invoke(null, counts);
++            errors = (int)counts[0];
++            warnings = (int)counts[1];
++            logs = (int)counts[2];
++        }
++
++        static Entry ToEntry(object logEntry)
++        {
++            var message = (string)k_MessageField.GetValue(logEntry) ?? string.Empty;
++            var mode = (int)k_ModeField.GetValue(logEntry);
++
++            // A console entry stores its message and callstack in one string, split at this index.
++            var split = Mathf.Clamp((int)k_CallstackStartField.GetValue(logEntry), 0, message.Length);
++
++            return new Entry
++            {
++                Type = ToLogType(mode),
++                Message = message.Substring(0, split),
++                StackTrace = message.Substring(split)
++            };
++        }
++
++        static LogType ToLogType(int mode)
++        {
++            if ((mode & ModeScriptingException) != 0)
++                return LogType.Exception;
++            if ((mode & ModeErrors) != 0)
++                return LogType.Error;
++            if ((mode & ModeAsserts) != 0)
++                return LogType.Assert;
++            if ((mode & ModeWarnings) != 0)
++                return LogType.Warning;
++            return LogType.Log;
++        }
++
++        static void TryRestore(MethodInfo setter, object value)
++        {
++            try
++            {
++                setter.Invoke(null, new[] { value });
++            }
++            catch (Exception ex)
++            {
++                Debug.LogWarning($"[Pipeline] Failed to restore Editor console filtering state: {ex.Message}");
++            }
++        }
++    }
+ }
++#endif
+diff --git a/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs b/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs
+index 593856c..e858d4d 100644
+--- a/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs
++++ b/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs
+@@ -1,3 +1,4 @@
++using System;
+ using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Console;
+ using Unity.Pipeline.Models;
+@@ -31,7 +32,8 @@ namespace Unity.Pipeline.Runtime.Commands
+         public static ConsoleLogResponse GetConsole(
+             [CliArg("tail", "Maximum number of most-recent entries to return")] int tail = DefaultTail,
+             [CliArg("level", "Minimum severity to include: log | warn | error")] string level = ConsoleLogBuffer.LevelLog,
+-            [CliArg("since", "Cursor: only return entries newer than this seq. Use the 'cursor' from a previous response to follow.")] long since = -1)
++            [CliArg("since", "Cursor: only return entries newer than this seq. Use the 'cursor' from a previous response to follow.")] long since = -1,
++            [CliArg("since-session", "Session from the previous response. A stale cursor returns a fresh tail and reset=true.")] string since_session = null)
+         {
+             // Guard against nonsensical tail values; <= 0 would otherwise mean "unlimited" in the
+             // buffer, which is not what a caller passing e.g. --tail 0 expects.
+@@ -39,7 +41,41 @@ namespace Unity.Pipeline.Runtime.Commands
+                 tail = DefaultTail;
+
+             var minSeverity = ConsoleLogBuffer.SeverityFromLevelName(level);
+-            return ConsoleLogCapture.Buffer.Query(since, tail, minSeverity);
++            var response = ConsoleLogCapture.Buffer.Query(since, tail, minSeverity, since_session);
++            response.GroundTruth = ReadGroundTruth();
++            return response;
++        }
++
++        [CliCommand("console_status", "Read retained severity counts, cursor and the most recent Editor console and compiler sample.", MainThreadRequired = false, Tags = new[] { "observability/console" })]
++        public static ConsoleLogResponse GetStatus()
++        {
++            var response = ConsoleLogCapture.Buffer.Stats();
++            response.GroundTruth = ReadGroundTruth();
++            return response;
++        }
++
++        /// <summary>
++        /// A copy of the last ground-truth sample with its age filled in. Copied rather than
++        /// returned directly so the published snapshot stays immutable and shared between callers.
++        /// </summary>
++        static ConsoleGroundTruth ReadGroundTruth()
++        {
++            var sample = ConsoleLogCapture.GroundTruth;
++            if (sample == null)
++                return null;
++
++            var ageMs = (long)(DateTime.UtcNow - sample.SampledUtc).TotalMilliseconds;
++            return new ConsoleGroundTruth
++            {
++                SampledUtc = sample.SampledUtc,
++                AgeMs = ageMs < 0 ? 0 : ageMs,
++                CompilationFailed = sample.CompilationFailed,
++                Compiling = sample.Compiling,
++                ConsoleErrors = sample.ConsoleErrors,
++                ConsoleWarnings = sample.ConsoleWarnings,
++                ConsoleLogs = sample.ConsoleLogs,
++                Seeded = sample.Seeded
++            };
+         }
+     }
+ }
+diff --git a/com.unity.pipeline/Runtime/Console/ConsoleLogBuffer.cs b/com.unity.pipeline/Runtime/Console/ConsoleLogBuffer.cs
+index c003158..3c7b460 100644
+--- a/com.unity.pipeline/Runtime/Console/ConsoleLogBuffer.cs
++++ b/com.unity.pipeline/Runtime/Console/ConsoleLogBuffer.cs
+@@ -37,6 +37,7 @@ namespace Unity.Pipeline.Console
+         readonly object m_Lock = new object();
+         readonly Queue<StoredEntry> m_Entries = new Queue<StoredEntry>();
+         long m_LastSeq;
++        string m_Session = Guid.NewGuid().ToString("N");
+
+         struct StoredEntry
+         {
+@@ -44,6 +45,28 @@ namespace Unity.Pipeline.Console
+             public ConsoleLogEntry Entry;
+         }
+
++        /// <summary>
++        /// Identifies the capture session that <see cref="ConsoleLogEntry.Seq"/> values belong to.
++        /// Sequence numbers restart from zero with the process, so a cursor only names the same
++        /// entries within one session. In the Editor this is adopted from SessionState, which has
++        /// exactly the lifetime of one editor launch; in a player the constructor's value stands.
++        /// </summary>
++        public string Session
++        {
++            get { lock (m_Lock) { return m_Session; } }
++        }
++
++        /// <summary>Adopt an externally owned session identifier. See the Editor bootstrap.</summary>
++        /// <param name="session">The identifier to report as <see cref="Session"/>.</param>
++        public void SetSession(string session)
++        {
++            if (string.IsNullOrEmpty(session))
++                return;
++
++            lock (m_Lock)
++                m_Session = session;
++        }
++
+         /// <summary>
+         /// Capture a console entry. Assigns the next sequence number and evicts the oldest entry if
+         /// the buffer is full. Safe to call from any thread.
+@@ -52,7 +75,11 @@ namespace Unity.Pipeline.Console
+         /// <param name="message">The log message.</param>
+         /// <param name="stackTrace">The stack trace, if any.</param>
+         /// <param name="timestampUtc">UTC time the entry was captured.</param>
+-        public void Add(LogType type, string message, string stackTrace, DateTime timestampUtc)
++        /// <param name="seeded">
++        /// True when the entry was read from the Editor console's own store rather than captured
++        /// live, which makes <paramref name="timestampUtc"/> the read time.
++        /// </param>
++        public void Add(LogType type, string message, string stackTrace, DateTime timestampUtc, bool seeded = false)
+         {
+             var severity = SeverityFromLogType(type);
+             lock (m_Lock)
+@@ -69,8 +96,10 @@ namespace Unity.Pipeline.Console
+                         Seq = m_LastSeq,
+                         TimestampUtc = timestampUtc,
+                         Level = LevelName(severity),
++                        LogType = type.ToString(),
+                         Message = message ?? string.Empty,
+-                        StackTrace = stackTrace ?? string.Empty
++                        StackTrace = stackTrace ?? string.Empty,
++                        Seeded = seeded
+                     }
+                 });
+             }
+@@ -88,14 +117,31 @@ namespace Unity.Pipeline.Console
+         /// limit" (up to <see cref="Capacity"/>).
+         /// </param>
+         /// <param name="minSeverity">Minimum severity to include (see the Severity* constants).</param>
++        /// <param name="sinceSession">
++        /// The <see cref="Session"/> that issued <paramref name="since"/>. When it names a different
++        /// session the cursor is refused; omit it and the cursor is taken at face value.
++        /// </param>
+         /// <returns>The matching entries plus cursor/drop metadata for the <c>console</c> command.</returns>
+-        public ConsoleLogResponse Query(long since, int tail, int minSeverity)
++        public ConsoleLogResponse Query(long since, int tail, int minSeverity, string sinceSession = null)
+         {
+             lock (m_Lock)
+             {
++                // A cursor issued in another session, or one past the counter, cannot be honored:
++                // sequence numbers restart from zero with the process, so such a cursor filters out
++                // every entry held and reads as "nothing new". Ignore it, return the tail, and say so.
++                var reset = since > m_LastSeq
++                    || (!string.IsNullOrEmpty(sinceSession) && sinceSession != m_Session);
++                if (reset)
++                    since = -1;
++
++                var counts = new ConsoleLevelCounts();
+                 var matches = new List<ConsoleLogEntry>();
+                 foreach (var stored in m_Entries)
+                 {
++                    // Counted before the level filter and the tail trim, so the counts describe
++                    // what the buffer holds rather than what this call returned.
++                    Tally(counts, stored.Severity);
++
+                     if (stored.Severity < minSeverity)
+                         continue;
+                     if (since >= 0 && stored.Entry.Seq <= since)
+@@ -111,8 +157,35 @@ namespace Unity.Pipeline.Console
+                 {
+                     Entries = matches.ToArray(),
+                     Cursor = m_LastSeq,
++                    Session = m_Session,
+                     Returned = matches.Count,
+-                    Dropped = ComputeDropped(since)
++                    Dropped = reset || ComputeDropped(since),
++                    Reset = reset,
++                    Counts = counts
++                };
++            }
++        }
++
++        /// <summary>
++        /// The buffer's counters without its entries: retained counts per severity, the cursor, and
++        /// the session that issued it. Backs <c>console_status</c>, which clients poll in a loop, so
++        /// it deliberately avoids materializing the entry list.
++        /// </summary>
++        /// <returns>A response with an empty <see cref="ConsoleLogResponse.Entries"/>.</returns>
++        public ConsoleLogResponse Stats()
++        {
++            lock (m_Lock)
++            {
++                var counts = new ConsoleLevelCounts();
++                foreach (var stored in m_Entries)
++                    Tally(counts, stored.Severity);
++
++                return new ConsoleLogResponse
++                {
++                    Entries = Array.Empty<ConsoleLogEntry>(),
++                    Cursor = m_LastSeq,
++                    Session = m_Session,
++                    Counts = counts
+                 };
+             }
+         }
+@@ -159,6 +232,20 @@ namespace Unity.Pipeline.Console
+             get { lock (m_Lock) { return m_LastSeq; } }
+         }
+
++        /// <summary>
++        /// Raise the sequence counter to <paramref name="seq"/> if it is behind. Never lowers it, so
++        /// a cursor already handed to a client can never be issued again for different entries.
++        /// </summary>
++        /// <param name="seq">The floor the counter must be at or above.</param>
++        public void RaiseLastSeq(long seq)
++        {
++            lock (m_Lock)
++            {
++                if (seq > m_LastSeq)
++                    m_LastSeq = seq;
++            }
++        }
++
+         #region Persistence
+
+         [Serializable]
+@@ -199,8 +286,8 @@ namespace Unity.Pipeline.Console
+         }
+
+         /// <summary>
+-        /// Restore a buffer previously written by <see cref="Save"/>. Missing or unreadable files
+-        /// leave the buffer empty. Returns true if a snapshot was loaded.
++        /// Merge a buffer previously written by <see cref="Save"/> into this one. Missing or
++        /// unreadable files leave the buffer untouched. Returns true if a snapshot was loaded.
+         /// </summary>
+         /// <param name="path">File previously written by <see cref="Save"/>.</param>
+         /// <returns>True if a snapshot was found and loaded.</returns>
+@@ -217,13 +304,16 @@ namespace Unity.Pipeline.Console
+
+                 lock (m_Lock)
+                 {
+-                    m_Entries.Clear();
+-                    long lastRestoredSeq = 0;
++                    // Merge rather than replace. Where [NoAutoStaticsCleanup] keeps this buffer alive
++                    // across a domain reload, entries logged since the snapshot are already here, and
++                    // a snapshot entry whose seq the counter has already issued is one of those.
++                    // Anything with a higher seq was never seen in memory, so it is newer than
++                    // everything held and appends in order.
+                     if (snapshot.Entries != null)
+                     {
+                         foreach (var entry in snapshot.Entries)
+                         {
+-                            if (entry == null)
++                            if (entry == null || entry.Seq <= m_LastSeq)
+                                 continue;
+                             if (m_Entries.Count >= Capacity)
+                                 m_Entries.Dequeue();
+@@ -233,14 +323,14 @@ namespace Unity.Pipeline.Console
+                                 Severity = SeverityFromLevelName(entry.Level),
+                                 Entry = entry
+                             });
+-                            lastRestoredSeq = entry.Seq;
++                            m_LastSeq = entry.Seq;
+                         }
+                     }
+
+-                    // Keep the counter ahead of any restored entry so seq stays monotonic.
+-                    m_LastSeq = snapshot.LastSeq;
+-                    if (m_Entries.Count > 0)
+-                        m_LastSeq = Math.Max(m_LastSeq, lastRestoredSeq);
++                    // Keep the counter ahead of the snapshot even when it held no entries, and never
++                    // lower it: a cursor already handed out must not be issued a second time.
++                    if (snapshot.LastSeq > m_LastSeq)
++                        m_LastSeq = snapshot.LastSeq;
+                 }
+
+                 return true;
+@@ -297,6 +387,25 @@ namespace Unity.Pipeline.Console
+             }
+         }
+
++        /// <summary>Add one entry of <paramref name="severity"/> to <paramref name="counts"/>.</summary>
++        /// <param name="counts">The tally to add to.</param>
++        /// <param name="severity">One of the Severity* constants.</param>
++        static void Tally(ConsoleLevelCounts counts, int severity)
++        {
++            switch (severity)
++            {
++                case SeverityError:
++                    counts.Error++;
++                    break;
++                case SeverityWarn:
++                    counts.Warn++;
++                    break;
++                default:
++                    counts.Log++;
++                    break;
++            }
++        }
++
+         /// <summary>The canonical level name for a severity.</summary>
+         /// <param name="severity">One of the Severity* constants.</param>
+         /// <returns>The matching Level* constant.</returns>
+diff --git a/com.unity.pipeline/Runtime/Console/ConsoleLogCapture.cs b/com.unity.pipeline/Runtime/Console/ConsoleLogCapture.cs
+index fef4bf0..5518f61 100644
+--- a/com.unity.pipeline/Runtime/Console/ConsoleLogCapture.cs
++++ b/com.unity.pipeline/Runtime/Console/ConsoleLogCapture.cs
+@@ -1,4 +1,6 @@
+ using System;
++using System.Threading;
++using Unity.Pipeline.Models;
+ using UnityEngine;
+ #if UNITY_6000_5_OR_NEWER
+ using Unity.Scripting.LifecycleManagement;
+@@ -36,10 +38,25 @@ namespace Unity.Pipeline.Console
+     {
+         static readonly ConsoleLogBuffer s_Buffer = new ConsoleLogBuffer();
+         static readonly object s_SubscriptionLock = new object();
++        static ConsoleGroundTruth s_GroundTruth;
+
+         /// <summary>The shared buffer holding captured console entries.</summary>
+         internal static ConsoleLogBuffer Buffer => s_Buffer;
+
++        /// <summary>
++        /// The last Editor ground-truth sample, or null outside the Editor and before the first
++        /// sample. Written on the main thread by the Editor sampler and read from request threads,
++        /// so the console command can report it while staying off the main thread — which is the
++        /// point, since clients poll it while the Editor is busy compiling or importing. The
++        /// snapshot is immutable once published, so a reference swap is all the synchronization a
++        /// reader needs.
++        /// </summary>
++        internal static ConsoleGroundTruth GroundTruth
++        {
++            get => Volatile.Read(ref s_GroundTruth);
++            set => Volatile.Write(ref s_GroundTruth, value);
++        }
++
+         /// <summary>
+         /// Player entry point. Runs as the application boots so console output is captured from the
+         /// start. In the Editor this also fires when entering Play mode, but <see cref="EnsureCapturing"/>
+diff --git a/com.unity.pipeline/Runtime/Models/ConsoleLogEntry.cs b/com.unity.pipeline/Runtime/Models/ConsoleLogEntry.cs
+index 1acf383..f4910c3 100644
+--- a/com.unity.pipeline/Runtime/Models/ConsoleLogEntry.cs
++++ b/com.unity.pipeline/Runtime/Models/ConsoleLogEntry.cs
+@@ -31,6 +31,14 @@ namespace Unity.Pipeline.Models
+         [JsonProperty("level")]
+         public string Level { get; set; }
+
++        /// <summary>
++        /// Unity's own <see cref="UnityEngine.LogType"/> name for the entry ("Log", "Warning",
++        /// "Error", "Assert", "Exception"), keeping the distinction that <see cref="Level"/>
++        /// collapses.
++        /// </summary>
++        [JsonProperty("logType")]
++        public string LogType { get; set; }
++
+         /// <summary>
+         /// The log message text.
+         /// </summary>
+@@ -42,5 +50,14 @@ namespace Unity.Pipeline.Models
+         /// </summary>
+         [JsonProperty("stackTrace")]
+         public string StackTrace { get; set; }
++
++        /// <summary>
++        /// True when the entry was read from the Editor console's own store rather than captured
++        /// live. Its <see cref="TimestampUtc"/> is when it was read, not when it was logged, and
++        /// its position relative to live-captured entries reflects the read, not the original
++        /// chronology.
++        /// </summary>
++        [JsonProperty("seeded")]
++        public bool Seeded { get; set; }
+     }
+ }
+diff --git a/com.unity.pipeline/Runtime/Models/ConsoleLogResponse.cs b/com.unity.pipeline/Runtime/Models/ConsoleLogResponse.cs
+index b8444b8..8ea13f1 100644
+--- a/com.unity.pipeline/Runtime/Models/ConsoleLogResponse.cs
++++ b/com.unity.pipeline/Runtime/Models/ConsoleLogResponse.cs
+@@ -21,10 +21,20 @@ namespace Unity.Pipeline.Models
+         /// The highest <see cref="ConsoleLogEntry.Seq"/> currently held in the buffer (regardless of
+         /// the level filter). A "--follow" client passes this back as <c>since</c> on the next poll
+         /// so it resumes exactly where it left off, even if the only new entries were filtered out.
++        /// Only meaningful paired with <see cref="Session"/>: sequence numbers restart from zero
++        /// with the capture session, so a cursor from an earlier session names different entries.
+         /// </summary>
+         [JsonProperty("cursor")]
+         public long Cursor { get; set; }
+
++        /// <summary>
++        /// Identifies the capture session <see cref="Cursor"/> belongs to. A "--follow" client
++        /// passes this back as <c>since-session</c> alongside <c>since</c>; a cursor from a
++        /// different session is refused rather than silently misapplied.
++        /// </summary>
++        [JsonProperty("session")]
++        public string Session { get; set; }
++
+         /// <summary>
+         /// Number of entries returned in <see cref="Entries"/>.
+         /// </summary>
+@@ -34,9 +44,117 @@ namespace Unity.Pipeline.Models
+         /// <summary>
+         /// True when the requested <c>since</c> cursor pointed at entries that have already been
+         /// evicted from the bounded buffer, meaning the consumer missed some entries. Lets a
+-        /// "--follow" client warn about a gap instead of silently skipping output.
++        /// "--follow" client warn about a gap instead of silently skipping output. Also true
++        /// whenever <see cref="Reset"/> is.
+         /// </summary>
+         [JsonProperty("dropped")]
+         public bool Dropped { get; set; }
++
++        /// <summary>
++        /// True when the requested cursor could not be honored — it came from another session, or
++        /// it was past the current counter — so the cursor was ignored and the tail returned
++        /// instead. A "--follow" client should adopt <see cref="Cursor"/> and <see cref="Session"/>
++        /// and treat the returned entries as a fresh start.
++        /// </summary>
++        [JsonProperty("reset")]
++        public bool Reset { get; set; }
++
++        /// <summary>
++        /// How many entries of each severity the buffer currently holds, before the level filter
++        /// and <c>tail</c> limit. Compare with <see cref="ConsoleGroundTruth.ConsoleErrors"/> and
++        /// friends to see whether the buffer is missing entries the Editor console still shows.
++        /// </summary>
++        [JsonProperty("counts")]
++        public ConsoleLevelCounts Counts { get; set; }
++
++        /// <summary>
++        /// Editor ground truth about the console at the time it was last sampled. Null in a player
++        /// build, and before the first sample after an Editor load.
++        /// </summary>
++        [JsonProperty("groundTruth")]
++        public ConsoleGroundTruth GroundTruth { get; set; }
++    }
++
++    /// <summary>
++    /// Entry counts per severity retained in the buffer, before the level filter and <c>tail</c>
++    /// limit are applied. Compare with the Editor console's own totals in
++    /// <see cref="ConsoleGroundTruth"/> to see whether the buffer is missing entries the console
++    /// still shows.
++    /// </summary>
++    [Serializable]
++    public class ConsoleLevelCounts
++    {
++        /// <summary>
++        /// Retained entries at error severity. Unity's Error, Exception and Assert log types all
++        /// count here.
++        /// </summary>
++        [JsonProperty("error")]
++        public int Error { get; set; }
++
++        /// <summary>Retained entries at warning severity.</summary>
++        [JsonProperty("warn")]
++        public int Warn { get; set; }
++
++        /// <summary>Retained entries at informational severity.</summary>
++        [JsonProperty("log")]
++        public int Log { get; set; }
++    }
++
++    /// <summary>
++    /// Editor ground truth about the console, sampled on the main thread and served alongside
++    /// buffered entries so a client can tell whether the buffer agrees with the Editor console
++    /// without a second round trip. Null when served from a player build, which has no Editor
++    /// console.
++    /// </summary>
++    [Serializable]
++    public class ConsoleGroundTruth
++    {
++        /// <summary>When the sample was taken (UTC).</summary>
++        [JsonProperty("sampledUtc")]
++        public DateTime SampledUtc { get; set; }
++
++        /// <summary>
++        /// How long ago the sample was taken. Sampling runs on the main thread, so it stops while
++        /// the Editor is blocked compiling or importing; a large age means the rest of this object
++        /// describes an older state of the console.
++        /// </summary>
++        [JsonProperty("ageMs")]
++        public long AgeMs { get; set; }
++
++        /// <summary>
++        /// True while the project has editor compile errors. Read from
++        /// <c>EditorUtility.scriptCompilationFailed</c>, which is native state independent of the
++        /// log callback and of any domain reload, so it stays true for as long as the errors do.
++        /// </summary>
++        [JsonProperty("compilationFailed")]
++        public bool CompilationFailed { get; set; }
++
++        /// <summary>True while script compilation is in progress.</summary>
++        [JsonProperty("compiling")]
++        public bool Compiling { get; set; }
++
++        /// <summary>
++        /// Errors the Editor console holds. This is a console-lifetime total, so comparing it with
++        /// <see cref="ConsoleLevelCounts.Error"/> shows whether the buffer is missing entries the
++        /// console still displays.
++        /// </summary>
++        [JsonProperty("consoleErrors")]
++        public int ConsoleErrors { get; set; }
++
++        /// <summary>Warnings the Editor console holds.</summary>
++        [JsonProperty("consoleWarnings")]
++        public int ConsoleWarnings { get; set; }
++
++        /// <summary>Informational entries the Editor console holds.</summary>
++        [JsonProperty("consoleLogs")]
++        public int ConsoleLogs { get; set; }
++
++        /// <summary>
++        /// True once the buffer has been backfilled from the Editor console's own store. False
++        /// means that backfill is unavailable on this Editor version, which is a benign explanation
++        /// for the buffer holding fewer entries than <see cref="ConsoleErrors"/> and friends report.
++        /// </summary>
++        [JsonProperty("seeded")]
++        public bool Seeded { get; set; }
+     }
+ }
+diff --git a/com.unity.pipeline/Tests/Editor/ConsoleLogBufferTests.cs b/com.unity.pipeline/Tests/Editor/ConsoleLogBufferTests.cs
+index 8864852..fa991c1 100644
+--- a/com.unity.pipeline/Tests/Editor/ConsoleLogBufferTests.cs
++++ b/com.unity.pipeline/Tests/Editor/ConsoleLogBufferTests.cs
+@@ -127,15 +127,16 @@ namespace Unity.Pipeline.Tests.Editor
+         }
+
+         [Test]
+-        public void Query_SinceBeyondCursor_DoesNotOverflowDroppedCheck()
++        public void Query_SinceBeyondCursor_ReturnsFreshTailWithReset()
+         {
+             var buffer = NewBuffer();
+             buffer.Add(LogType.Log, "a", null, k_Ts);
+
+             var response = buffer.Query(long.MaxValue, 100, ConsoleLogBuffer.SeverityLog);
+
+-            Assert.AreEqual(0, response.Returned);
+-            Assert.IsFalse(response.Dropped);
++            Assert.AreEqual(1, response.Returned);
++            Assert.IsTrue(response.Dropped);
++            Assert.IsTrue(response.Reset);
+         }
+
+         [Test]

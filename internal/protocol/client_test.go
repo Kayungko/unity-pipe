@@ -107,6 +107,22 @@ func TestExecAppliesDefaultRoundTripTimeout(t *testing.T) {
 	}
 }
 
+func TestWaitResultUsesBoundedRoundTripAndExitTimeout(t *testing.T) {
+	rt := &recordingTransport{fakeTransport: fakeTransport{steps: []fakeStep{
+		{resp: Response{StatusCode: 200, Body: []byte(`{"success":true,"result":{"status":"timed_out","condition":"playing"}}`)}},
+	}}}
+	_, err := newTestClient(rt).Exec("wait", ExecOptions{
+		Parameters: map[string]any{"timeout_ms": float64(350)},
+	})
+	failure := AsUpipeError(err)
+	if failure == nil || failure.Code != ExitTimeout || failure.Data == nil {
+		t.Fatalf("wait error = %v, want exit 21 with details", err)
+	}
+	if got, want := rt.reqs[0].Timeout, 2350*time.Millisecond; got != want {
+		t.Fatalf("wait round-trip = %v, want %v", got, want)
+	}
+}
+
 // A server that stays busy (503) through the whole ladder must surface
 // ErrBusy (exit 13) on exhaustion, not ErrConnectionLost (exit 11).
 func TestReloadTolerantExhaustionPropagatesBusy(t *testing.T) {

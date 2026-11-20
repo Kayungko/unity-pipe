@@ -1,3 +1,5 @@
+#if UNITY_EDITOR
+using System;
 using Unity.Pipeline.Models;
 using UnityEditor;
 using UnityEngine;
@@ -56,6 +58,20 @@ namespace Unity.Pipeline.Editor.Authoring
             if (!string.IsNullOrEmpty(handle.Path))
             {
                 var raw = handle.Path;
+                if (TrySplitPrefabPath(raw, out var prefabPath, out var childPath))
+                {
+                    var path = IsExplicitlyRooted(prefabPath) ? prefabPath : ProjectPaths.Resolve(prefabPath, out _);
+                    var root = string.IsNullOrEmpty(path) ? null : AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                    if (root == null)
+                    {
+                        error = $"No prefab asset at '{prefabPath}'.";
+                        return false;
+                    }
+
+                    obj = FindPrefabChild(root, childPath, out error);
+                    return obj != null;
+                }
+
                 var explicitlyRooted = IsExplicitlyRooted(raw);
                 var assetPath = raw;
                 if (!explicitlyRooted)
@@ -201,6 +217,53 @@ namespace Unity.Pipeline.Editor.Authoring
             || path.StartsWith("Assets/", System.StringComparison.Ordinal)
             || path.StartsWith("Packages/", System.StringComparison.Ordinal);
 
+        internal static bool TrySplitPrefabPath(string path, out string assetPath, out string childPath)
+        {
+            assetPath = childPath = null;
+            var separator = path?.IndexOf(".prefab:", StringComparison.OrdinalIgnoreCase) ?? -1;
+            if (separator < 0)
+                return false;
+
+            assetPath = path.Substring(0, separator + ".prefab".Length);
+            childPath = path.Substring(assetPath.Length + 1);
+            return true;
+        }
+
+        internal static GameObject FindPrefabChild(GameObject root, string childPath, out string error)
+        {
+            error = null;
+            var relative = (childPath ?? string.Empty).Trim('/');
+            if (relative == root.name || string.IsNullOrEmpty(relative))
+                return root;
+
+            var current = root.transform;
+            if (relative.StartsWith(root.name + "/", StringComparison.Ordinal))
+                relative = relative.Substring(root.name.Length + 1);
+            foreach (var segment in relative.Split('/'))
+            {
+                Transform match = null;
+                foreach (Transform child in current)
+                {
+                    if (child.name != segment)
+                        continue;
+                    if (match != null)
+                    {
+                        error = $"Prefab path '{childPath}' is ambiguous at '{segment}'.";
+                        return null;
+                    }
+                    match = child;
+                }
+
+                if (match == null)
+                {
+                    error = $"No child '{segment}' in prefab path '{childPath}'.";
+                    return null;
+                }
+                current = match;
+            }
+            return current.gameObject;
+        }
+
         private static GameObject FindByHierarchyPath(string path)
         {
             var parts = path.Trim('/').Split('/');
@@ -254,3 +317,4 @@ namespace Unity.Pipeline.Editor.Authoring
         }
     }
 }
+#endif

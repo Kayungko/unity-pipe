@@ -90,6 +90,23 @@ func (r *ExecResponse) CommandError(command string) error {
 			return nil
 		}
 		message = (&ExecResponse{Error: result.Error, Message: result.Message}).ErrorMessage()
+	case "wait":
+		var result struct {
+			Status    string `json:"status"`
+			Condition string `json:"condition"`
+		}
+		if json.Unmarshal(r.Result, &result) != nil {
+			return nil
+		}
+		switch result.Status {
+		case "transitioning":
+			return ErrBusy("Editor is changing Play Mode", r.Result)
+		case "timed_out":
+			failure := ErrTimeout("timed out waiting for " + result.Condition)
+			failure.Data = r.Result
+			return failure
+		}
+		return nil
 	case "batch":
 		var result struct {
 			Reverted bool   `json:"reverted"`
