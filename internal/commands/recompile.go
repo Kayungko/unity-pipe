@@ -36,6 +36,20 @@ func RecompileCommand() SubCommand {
 			if err != nil {
 				return nil, err
 			}
+			// The Editor writes "completed" when compilation ends, including
+			// failed compiles. Polling only observes the end of the operation.
+			var detail struct {
+				Failed bool `json:"failed"`
+			}
+			if err := json.Unmarshal(result.Body, &detail); err != nil {
+				return nil, protocol.ErrProtocol("recompile_status returned an invalid result: " + err.Error())
+			}
+			if detail.Failed {
+				return nil, protocol.ErrCommandFailed(&protocol.ExecResponse{
+					Error:  "script compilation failed",
+					Result: result.Body,
+				})
+			}
 			return map[string]any{
 				"status":   result.Status,
 				"detail":   json.RawMessage(result.Body),
@@ -57,12 +71,8 @@ func (rt *Runtime) pollCommand(command string, cfg protocol.PollConfig) (*protoc
 		if err != nil {
 			return protocol.PollStep{}, err
 		}
-		er, ok := resp.(*protocol.ExecResponse)
-		if !ok {
-			return protocol.PollStep{}, protocol.ErrProtocol("unexpected response type polling " + command)
-		}
 		// Commands like recompile_status return a double-encoded JSON string.
-		body := protocol.UnwrapJSONString(er.Result)
+		body := protocol.UnwrapJSONString(resp.Result)
 		return protocol.PollStep{
 			Status: protocol.ExtractStatus(body),
 			Body:   body,

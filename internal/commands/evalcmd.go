@@ -105,7 +105,7 @@ func (rt *Runtime) execEval(name string, params map[string]any, job bool) (any, 
 }
 
 // execSimple runs one server command reload-tolerantly with the shared timeout.
-func (rt *Runtime) execSimple(name string, params map[string]any) (any, error) {
+func (rt *Runtime) execSimple(name string, params map[string]any) (*protocol.ExecResponse, error) {
 	opts := protocol.ExecOptions{Parameters: params}
 	if rt.Opts.Timeout > 0 {
 		opts.Timeout = rt.Opts.Timeout

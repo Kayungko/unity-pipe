@@ -2,9 +2,9 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本：**0.6.0-2022.1**（适配 Unity 2022.3.23f1；隔离编译门见本轮 cowork 目录，未进 SGAME/P4）。
+本仓库 vendored 版本：**0.6.0-2022.2**（适配 Unity 2022.3.23f1；隔离编译门见本轮 cowork 目录，未进 SGAME/P4）。
 
-版本命名依据：semver 预发布段字典序 `"2022.1" > "exp.1"`，UPM 视 vendored 版本高于 registry 版本，不会被"升级"覆盖。
+版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
 ## 补丁分层（upstream → vendored 的两类 diff，升级时处理策略不同）
 
@@ -38,7 +38,7 @@ Player：`RuntimePipelineManager` 已被 `RuntimePipelineDriver`/`Bootstrap` 替
 
 | # | 文件 | 改动 |
 |---|---|---|
-| 1 | `package.json` | `unity: 6000.0 → 2022.3`；`version: 0.6.0-exp.1 → 0.6.0-2022.1` |
+| 1 | `package.json` | `unity: 6000.0 → 2022.3`；`version: 0.6.0-exp.1 → 0.6.0-2022.2` |
 | 2 | `Runtime/Unity.Pipeline.asmdef` | 移除 `Unity.InputSystem` 引用（保留 `Unity.Pipeline.IlInterpreter`） |
 | 3 | `Editor/Commands/Assets/AssetCommands.cs` | `#if !UNITY_6000_0_OR_NEWER` 守卫，回退 `PhysicsMaterial = PhysicMaterial` 别名 |
 | 4 | `Editor/Commands/Materials/MaterialCommands.cs` | `rawRenderQueue` 守卫回退 `renderQueue` |
@@ -52,6 +52,8 @@ Player：`RuntimePipelineManager` 已被 `RuntimePipelineDriver`/`Bootstrap` 替
 - `Runtime/Common/CliArgAttribute.cs` / `ParameterInfo.cs` / `CommandRegistry.cs` — `ArbitraryKeys` 豁免机制
 - `Editor/Commands/Prefabs/PrefabCommands.cs` — prefab 命令族 confirm 守门
 - `Editor/Commands/Scenes/SceneCommands.cs` — 场景命令族守门（脏场景保护 + 路径覆盖 + build list 移除需 confirm）
+- `Editor/Commands/Capture/CaptureCommands.cs` — Game View 截图返回帧状态，严格模式拒绝未确认帧
+- `Editor/Commands/RecompileCommand.cs` — 有未解决的编译错误时保留失败状态及已收集的诊断
 - `Editor/Testing/PipelineTestRunner.cs` — test_status 陈旧结果修复（启动即写 running 状态）
 - `Editor/Commands/Build/BuildCommand.cs` — 补 2022.3 可用的 CompressWithLz4/HC/StrictMode（不引入 U6 `CompressWithLz4HCNoChunks`）
 - `Editor/Commands/Materials/MaterialCommands.cs` / `Assets/AssetImportCommands.cs` — 移除逐命令 token workaround

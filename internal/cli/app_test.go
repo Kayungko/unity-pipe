@@ -208,6 +208,31 @@ func TestRecompilePollingEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRecompileCompletedWithCompilerErrors(t *testing.T) {
+	m := newMockEditor(t)
+	m.execHandler = func(command string, _ map[string]any, _ bool) (int, string) {
+		switch command {
+		case "recompile":
+			return 200, `{"success":true,"result":{"status":"compiling"}}`
+		case "recompile_status":
+			return 200, `{"success":true,"result":"{\"status\":\"completed\",\"failed\":true,\"errors\":[\"Assets/Probe.cs(4,33): error CS0029\"]}"}`
+		default:
+			return 400, `{"error":"unknown"}`
+		}
+	}
+	code, env := runCLI(t, "--project-path", m.project, "--json", "recompile")
+	if code != protocol.ExitCommandFailed || env["ok"] != false {
+		t.Fatalf("want exit 20 and ok=false, got %d %v", code, env)
+	}
+	failure := env["error"].(map[string]any)
+	detail := failure["data"].(map[string]any)
+	diagnostics := detail["errors"].([]any)
+	if failure["kind"] != "CommandFailed" || detail["status"] != "completed" || detail["failed"] != true ||
+		len(diagnostics) != 1 || diagnostics[0] != "Assets/Probe.cs(4,33): error CS0029" {
+		t.Fatalf("compiler diagnostics lost: %v", env)
+	}
+}
+
 func TestTestCommandPassAndFail(t *testing.T) {
 	m := newMockEditor(t)
 	// Async test run whose terminal body is the raw status-file JSON —
@@ -215,6 +240,8 @@ func TestTestCommandPassAndFail(t *testing.T) {
 	// regression for the false-failure bug).
 	m.execHandler = func(command string, params map[string]any, job bool) (int, string) {
 		switch command {
+		case "list_open_scenes":
+			return 200, `{"success":true,"result":{"scenes":[{"name":"Clean","isDirty":false}]}}`
 		case "run_tests":
 			return 200, `{"success":true,"command":"run_tests","result":{"status":"running"}}`
 		case "test_status":
@@ -231,6 +258,8 @@ func TestTestCommandPassAndFail(t *testing.T) {
 	// Same shape, one failure → exit 20 with structured data.
 	m.execHandler = func(command string, params map[string]any, job bool) (int, string) {
 		switch command {
+		case "list_open_scenes":
+			return 200, `{"success":true,"result":{"scenes":[{"name":"Clean","isDirty":false}]}}`
 		case "run_tests":
 			return 200, `{"success":true,"command":"run_tests","result":{"status":"running"}}`
 		case "test_status":

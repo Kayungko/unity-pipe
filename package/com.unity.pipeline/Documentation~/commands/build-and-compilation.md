@@ -134,7 +134,7 @@ Force a script recompile (works while unfocused/minimized). Poll recompile_statu
 No parameters.
 
 **Returns:** `object`
-**Notes:** `MainThreadRequired = true`. Async — poll `recompile_status` until status is `completed` or `up_to_date`. A successful compile triggers a domain reload, so the triggering request cannot stay open.
+**Notes:** `MainThreadRequired = true`. Async — poll `recompile_status` until status is `completed` or `up_to_date`. Check `failed` on a completed result and read compiler diagnostics from `errors`. An unchanged project with unresolved compiler errors still reports `completed` with `failed: true`. A successful compile triggers a domain reload.
 
 ### `recompile_status`
 Get the status of the last recompile: idle | triggered | compiling | completed | up_to_date.

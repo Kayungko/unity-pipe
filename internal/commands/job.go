@@ -32,6 +32,12 @@ func JobCommand() SubCommand {
 				if err != nil {
 					return protocol.PollStep{}, err
 				}
+				if jr.State == "completed" && jr.Result != nil {
+					response := protocol.ExecResponse{Success: true, Result: jr.Result}
+					if err := response.CommandError(jr.Command); err != nil {
+						return protocol.PollStep{}, err
+					}
+				}
 				return protocol.PollStep{Status: jr.State, Body: mustMarshal(jr)}, nil
 			}, protocol.PollConfig{
 				TerminalOK:     []string{"completed"},

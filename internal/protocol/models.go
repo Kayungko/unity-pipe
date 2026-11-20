@@ -72,11 +72,57 @@ func (r *ExecResponse) ErrorMessage() string {
 	return "command failed"
 }
 
+// CommandError interprets the outcome of a finished command. Some 0.6
+// commands report failure inside a successful dispatch envelope.
+func (r *ExecResponse) CommandError(command string) error {
+	if !r.Success {
+		return ErrCommandFailed(r)
+	}
+	var message string
+	switch command {
+	case "run_script", "run_tests":
+		var result struct {
+			Success *bool  `json:"success"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(r.Result, &result) != nil || result.Success == nil || *result.Success {
+			return nil
+		}
+		message = (&ExecResponse{Error: result.Error, Message: result.Message}).ErrorMessage()
+	case "batch":
+		var result struct {
+			Reverted bool   `json:"reverted"`
+			Error    string `json:"error"`
+			Results  []struct {
+				Error string `json:"error"`
+			} `json:"results"`
+		}
+		if json.Unmarshal(r.Result, &result) != nil || !result.Reverted {
+			return nil
+		}
+		message = result.Error
+		if message == "" {
+			message = "transactional batch rolled back"
+			for _, operation := range result.Results {
+				if operation.Error != "" {
+					message += ": " + operation.Error
+					break
+				}
+			}
+		}
+	default:
+		return nil
+	}
+	return ErrCommandFailed(&ExecResponse{Error: message, Result: r.Result})
+}
+
 // JobResponse is the shape of GET /api/job?id=… (job state envelope).
 type JobResponse struct {
 	JobId    string          `json:"jobId"`
+	Command  string          `json:"command,omitempty"`
 	State    string          `json:"state"` // queued | running | completed | failed | canceled (US; CLI also accepts cancelled)
 	Progress json.RawMessage `json:"progress"`
-	Result   *ExecResponse   `json:"result"`
+	Result   json.RawMessage `json:"result"` // detached jobs retain the raw command result
 	Error    string          `json:"error"`
 }

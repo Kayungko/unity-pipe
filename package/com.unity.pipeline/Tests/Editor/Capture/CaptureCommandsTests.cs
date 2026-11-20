@@ -348,6 +348,11 @@ namespace Unity.Pipeline.Tests.Editor.Capture
             Assert.AreEqual("screen", screen.Source);
             Assert.IsNotEmpty(screen.Base64, "screen capture should return an image");
             Assert.AreEqual(64, screen.Width);
+            CollectionAssert.Contains(new[] { "fresh", "cached", "unknown" }, screen.FrameStatus);
+            if (screen.FrameStatus == "fresh")
+                Assert.IsNull(screen.Warning);
+            else
+                Assert.IsNotEmpty(screen.Warning);
 
             // Pixel-presence needs the environment to actually present the overlay into the backbuffer.
             // Some CI/windowless setups render a blank/stale backbuffer even in Play Mode; treat an
@@ -373,6 +378,7 @@ namespace Unity.Pipeline.Tests.Editor.Capture
             // (the camera clears to solid blue and renders nothing, so it contains no neutral gray).
             var cameraShot = CaptureCommands.CaptureGameView(64, 64, camera: "CLI199_ScreenCam", source: "camera");
             Assert.Less(GrayStats(cameraShot.Base64).fraction, 0.2f, "overlay UI must be absent from a camera capture");
+            Assert.IsNull(cameraShot.FrameStatus);
 
             UnityEngine.Object.Destroy(overlayGo);
             UnityEngine.Object.Destroy(camGo);

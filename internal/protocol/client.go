@@ -200,10 +200,7 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 	if err := json.Unmarshal(resp.Body, &r); err != nil {
 		return nil, ErrProtocol(fmt.Sprintf("unparseable exec response: %v", err))
 	}
-	if !r.Success {
-		return &r, ErrCommandFailed(&r)
-	}
-	return &r, nil
+	return &r, r.CommandError(command)
 }
 
 // GetJob polls GET /api/job?id=….

@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -26,7 +27,8 @@ namespace Unity.Pipeline.Editor.Commands
     ///
     /// Pattern (mirrors the test runner): completion is reported via a status file that survives the
     /// domain reload. Call "recompile" to trigger, then poll "recompile_status" until status is
-    /// "completed" or "up_to_date". The client must tolerate connection errors during the reload.
+    /// "completed" or "up_to_date". A completed compilation may have failed. The client must
+    /// tolerate connection errors during the reload.
     /// </summary>
     [InitializeOnLoad]
 #if UNITY_6000_5_OR_NEWER
@@ -70,7 +72,15 @@ namespace Unity.Pipeline.Editor.Commands
                 return new { status = "compiling", message = "Recompilation started. Poll recompile_status until completed." };
             }
 
-            // Nothing needed recompilation.
+            // An unchanged script can still have errors from the last compile.
+            if (EditorUtility.scriptCompilationFailed)
+            {
+                var errors = s_Errors.ToArray();
+                WriteStatus("completed", true, errors);
+                return new { status = "completed", failed = true, errors };
+            }
+
+            // Nothing needed recompilation, and the last compile succeeded.
             WriteStatus("up_to_date", false, null);
             return new { status = "up_to_date", message = "No scripts needed recompilation." };
         }
@@ -117,3 +127,4 @@ namespace Unity.Pipeline.Editor.Commands
         }
     }
 }
+#endif

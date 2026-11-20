@@ -146,6 +146,12 @@ upipe eval "return 2 + 2;"                          # 快速求值
 upipe commands                                      # 浏览当前编辑器支持的全部命令
 ```
 
+自动化验收可加 `--require-match`，让测试筛选零命中时退出 `20`。测试启动前会检查所有打开的场景，有未保存的场景时返回其名称或路径。
+
+`exec run_script` 执行失败、`exec batch` 事务回滚时退出 `20`，原始诊断和逐步结果在 `error.data`。后台任务的最终退出码由 `upipe job <id>` 返回。
+
+`upipe recompile` 等待编译结果，失败时退出 `20`，编译诊断见 `error.data.errors`。`--no-wait` 只提交请求，使用 `recompile_status` 查看编译结果。
+
 > 新建的 `.cs` 文件首次编译前需 `upipe eval "UnityEditor.AssetDatabase.Refresh();"` 触发导入——AI 技能已内置此处理，手动模式才需要你自己记。
 </details>
 
@@ -196,7 +202,7 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.1`**：基于官方 `0.6.0-exp.1`（upstream revision `27af91a9`），适配 Unity 2022.3 + 本仓演进层（写面守门 / token 接缝剥离 / 演进层测试恢复，详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)）。0.6 新增 `batch`（事务性批量操作）/ `run_script`（文件式内存执行）/ `commandLine`+`argv` 直连 / 瘦信封 / Runtime Pipeline settings；IlInterpreter 树保留但 IL2CPP 热重载不作承诺
+- **`0.6.0-2022.2`**：基于官方 `0.6.0-exp.1`（upstream revision `27af91a9`），适配 Unity 2022.3 + 本仓演进层（写面守门 / token 接缝剥离 / 演进层测试恢复，详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)）。0.6 新增 `batch`（事务性批量操作）/ `run_script`（文件式内存执行）/ `commandLine`+`argv` 直连 / 瘦信封 / Runtime Pipeline settings；IlInterpreter 树保留但 IL2CPP 热重载不作承诺
 - 版本命名策略：semver 预发布段 `"2022.1" > "exp.1"`，UPM 视 vendored 版本更高，**不会被 registry 误"升级"覆盖**
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

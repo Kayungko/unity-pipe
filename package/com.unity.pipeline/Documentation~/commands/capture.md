@@ -9,6 +9,10 @@ Render the game view to a PNG. Returns it inline as base64, unless `save_path` i
 
 Parameter interactions: `include_inline_image` is only meaningful together with `save_path` (without one, the inline image is always returned). `max_resolution` only applies when an inline image is actually returned — i.e. no `save_path`, or `save_path` + `include_inline_image=true`; it has **no effect** when `save_path` is set without `include_inline_image=true`. `camera` is ignored when `source=screen`.
 
+Screen captures report `frameStatus`: `fresh` when the command observed a new render during the Game view repaint, `cached` when the view skipped repainting, or `unknown` when the command could not confirm a new render. Cached and unknown results also carry a `warning`. The command leaves the active tab alone. If the Game view has no readable frame, the command fails.
+
+For visual verification, set `require_fresh_frame=true`. A cached or unverified frame then fails the command before returning an image or touching `save_path`. A fresh render can still represent the same simulation step while Play Mode is paused.
+
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `width` | no | `1280` | Output width in px (default 1280; capped 4096). |
@@ -18,6 +22,7 @@ Parameter interactions: `include_inline_image` is only meaningful together with 
 | `include_inline_image` | no | `false` | Also return the image inline as base64 when `save_path` is set. |
 | `max_resolution` | no | `0` | Cap on the inline image's longest edge (e.g. 512), preserving aspect ratio. No effect when `save_path` is set without `include_inline_image=true`. The `save_path` file keeps the requested resolution; a downscaled inline copy is reported via `inlineWidth`/`inlineHeight`. |
 | `source` | no | `camera` | `camera` renders a camera (misses Screen Space - Overlay UI); `screen` captures the composited game view incl. overlay canvases (**Play Mode only**). |
+| `require_fresh_frame` | no | `false` | Require a verified new render when `source=screen`. |
 
 **Returns:** `CaptureResult`
 

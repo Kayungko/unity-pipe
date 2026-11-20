@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Kayungko/unity-pipe/internal/protocol"
 )
@@ -14,16 +15,23 @@ func TestCommand() SubCommand {
 	return SubCommand{
 		Name:     "test",
 		Aliases:  []string{"tests"},
-		Synopsis: "run tests and wait: upipe test [--mode editor|playmode|all] [--filter F] [--no-wait]",
+		Synopsis: "run tests and wait: upipe test [--mode editor|playmode|all] [--filter F] [--require-match] [--no-wait]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe test")
 			mode := fs.String("mode", "all", "all | editor | playmode")
 			filter := fs.String("filter", "", "test name filter (case-insensitive partial match)")
 			filterType := fs.String("filter-type", "testName", "testName | assembly | category")
 			noWait := fs.Bool("no-wait", false, "submit async and return immediately")
+			requireMatch := fs.Bool("require-match", false, "fail if the completed run matched zero tests")
 			attachShared(fs, rt.Opts)
 			if _, err := parseArgs(fs, args); err != nil {
 				return nil, usageErr("test: " + err.Error())
+			}
+			if *noWait && *requireMatch {
+				return nil, usageErr("test: --require-match requires waiting for the result")
+			}
+			if err := rt.requireCleanTestScenes(); err != nil {
+				return nil, err
 			}
 
 			params := map[string]any{
@@ -51,29 +59,30 @@ func TestCommand() SubCommand {
 				return nil, err
 			}
 
-			// The terminal body of a completed async run is the raw test
-			// status file JSON — it carries NO top-level "success" field
-			// (only status/duration/summary/results), so the outcome MUST be
-			// judged by the summary counters, never by a parsed success flag
-			// (which would always read as false).
+			// Completed async runs report outcomes in the summary counters.
 			var final struct {
 				Summary json.RawMessage `json:"summary"`
-				Results json.RawMessage `json:"results"`
 				Error   string          `json:"error"`
 			}
 			_ = json.Unmarshal(result.Body, &final)
 			var summary struct {
-				Total  int `json:"total"`
-				Passed int `json:"passed"`
-				Failed int `json:"failed"`
+				Total  *int `json:"total"`
+				Failed int  `json:"failed"`
 			}
-			_ = json.Unmarshal(final.Summary, &summary)
-			if result.Status == "no_tests" {
-				return map[string]any{"status": "no_tests"}, nil
+			if result.Status == "completed" {
+				if err := json.Unmarshal(final.Summary, &summary); err != nil || summary.Total == nil {
+					return nil, protocol.ErrProtocol("completed test run did not return a test summary")
+				}
 			}
-			// A completed run whose filter matched nothing is not a failure
-			// (known server behavior).
-			if summary.Total == 0 && summary.Failed == 0 {
+			if result.Status == "no_tests" || (*summary.Total == 0 && summary.Failed == 0) {
+				if *requireMatch {
+					return nil, protocol.ErrCommandFailed(&protocol.ExecResponse{
+						Error: "filter matched no tests", Result: result.Body,
+					})
+				}
+				if result.Status == "no_tests" {
+					return map[string]any{"status": "no_tests"}, nil
+				}
 				return map[string]any{
 					"status":  "completed",
 					"message": "filter matched no tests",
@@ -91,6 +100,39 @@ func TestCommand() SubCommand {
 			return json.RawMessage(result.Body), nil
 		},
 	}
+}
+
+// requireCleanTestScenes checks every open scene, including inactive additive
+// scenes, before invoking the Test Runner, which can show a save dialog.
+func (rt *Runtime) requireCleanTestScenes() error {
+	response, err := rt.execSimple("list_open_scenes", nil)
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Scenes []struct {
+			Name    string `json:"name"`
+			Path    string `json:"path"`
+			IsDirty bool   `json:"isDirty"`
+		} `json:"scenes"`
+	}
+	snapshot := response.Result
+	if err := json.Unmarshal(snapshot, &result); err != nil || result.Scenes == nil {
+		return protocol.ErrProtocol("list_open_scenes did not return a scene list")
+	}
+	var dirty []string
+	for _, scene := range result.Scenes {
+		if scene.IsDirty {
+			dirty = append(dirty, firstNonEmpty(scene.Path, scene.Name, "Untitled"))
+		}
+	}
+	if len(dirty) == 0 {
+		return nil
+	}
+	return protocol.ErrCommandFailed(&protocol.ExecResponse{
+		Error:  "save open scenes before running tests; unsaved changes in: " + strings.Join(dirty, ", "),
+		Result: snapshot,
+	})
 }
 
 // firstNonEmpty is re-declared locally to avoid importing protocol internals
