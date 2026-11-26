@@ -118,6 +118,15 @@ func (c *PipelineClient) EditorStatus() (*ExecResponse, error) {
 	return &r, nil
 }
 
+// Dialog returns the off-main-thread modal dialog snapshot.
+func (c *PipelineClient) Dialog(timeout time.Duration) (json.RawMessage, error) {
+	var raw json.RawMessage
+	if err := c.getJSON("/api/dialog", &raw, timeout); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // ListCommands returns the compact command index from GET /api/commands.
 func (c *PipelineClient) ListCommands() (*CommandsResponse, error) {
 	var r CommandsResponse

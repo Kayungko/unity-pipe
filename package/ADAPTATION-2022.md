@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本为 **0.6.0-2022.10**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
+本仓库 vendored 版本为 **0.6.0-2022.11**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
@@ -22,6 +22,7 @@
 | Profiler 会话与汇总 | `patches/0013-profiler-sessions-and-summary.patch` | 复用 .data 捕获，保护当前 Profiler 历史，按帧区间汇总 CPU 帧耗时与 GC 分配 | 复测切换确认、外部历史变更、域重载失效和统计结果 |
 | Profiler 提前保存 | `patches/0014-profiler-stop-and-save.patch` | 提前保存已捕获的帧，复用自动保存路径，保留取消和历史保护 | 复测 Editor 与开发 Player 的提前保存、重复停止、写入失败和重载 |
 | Profiler 线程与 marker 聚合 | `patches/0015-profiler-thread-markers.patch` | 按线程和帧区间聚合，区分累计耗时与重叠区间，定位原始样本 | 复测同名 marker、重叠样本、过滤和精确下钻 |
+| 构建校验与卡点诊断 | `patches/0016-build-validation-and-dialog-status.patch` | 拒绝无效构建配置，回传已解析的构建计划和对话框检测能力 | 复测无写入预览、Player 构建与 Windows 模态对话框 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

@@ -1712,6 +1712,7 @@ namespace Unity.Pipeline
         /// caller still needs a fallback signal (e.g. a command timeout) for the uncovered cases.
         /// </summary>
         protected virtual void RefreshDialogState() { }
+        protected virtual bool SupportsDialogTracking => false;
 
         private async Task HandleDialogRequest(HttpListenerResponse response)
         {
@@ -1720,6 +1721,7 @@ namespace Unity.Pipeline
                 var dialogs = Dialogs.CurrentlyOpen;
                 await SendJsonResponse(response, 200, new
                 {
+                    available = SupportsDialogTracking,
                     active = dialogs.Count > 0,
                     dialogs = dialogs.Select(BuildDialogPayload).ToList()
                 });

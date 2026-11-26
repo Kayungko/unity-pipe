@@ -9,11 +9,11 @@ Trigger an async Player build and report the full BuildReport. Returns immediate
 |-----------|----------|---------|-------------|
 | `target` | no | `–` | BuildTarget name (e.g. StandaloneWindows64). Defaults to the active target. Must be installed. |
 | `outputPath` | no | `–` | Output path (absolute, or relative to the project root). Defaults to the last/auto path. |
-| `profileName` | no | `–` | Build Profile name to activate before building (Unity 6 only; ignored otherwise). |
+| `profileName` | no | `–` | Build Profile name (Unity 6 only). The selected profile supplies its target and scenes. An unsupported, missing or ambiguous profile is rejected. |
 | `options` | no | `–` | BuildOptions names. Omit to get just DetailedBuildReport; supplying any disables that default. |
 | `scenes` | no | `–` | Scene asset paths to build (e.g. Assets/Scenes/Main.unity). Defaults to EditorBuildSettings. |
 | `confirm` | no | `false` | Acknowledge and run the build; without it the call is refused. Use `dry_run` to validate only. |
-| `dry_run` | no | `false` | Validate target/outputPath/scenes without building. |
+| `dry_run` | no | `false` | Return the resolved target, output path, scenes and options along with any validation errors. |
 
 Supported `options` values (case-insensitive): `Development`, `AllowDebugging`, `ConnectWithProfiler`, `EnableHeadlessMode`, `SymlinkSources`, `BuildAdditionalStreamedScenes`, `CleanBuildCache`, `DetailedBuildReport`. Any unrecognized value is a validation error.
 
@@ -21,7 +21,7 @@ Supported `options` values (case-insensitive): `Development`, `AllowDebugging`, 
 **Notes:** `MainThreadRequired = false`. Async — validates + queues, returns `queued` immediately, then an editor tick runs the (blocking) build; poll `build_status` until status is `completed`. Only one build at a time (returns `busy` otherwise). Mutating: gated by the `confirm`/`dry_run` convention — pass `confirm=true` for a real build, or `dry_run=true` to validate target/outputPath/scenes without building (nothing is queued on a dry run or on validation failure).
 
 ### `build_status`
-Status of the current/most recent build: idle | queued | building | completed, with the full BuildReport (files, packedAssets, buildSteps, errors, warnings) once completed. Retained until the next build.
+Return the current or latest build state. A completed build includes the BuildReport. An interrupted build has a build ID and a message if the Editor reloaded or restarted before a report was written. The result is retained until the next build.
 
 No parameters.
 

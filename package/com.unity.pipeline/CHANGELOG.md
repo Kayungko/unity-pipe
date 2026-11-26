@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-2022.11] - Local candidate
+
+- Validate build targets, scenes and requested Build Profiles before queuing. Dry runs report the resolved configuration.
+- Report whether the Editor can detect modal dialogs without using its main thread.
+
 ## [0.6.0-2022.10] - Local candidate
 
 - List Profiler threads, rank markers by thread and frame range, and use a ranked sample reference to retrieve its Profiler path.

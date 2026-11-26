@@ -188,6 +188,8 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 | `commands` / `commands --full` | 服务端命令索引 / 含参数 schema |
 | `exec <name> [--set k=v] [--params JSON] [--job]` | 主通道，任意命令直通；`--set` 值自动做 JSON 标量类型推断 |
 | `help <name>` | 精确显示当前 Editor 或开发 Player 中一条命令的参数、默认值以及副作用。支持 `--json` |
+| `build [--dry-run|--confirm] [--no-wait]` | 校验目标、场景和输出路径，或构建 Player 并等待对应的 BuildReport |
+| `dialog` | 从 Editor 读取已识别的模态对话框，主线程被阻塞时也可查询 |
 | `eval "<code>"` / `eval-file <path>` | C# 求值（`eval_file` 参数名映射为 `file`；`--job` 分离式长求值） |
 | `recompile [--no-wait]` | 触发编译并轮询 `recompile_status` 至终态 |
 | `test [--mode] [--filter] [--no-wait]` | `run_tests` 异步 + `test_status` 轮询 |
@@ -200,6 +202,18 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 | `version` | CLI 版本 + git commit + 构建时间 + vendored 适配包版本 |
 
 未封装的服务端命令一律走 `exec` 直通——这正是薄客户端契约：**子命令只封装等待策略，其余零改动跟进**（完整退出码表与信封格式见 [架构设计](docs/ARCHITECTURE.md)）。
+
+### 构建与卡点排查
+
+```bash
+upipe build --dry-run --target StandaloneWindows64 --scene Assets/Main.unity --output-path Builds/Game.exe --json
+upipe build --confirm --target StandaloneWindows64 --scene Assets/Main.unity --output-path Builds/Game.exe --option Development --json
+upipe dialog --json
+```
+
+`build` 默认等待同一 build ID 的报告。用 `--no-wait` 获取排队 ID，再查询 `exec build_status`。CLI 等待超时后，Editor 中的构建可能仍在运行。`--profile` 需要 Unity 6；使用时由配置决定构建目标和场景。Unity 2022 会明确拒绝该参数。
+
+`dialog` 返回当前可识别的对话框。可检测性依赖 Editor 版本和平台，`available=false` 表示当前实例没有检测能力。Unity 2022 Windows 可报告已识别的原生模态标题。
 
 ### Profiler 排查
 
@@ -240,7 +254,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.10`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.11`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

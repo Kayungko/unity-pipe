@@ -46,3 +46,23 @@ func StatusCommand() SubCommand {
 		},
 	}
 }
+
+// DialogCommand uses the off-main-thread endpoint so it works while a modal blocks the Editor.
+func DialogCommand() SubCommand {
+	return SubCommand{
+		Name:     "dialog",
+		Synopsis: "read the currently detected modal dialogs in the Editor",
+		Run: func(rt *Runtime, args []string) (any, error) {
+			fs := newFlagSet("upipe dialog")
+			attachShared(fs, rt.Opts)
+			rest, err := parseArgs(fs, args)
+			if err != nil {
+				return nil, usageErr("dialog: " + err.Error())
+			}
+			if len(rest) != 0 {
+				return nil, usageErr("dialog: unexpected positional arguments")
+			}
+			return rt.Client.Dialog(rt.Opts.Timeout)
+		},
+	}
+}

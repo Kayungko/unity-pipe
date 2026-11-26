@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,6 +11,9 @@ using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using UnityEngine;
+#if UNITY_6000_0_OR_NEWER
+using UnityEditor.Build.Profile;
+#endif
 #if UNITY_6000_5_OR_NEWER
 using Unity.Scripting.LifecycleManagement;
 #endif
@@ -79,11 +83,12 @@ namespace Unity.Pipeline.Editor.Commands.Build
         static string s_PendingOutput;
         static BuildOptions s_PendingOptions;
         static string[] s_PendingScenes;
-        static string s_PendingProfile;
+        static string s_PendingProfileGuid;
         static string s_PendingBuildId;
 
         static BuildCommand()
         {
+            RestoreInterruptedStatus();
             EditorApplication.update += OnUpdate;
         }
 
@@ -91,12 +96,12 @@ namespace Unity.Pipeline.Editor.Commands.Build
             "Trigger an async Player build and report the full BuildReport. Returns immediately (queued); " +
             "poll build_status until status is 'completed'. DetailedBuildReport is included by default unless " +
             "'options' is supplied. Use dry_run to validate without building.",
-            MainThreadRequired = false,
+            MainThreadRequired = false, Effect = CommandEffect.Destructive,
             Tags = new[] { "build" })]
         public static object Build(
             [CliArg("target", "BuildTarget name (e.g. StandaloneWindows64). Defaults to the active target. Must be installed.")] string target = "",
             [CliArg("outputPath", "Output path (absolute, or relative to the project root). Defaults to the last/auto path.")] string outputPath = "",
-            [CliArg("profileName", "Build Profile name to activate before building (Unity 6 only; ignored otherwise).")] string profileName = "",
+            [CliArg("profileName", "Build Profile to use by name (requires Unity 6). Its target and scenes are used.")] string profileName = "",
             [CliArg("options", "BuildOptions names. Omit to get just DetailedBuildReport; supplying any disables that default.")] string[] options = null,
             [CliArg("scenes", "Scene asset paths to build (e.g. Assets/Scenes/Main.unity). Defaults to EditorBuildSettings.")] string[] scenes = null,
             [CliArg("confirm", "Acknowledge and run the build; without it the call is refused. Use dry_run to validate only.")] bool confirm = false,
@@ -118,19 +123,26 @@ namespace Unity.Pipeline.Editor.Commands.Build
             }
 
             var errors = new List<object>();
+            if (!dryRun && (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling))
+                return new { status = "busy", success = false, message = "Exit Play Mode and finish compiling before building." };
 
             // ---- target ----
             var target = EditorUserBuildSettings.activeBuildTarget;
             if (!string.IsNullOrWhiteSpace(targetArg))
             {
-                if (!TryParseTarget(targetArg, out target))
+                if (!TryParseTarget(targetArg, out var requestedTarget))
                     errors.Add(Invalid("target", $"Unknown BuildTarget '{targetArg}'. Use a name from list_build_targets."));
-                else if (!BuildPipeline.IsBuildTargetSupported(BuildPipeline.GetBuildTargetGroup(target), target))
-                    errors.Add(Invalid("target", $"Build target '{target}' is not installed (isInstalled=false in list_build_targets)."));
+                else
+                    target = requestedTarget;
             }
+
+            var profile = ValidateProfile(profileName, targetArg, sceneArgs, ref target, errors);
+            if (!BuildPipeline.IsBuildTargetSupported(BuildPipeline.GetBuildTargetGroup(target), target))
+                errors.Add(Invalid("target", $"Build target '{target}' is not installed (isInstalled=false in list_build_targets)."));
 
             // ---- options ----
             var options = BuildOptions.None;
+            var optionNames = new List<string>();
             if (optionArgs != null && optionArgs.Length > 0)
             {
                 foreach (var name in optionArgs)
@@ -138,7 +150,10 @@ namespace Unity.Pipeline.Editor.Commands.Build
                     if (string.IsNullOrWhiteSpace(name))
                         continue;
                     if (s_SupportedOptions.TryGetValue(name.Trim(), out var opt))
+                    {
                         options |= opt;
+                        optionNames.Add(name.Trim());
+                    }
                     else
                         errors.Add(Invalid("options", $"Unsupported BuildOptions value '{name}'."));
                 }
@@ -147,6 +162,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
             {
                 // Strongly recommended: without it BuildReport.packedAssets is empty.
                 options = BuildOptions.DetailedBuildReport;
+                optionNames.Add(nameof(BuildOptions.DetailedBuildReport));
             }
 
             // ---- scenes ----
@@ -154,14 +170,13 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 ? sceneArgs
                 : EditorBuildSettings.scenes.Where(s => s.enabled).Select(s => s.path).ToArray();
 
-            if (sceneArgs != null)
-            {
-                foreach (var scene in sceneArgs)
-                {
-                    if (string.IsNullOrWhiteSpace(scene) || string.IsNullOrEmpty(AssetDatabase.AssetPathToGUID(scene)))
-                        errors.Add(Invalid("scenes", $"No scene asset at '{scene}'."));
-                }
-            }
+#if UNITY_6000_0_OR_NEWER
+            if (profile != null)
+                scenes = ProfileScenes(profile);
+#endif
+            foreach (var scene in scenes)
+                if (string.IsNullOrWhiteSpace(scene) || AssetDatabase.GetMainAssetTypeAtPath(scene) != typeof(SceneAsset))
+                    errors.Add(Invalid("scenes", $"No scene asset at '{scene}'."));
 
             // ---- output path ----
             // Non-mutating writability check: resolve the path and confirm an existing ancestor
@@ -185,7 +200,12 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 {
                     status = "dry_run",
                     valid = errors.Count == 0,
-                    validationErrors = errors
+                    validationErrors = errors,
+                    target = target.ToString(),
+                    scenes,
+                    outputPath,
+                    options = optionNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    profileName = profile?.Name
                 };
             }
 
@@ -211,7 +231,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 s_PendingOutput = outputPath;
                 s_PendingOptions = options;
                 s_PendingScenes = scenes;
-                s_PendingProfile = profileName;
+                s_PendingProfileGuid = profile?.Guid;
                 s_PendingBuildId = buildId;
                 s_Pending = true;
             }
@@ -222,16 +242,19 @@ namespace Unity.Pipeline.Editor.Commands.Build
         }
 
         [CliCommand("build_status",
-            "Status of the current/most recent build: idle | queued | building | completed, with the full " +
+            "Status of the current/most recent build: idle | queued | building | completed | interrupted, with the full " +
             "BuildReport (files, packedAssets, buildSteps, errors, warnings) once completed. Retained until the next build.",
             MainThreadRequired = false,
             Tags = new[] { "build" })]
         public static string BuildStatus()
         {
-            if (!File.Exists(StatusFile))
-                return "{\"status\":\"idle\"}";
-
-            var text = File.ReadAllText(StatusFile);
+            string text;
+            lock (s_Lock)
+            {
+                if (!File.Exists(StatusFile))
+                    return "{\"status\":\"idle\"}";
+                text = File.ReadAllText(StatusFile);
+            }
 
             // While building, recompute elapsedMs at read time so polling shows live progress.
             try
@@ -240,11 +263,10 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 if ((string)doc["status"] == "building")
                 {
                     long elapsed = 0;
-                    var startedStr = (string)doc["buildStartedAt"];
-                    if (!string.IsNullOrEmpty(startedStr) &&
-                        DateTime.TryParse(startedStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var started))
+                    var started = doc.Value<DateTime?>("buildStartedAt");
+                    if (started.HasValue)
                     {
-                        elapsed = (long)Math.Max(0, (DateTime.UtcNow - started.ToUniversalTime()).TotalMilliseconds);
+                        elapsed = (long)Math.Max(0, (DateTime.UtcNow - started.Value.ToUniversalTime()).TotalMilliseconds);
                     }
 
                     return JsonConvert.SerializeObject(new
@@ -286,7 +308,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 output = s_PendingOutput;
                 options = s_PendingOptions;
                 scenes = s_PendingScenes;
-                profile = s_PendingProfile;
+                profile = s_PendingProfileGuid;
                 buildId = s_PendingBuildId;
             }
 
@@ -313,7 +335,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
         }
 
         static void RunBuild(string buildId, BuildTarget target, string outputPath, BuildOptions options,
-            string[] scenes, string profileName)
+            string[] scenes, string profileGuid)
         {
             var startedAt = DateTime.UtcNow;
             WriteStatusJson(new
@@ -325,10 +347,22 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 outputPath
             });
 
-            // Best-effort Build Profile activation (Unity 6 only). Never fails the build.
-            if (!string.IsNullOrWhiteSpace(profileName))
-                TryActivateBuildProfile(profileName);
-
+#if UNITY_6000_0_OR_NEWER
+            if (profileGuid != null)
+            {
+                var profile = AssetDatabase.LoadAssetAtPath<BuildProfile>(AssetDatabase.GUIDToAssetPath(profileGuid));
+                var info = BuildProfiles.List().FirstOrDefault(item => item.Guid == profileGuid);
+                if (profile == null || info == null || !TryParseTarget(info.Platform, out var profileTarget)
+                    || profileTarget != target || !BuildScenes(profile).SequenceEqual(scenes))
+                    throw new InvalidOperationException("The selected Build Profile or its scene list changed after validation.");
+                var profileReport = BuildPipeline.BuildPlayer(new BuildPlayerWithProfileOptions
+                {
+                    buildProfile = profile, locationPathName = outputPath, options = options
+                });
+                WriteStatusJson(Project(buildId, profileReport));
+                return;
+            }
+#endif
             var buildOptions = new BuildPlayerOptions
             {
                 scenes = scenes,
@@ -540,29 +574,48 @@ namespace Unity.Pipeline.Editor.Commands.Build
             }
         }
 
-        /// <summary>
-        /// Best-effort: activate a Build Profile by name via reflection so the assembly still compiles on
-        /// Unity versions without the Build Profile API. Any failure is logged and ignored — the build
-        /// proceeds with the current configuration.
-        /// </summary>
-        static void TryActivateBuildProfile(string profileName)
+        static BuildProfileInfo ValidateProfile(string name, string targetArg, string[] sceneArgs,
+            ref BuildTarget target, List<object> errors)
         {
-            try
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+            if (!BuildProfiles.IsSupported)
             {
-                var info = BuildProfiles.FindByName(profileName);
-                if (info == null)
-                {
-                    Debug.LogWarning($"[pipeline] build: profile '{profileName}' not found; building with current settings.");
-                    return;
-                }
-                if (!BuildProfiles.TrySetActive(info))
-                    Debug.LogWarning($"[pipeline] build: could not activate profile '{profileName}'; building with current settings.");
+                errors.Add(Invalid("profileName", "Build Profiles require Unity 6 (6000.0) or later."));
+                return null;
             }
-            catch (Exception ex)
+            var matches = BuildProfiles.List().Where(profile => string.Equals(profile.Name, name.Trim(),
+                StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length != 1)
             {
-                Debug.LogWarning($"[pipeline] build: profile activation failed ({ex.Message}); building with current settings.");
+                errors.Add(Invalid("profileName", matches.Length == 0
+                    ? $"Build Profile '{name}' was not found." : $"Build Profile '{name}' is ambiguous."));
+                return null;
             }
+            var profile = matches[0];
+            if (!TryParseTarget(profile.Platform, out var platform))
+                errors.Add(Invalid("profileName", $"The target of Build Profile '{name}' could not be determined."));
+            else if (!string.IsNullOrWhiteSpace(targetArg) && platform != target)
+                errors.Add(Invalid("target", $"Build Profile '{name}' targets '{platform}', not '{target}'."));
+            else
+                target = platform;
+            if (sceneArgs != null && sceneArgs.Length > 0)
+                errors.Add(Invalid("scenes", "A Build Profile supplies its own scene list. Omit scenes."));
+            return profile;
         }
+
+#if UNITY_6000_0_OR_NEWER
+        static string[] ProfileScenes(BuildProfileInfo info)
+        {
+            var asset = AssetDatabase.LoadAssetAtPath<BuildProfile>(AssetDatabase.GUIDToAssetPath(info.Guid));
+            if (asset == null)
+                throw new InvalidOperationException("The selected Build Profile no longer exists.");
+            return BuildScenes(asset);
+        }
+
+        static string[] BuildScenes(BuildProfile asset) =>
+            asset.GetScenesForBuild().Where(scene => scene.enabled).Select(scene => scene.path).ToArray();
+#endif
 
         /// <summary>
         /// Run <paramref name="fn"/> on the Unity main thread. Off-thread (the HTTP path) it marshals
@@ -577,11 +630,29 @@ namespace Unity.Pipeline.Editor.Commands.Build
             return fn();
         }
 
+        static void RestoreInterruptedStatus()
+        {
+            try
+            {
+                var previous = JObject.Parse(BuildStatus());
+                var status = (string)previous["status"];
+                if (status == "queued" || status == "building")
+                    WriteStatusJson(new { status = "interrupted", buildId = (string)previous["buildId"],
+                        message = "The Editor reloaded or restarted before the build returned a report." });
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Build] Could not read previous build status: {ex.Message}");
+            }
+        }
+
         static void WriteStatusJson(object status)
         {
             try
             {
-                File.WriteAllText(StatusFile, JsonConvert.SerializeObject(status));
+                var text = JsonConvert.SerializeObject(status);
+                lock (s_Lock)
+                    File.WriteAllText(StatusFile, text);
             }
             catch (Exception ex)
             {
@@ -590,3 +661,4 @@ namespace Unity.Pipeline.Editor.Commands.Build
         }
     }
 }
+#endif

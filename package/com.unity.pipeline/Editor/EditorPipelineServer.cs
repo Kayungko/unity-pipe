@@ -18,6 +18,9 @@ namespace Unity.Pipeline.Editor
 #endif
     class EditorPipelineServer : BasePipelineServer
     {
+#if UNITY_EDITOR_WIN || UNITY_6000_7_OR_NEWER
+        protected override bool SupportsDialogTracking => true;
+#endif
 #if UNITY_EDITOR_WIN && !UNITY_6000_7_OR_NEWER
         private readonly WindowsEditorDialogMirror m_NativeDialogs = new WindowsEditorDialogMirror();
 
