@@ -10,7 +10,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Kayungko/unity-pipe/internal/protocol"
@@ -37,6 +39,9 @@ func New() *HTTPTransport {
 	return &HTTPTransport{
 		client: &http.Client{
 			Timeout: 0, // per-request only; see Do
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 			Transport: &http.Transport{
 				Proxy: nil, // never proxy loopback traffic
 				DialContext: (&net.Dialer{
@@ -67,10 +72,14 @@ func (t *HTTPTransport) Do(req protocol.Request) (protocol.Response, error) {
 	}
 	httpReq, err := http.NewRequest(req.Method, url, body)
 	if err != nil {
-		return protocol.Response{}, fmt.Errorf("build request: %w", err)
+		return protocol.Response{}, &protocol.RequestNotSent{Cause: fmt.Errorf("build request: %w", err)}
 	}
 	ctx, cancel := context.WithTimeout(httpReq.Context(), timeout)
 	defer cancel()
+	var acquired atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { acquired.Store(true) },
+	})
 	httpReq = httpReq.WithContext(ctx)
 	if req.AuthToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+req.AuthToken)
@@ -78,12 +87,17 @@ func (t *HTTPTransport) Do(req protocol.Request) (protocol.Response, error) {
 	if len(req.Body) > 0 {
 		httpReq.Header.Set("Content-Type", "application/json")
 	}
+	if req.Method == http.MethodPost {
+		httpReq.GetBody = nil
+	}
 
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
-		// Surface a compact connectivity error; the retry ladder in the
-		// protocol layer decides what to do with it.
-		return protocol.Response{}, compactHTTPError(err)
+		failure := compactHTTPError(err)
+		if !acquired.Load() {
+			failure = &protocol.RequestNotSent{Cause: failure}
+		}
+		return protocol.Response{}, failure
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))

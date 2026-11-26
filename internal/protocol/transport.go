@@ -20,6 +20,13 @@ type Response struct {
 	Body       []byte
 }
 
+// RequestNotSent identifies a failure before transport acquired a connection.
+// Other transport errors may have occurred after the server accepted the request.
+type RequestNotSent struct{ Cause error }
+
+func (e *RequestNotSent) Error() string { return e.Cause.Error() }
+func (e *RequestNotSent) Unwrap() error { return e.Cause }
+
 // Transport is the only I/O seam of the protocol layer. Implementations live
 // in internal/transport (net/http) — protocol code depends on this interface
 // alone, which keeps the whole layer unit-testable with fakes and mechanically

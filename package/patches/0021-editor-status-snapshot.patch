@@ -1,0 +1,237 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index 4c5d5f4..8e10545 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,10 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
++## [0.6.0-2022.16] - Local candidate
++
++- Include a main-thread state snapshot in server status, with Auto Refresh, the session's code-load count and the currently observed Editor phase.
++
+ ## [0.6.0-2022.15] - Local candidate
+
+ - Support typed command results, structured failures and terminal logs in attached and detached execution.
+diff --git a/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs b/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
+index 1b65662..b67fbf7 100644
+--- a/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
+@@ -31,6 +31,15 @@ namespace Unity.Pipeline.Editor.Commands
+                 Status = GetOverallStatus(),
+                 Compiling = EditorApplication.isCompiling,
+                 DomainReloadInProgress = EditorApplication.isUpdating,
++                CodeLoadCount = PipelineServerStartup.CodeLoadCount,
++                AutoRefresh = EditorPrefs.GetInt(EditorHotReloadWatcher.AutoRefreshModePref, 1) switch
++                {
++                    0 => "disabled",
++                    1 => "enabled",
++                    2 => "enabled_outside_play_mode",
++                    _ => "unknown"
++                },
++                CompilationFailed = EditorUtility.scriptCompilationFailed,
+                 PlayMode = GetPlayModeStatus(),
+                 LastHeartbeat = DateTime.UtcNow,
+                 ProjectPath = Path.GetDirectoryName(Application.dataPath),
+diff --git a/com.unity.pipeline/Editor/EditorHotReloadWatcher.cs b/com.unity.pipeline/Editor/EditorHotReloadWatcher.cs
+index 1c5fd52..8be0db1 100644
+--- a/com.unity.pipeline/Editor/EditorHotReloadWatcher.cs
++++ b/com.unity.pipeline/Editor/EditorHotReloadWatcher.cs
+@@ -49,7 +49,7 @@ namespace Unity.Pipeline.Editor
+         // Unity reads kAutoRefreshMode (0=disabled, 1=enabled, 2=enabled outside play mode) since 2021.2;
+         // kAutoRefresh is the pre-2021.2 bool. Set both — writing only the legacy key is a no-op on Unity 6.
+         private const string AutoRefreshPref = "kAutoRefresh";
+-        private const string AutoRefreshModePref = "kAutoRefreshMode";
++        internal const string AutoRefreshModePref = "kAutoRefreshMode";
+
+         private static bool s_Watching;
+         private static string s_WatchPath;
+diff --git a/com.unity.pipeline/Editor/EditorPipelineServer.cs b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+index 9cc92f9..de1037f 100644
+--- a/com.unity.pipeline/Editor/EditorPipelineServer.cs
++++ b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+@@ -83,6 +83,9 @@ namespace Unity.Pipeline.Editor
+         /// whole blocked window. Null until the first dialog of the session is about to be shown.
+         /// </summary>
+         private StatusResponse m_LastStatusBeforeDialog;
++        private volatile StatusResponse m_EditorState;
++        private volatile bool m_DomainReloading;
++        private double m_NextStateSample;
+
+         /// <summary>When true, every command transaction is written to the project transaction log.</summary>
+         public bool LogRequestsResponses { get; set; }
+@@ -117,8 +120,21 @@ namespace Unity.Pipeline.Editor
+         protected override void ServerStarted()
+         {
+             InitializeSettleLatch();
++            SampleEditorState();
++            EditorApplication.update += SampleEditorState;
+         }
+
++        private void SampleEditorState()
++        {
++            var now = EditorApplication.timeSinceStartup;
++            if (now < m_NextStateSample && m_EditorState != null)
++                return;
++            m_NextStateSample = now + 0.25;
++            m_EditorState = EditorStatusCommand.GetEditorStatus();
++        }
++
++        internal void MarkDomainReloading() => m_DomainReloading = true;
++
+         /// <summary>
+         /// Whether the Editor was launched with -automated. A Unity console warning for this fact
+         /// is unactionable (nobody watches the console in an agent-driven workflow) and, worse, was
+@@ -142,6 +158,10 @@ namespace Unity.Pipeline.Editor
+         protected override void ServerStopped()
+         {
+             UnsubscribeSettleTick();
++            EditorApplication.update -= SampleEditorState;
++            m_EditorState = null;
++            m_DomainReloading = false;
++            m_NextStateSample = 0;
+         }
+
+         /// <summary>
+@@ -224,6 +244,7 @@ namespace Unity.Pipeline.Editor
+         internal void SnapshotStatusForDialogGate()
+         {
+             m_LastStatusBeforeDialog = EditorStatusCommand.GetEditorStatus();
++            m_EditorState = m_LastStatusBeforeDialog;
+         }
+
+         /// <summary>
+@@ -244,6 +265,9 @@ namespace Unity.Pipeline.Editor
+                 Status = "blocked_by_dialog",
+                 Compiling = m_LastStatusBeforeDialog.Compiling,
+                 DomainReloadInProgress = m_LastStatusBeforeDialog.DomainReloadInProgress,
++                CodeLoadCount = m_LastStatusBeforeDialog.CodeLoadCount,
++                AutoRefresh = m_LastStatusBeforeDialog.AutoRefresh,
++                CompilationFailed = m_LastStatusBeforeDialog.CompilationFailed,
+                 PlayMode = m_LastStatusBeforeDialog.PlayMode,
+                 LastHeartbeat = DateTime.UtcNow,
+                 ProjectPath = m_LastStatusBeforeDialog.ProjectPath,
+@@ -351,6 +375,8 @@ namespace Unity.Pipeline.Editor
+             string status = openDialogs.Count > 0 ? "blocked_by_dialog"
+                 : !IsSettled ? "settling"
+                 : (HasInstanceDescriptor ? "ready" : "error");
++            var editorState = m_EditorState;
++            var phase = GetEditorPhase(status, editorState);
+
+             // Keep the common case's shape unchanged (no "dialog" key at all) rather than
+             // always emitting "dialog": null — this is a widely-polled endpoint, not worth
+@@ -363,6 +389,9 @@ namespace Unity.Pipeline.Editor
+                 return new
+                 {
+                     status,
++                    phase,
++                    busyReason = phase,
++                    editorState,
+                     lastHeartbeat = m_InstanceDescriptor?.LastHeartbeat,
+                     capabilities = Capabilities,
+                     dialog = BasePipelineServer.BuildDialogPayload(openDialogs[0])
+@@ -371,11 +400,31 @@ namespace Unity.Pipeline.Editor
+             return new
+             {
+                 status,
++                phase,
++                busyReason = phase == "ready" || phase == "compile_failed" || phase == "error" ? null : phase,
++                editorState,
+                 lastHeartbeat = m_InstanceDescriptor?.LastHeartbeat,
+                 capabilities = Capabilities
+             };
+         }
+
++        private string GetEditorPhase(string status, StatusResponse state)
++        {
++            if (status == "blocked_by_dialog" || status == "error")
++                return status;
++            if (m_DomainReloading)
++                return "reloading";
++            if (state?.Compiling == true)
++                return "compiling";
++            // On older Editors the old domainReloadInProgress field used isUpdating.
++            // A real reload is identified by the assembly reload event instead.
++            if (state?.DomainReloadInProgress == true)
++                return "importing";
++            if (status == "settling")
++                return "loading";
++            return state?.CompilationFailed == true ? "compile_failed" : "ready";
++        }
++
+         /// <summary>The bearer token clients must present to authenticate requests.</summary>
+         /// <returns>The current live token.</returns>
+         protected override string GetToken()
+diff --git a/com.unity.pipeline/Editor/EditorPipelineStartup.cs b/com.unity.pipeline/Editor/EditorPipelineStartup.cs
+index fd76194..3412d2f 100644
+--- a/com.unity.pipeline/Editor/EditorPipelineStartup.cs
++++ b/com.unity.pipeline/Editor/EditorPipelineStartup.cs
+@@ -31,6 +31,8 @@ namespace Unity.Pipeline.Editor
+     static class PipelineServerStartup
+     {
+         private static EditorPipelineServer m_Server;
++        private const string CodeLoadCountKey = "Unity.Pipeline.CodeLoadCount";
++        internal static int CodeLoadCount { get; }
+
+         /// <summary>
+         /// The live editor pipeline server instance (null when stopped). Exposed so the test guard
+@@ -50,6 +52,8 @@ namespace Unity.Pipeline.Editor
+             // Don't start server in AssetImportWorker processes
+             if (!IsMainProcess())
+                 return;
++            CodeLoadCount = SessionState.GetInt(CodeLoadCountKey, 0) + 1;
++            SessionState.SetInt(CodeLoadCountKey, CodeLoadCount);
+             // Setup command discovery using TypeCache for fast Editor performance
+             CommandRegistry.SetDiscovery(new TypeCacheCommandDiscovery());
+
+@@ -342,9 +346,7 @@ namespace Unity.Pipeline.Editor
+         /// </summary>
+         private static void OnBeforeAssemblyReload()
+         {
+-            // Server will be automatically recreated after reload due to [InitializeOnLoad]
+-            // Instance descriptor file will be cleaned up and recreated
+-
++            m_Server?.MarkDomainReloading();
+         }
+
+         /// <summary>
+diff --git a/com.unity.pipeline/Runtime/Models/StatusResponse.cs b/com.unity.pipeline/Runtime/Models/StatusResponse.cs
+index 9eb853e..e3c66c0 100644
+--- a/com.unity.pipeline/Runtime/Models/StatusResponse.cs
++++ b/com.unity.pipeline/Runtime/Models/StatusResponse.cs
+@@ -28,6 +28,15 @@ namespace Unity.Pipeline.Models
+         [JsonProperty("domainReloadInProgress")]
+         public bool DomainReloadInProgress { get; set; }
+
++        [JsonProperty("codeLoadCount")]
++        public int CodeLoadCount { get; set; }
++
++        [JsonProperty("autoRefresh")]
++        public string AutoRefresh { get; set; }
++
++        [JsonProperty("compilationFailed")]
++        public bool CompilationFailed { get; set; }
++
+         /// <summary>
+         /// Current play mode state: "stopped", "playing", "paused"
+         /// </summary>
+@@ -59,4 +68,4 @@ namespace Unity.Pipeline.Models
+         [JsonProperty("dialog", NullValueHandling = NullValueHandling.Ignore)]
+         public object Dialog { get; set; }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index d692d10..c9291dc 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.15",
++  "version": "0.6.0-2022.16",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

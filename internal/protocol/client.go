@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -34,27 +35,29 @@ func (c *PipelineClient) sleep(d time.Duration) {
 // Transport-level failures come back as ExitConnectionLost (retryable) so
 // callers can distinguish connectivity from semantics.
 func (c *PipelineClient) do(method, path string, body []byte, timeout time.Duration) (Response, error) {
+	return c.exchange(Request{Method: method, Path: path, Body: body, Timeout: timeout}, "")
+}
+
+func (c *PipelineClient) exchange(req Request, operation string) (Response, error) {
 	d, err := c.Source()
 	if err != nil {
 		return Response{}, ErrNoInstance(err.Error())
 	}
-	req := Request{
-		Method:    method,
-		Path:      path,
-		Body:      body,
-		HostPort:  d.HostPort(),
-		AuthToken: d.EvalToken,
-		Timeout:   timeout,
-	}
+	req.HostPort = d.HostPort()
+	req.AuthToken = d.EvalToken
 	resp, err := c.Transport.Do(req)
 	if err != nil {
+		var notSent *RequestNotSent
+		if operation != "" && !errors.As(err, &notSent) {
+			return Response{}, unknownOutcome(ExitConnectionLost, operation, err.Error())
+		}
 		return Response{}, ErrConnectionLost(err.Error())
 	}
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return resp, ErrAuth("pipeline server rejected the token (editor restart refreshes it)")
 	case resp.StatusCode == http.StatusNotFound:
-		return resp, ErrProtocol(fmt.Sprintf("endpoint %s not found — package/server version mismatch", path))
+		return resp, ErrProtocol(fmt.Sprintf("endpoint %s not found — package/server version mismatch", req.Path))
 	case resp.StatusCode >= 400:
 		// Best-effort decode of the server envelope for a richer message.
 		var env ExecResponse
@@ -70,11 +73,29 @@ func (c *PipelineClient) do(method, path string, body []byte, timeout time.Durat
 			}
 			return resp, ErrBusy(msg, data)
 		}
-		msg := firstNonEmpty(env.ErrorDetails, env.Error, fmt.Sprintf("HTTP %d from %s", resp.StatusCode, path))
+		msg := firstNonEmpty(env.ErrorDetails, env.Error, fmt.Sprintf("HTTP %d from %s", resp.StatusCode, req.Path))
 		return resp, &UpipeError{Code: ExitCommandFailed, Kind: "CommandFailed", Message: msg,
 			Data: json.RawMessage(resp.Body)}
 	}
 	return resp, nil
+}
+
+func replayableCommand(command string, detached bool) bool {
+	if detached {
+		return false
+	}
+	// These built-ins have fixed, read-only behavior on supported package
+	// versions. Unknown commands and eval may write even if their names suggest
+	// otherwise. A detached request always creates server state.
+	switch command {
+	case "editor_status", "get_console_logs", "list_open_scenes", "wait",
+		"audit_status", "build_status", "memory_snapshot_status", "package_status",
+		"player_memory_snapshot_status", "profiler_record_status", "recompile_status",
+		"switch_build_target_status", "test_status", "wait_status":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -238,12 +259,19 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 		}
 		roundTrip = min(timeout, budget+2*time.Second)
 	}
-	resp, err := c.do(http.MethodPost, "/api/exec", raw, roundTrip)
+	operation := command
+	if replayableCommand(command, opts.Job) {
+		operation = ""
+	}
+	resp, err := c.exchange(Request{Method: http.MethodPost, Path: "/api/exec", Body: raw, Timeout: roundTrip}, operation)
 	if err != nil {
 		return nil, err
 	}
 	var r ExecResponse
 	if err := json.Unmarshal(resp.Body, &r); err != nil {
+		if operation != "" {
+			return nil, unknownOutcome(ExitProtocol, operation, "unparseable exec response")
+		}
 		return nil, ErrProtocol(fmt.Sprintf("unparseable exec response: %v", err))
 	}
 	return &r, r.CommandError(command)
@@ -263,7 +291,7 @@ func (c *PipelineClient) GetJob(jobID string) (*JobResponse, error) {
 // echoed for older notes / mis-copied clients and is ignored.
 func (c *PipelineClient) CancelJob(jobID string) (*JobResponse, error) {
 	raw, _ := json.Marshal(map[string]string{"id": jobID, "jobId": jobID})
-	resp, err := c.do(http.MethodPost, "/api/job/cancel", raw, 0)
+	resp, err := c.exchange(Request{Method: http.MethodPost, Path: "/api/job/cancel", Body: raw}, "job-cancel")
 	if err != nil {
 		return nil, err
 	}
@@ -295,8 +323,11 @@ func (c *PipelineClient) TestStatus() (json.RawMessage, error) {
 // reloadRetryable reports which error codes are worth retrying through a
 // domain reload: connectivity loss (port/token rewrite window) and busy
 // settling right after editor startup.
-func reloadRetryable(code int) bool {
-	return code == ExitNoInstance || code == ExitConnectionLost || code == ExitBusy
+func reloadRetryable(err *UpipeError) bool {
+	if err.Code == ExitNoInstance {
+		return true
+	}
+	return err.Retryable && (err.Code == ExitConnectionLost || err.Code == ExitBusy)
 }
 
 // ExecReloadTolerant wraps Exec with the domain-reload retry ladder: on a
@@ -318,7 +349,10 @@ func (c *PipelineClient) ExecReloadTolerant(command string, opts ExecOptions, ma
 			return r, nil
 		}
 		ue := AsUpipeError(err)
-		if !reloadRetryable(ue.Code) {
+		if !reloadRetryable(ue) {
+			return nil, ue
+		}
+		if ue.Code == ExitBusy && blockedByDialog(ue.Data) {
 			return nil, ue
 		}
 		lastErr = ue
@@ -333,4 +367,15 @@ func (c *PipelineClient) ExecReloadTolerant(command string, opts ExecOptions, ma
 		return nil, ErrBusy(fmt.Sprintf("editor still busy after %d attempts: %v", maxAttempts, lastErr), lastErr.Data)
 	}
 	return nil, ErrConnectionLost(fmt.Sprintf("editor unreachable after %d attempts: %v", maxAttempts, lastErr))
+}
+
+func blockedByDialog(data any) bool {
+	raw, ok := data.(json.RawMessage)
+	if !ok {
+		return false
+	}
+	var response struct {
+		BusyReason string `json:"busyReason"`
+	}
+	return json.Unmarshal(raw, &response) == nil && response.BusyReason == "blocked_by_dialog"
 }

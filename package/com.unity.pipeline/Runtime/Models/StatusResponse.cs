@@ -28,6 +28,15 @@ namespace Unity.Pipeline.Models
         [JsonProperty("domainReloadInProgress")]
         public bool DomainReloadInProgress { get; set; }
 
+        [JsonProperty("codeLoadCount")]
+        public int CodeLoadCount { get; set; }
+
+        [JsonProperty("autoRefresh")]
+        public string AutoRefresh { get; set; }
+
+        [JsonProperty("compilationFailed")]
+        public bool CompilationFailed { get; set; }
+
         /// <summary>
         /// Current play mode state: "stopped", "playing", "paused"
         /// </summary>

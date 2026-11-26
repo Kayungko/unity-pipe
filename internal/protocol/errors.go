@@ -51,6 +51,19 @@ func ErrConnectionLost(msg string) *UpipeError {
 	return &UpipeError{Code: ExitConnectionLost, Kind: "ConnectionLost", Message: msg, Retryable: true}
 }
 
+// An accepted write can outlive its HTTP response. Keep the connection exit
+// code and give machine clients a stable signal to reconcile the result first.
+func unknownOutcome(code int, operation, cause string) *UpipeError {
+	errorKind := "ConnectionLost"
+	if code == ExitProtocol {
+		errorKind = "Protocol"
+	}
+	return &UpipeError{Code: code, Kind: errorKind,
+		Message: fmt.Sprintf("outcome unknown for %s; check the Editor state before retrying: %s", operation, cause),
+		Data:    map[string]string{"outcome": "unknown", "command": operation},
+	}
+}
+
 // ErrAuth reports an authentication failure against the pipeline server.
 func ErrAuth(msg string) *UpipeError {
 	return newErr(ExitAuth, "Auth", msg)

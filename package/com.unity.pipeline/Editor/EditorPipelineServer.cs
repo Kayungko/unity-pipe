@@ -83,6 +83,9 @@ namespace Unity.Pipeline.Editor
         /// whole blocked window. Null until the first dialog of the session is about to be shown.
         /// </summary>
         private StatusResponse m_LastStatusBeforeDialog;
+        private volatile StatusResponse m_EditorState;
+        private volatile bool m_DomainReloading;
+        private double m_NextStateSample;
 
         /// <summary>When true, every command transaction is written to the project transaction log.</summary>
         public bool LogRequestsResponses { get; set; }
@@ -117,7 +120,20 @@ namespace Unity.Pipeline.Editor
         protected override void ServerStarted()
         {
             InitializeSettleLatch();
+            SampleEditorState();
+            EditorApplication.update += SampleEditorState;
         }
+
+        private void SampleEditorState()
+        {
+            var now = EditorApplication.timeSinceStartup;
+            if (now < m_NextStateSample && m_EditorState != null)
+                return;
+            m_NextStateSample = now + 0.25;
+            m_EditorState = EditorStatusCommand.GetEditorStatus();
+        }
+
+        internal void MarkDomainReloading() => m_DomainReloading = true;
 
         /// <summary>
         /// Whether the Editor was launched with -automated. A Unity console warning for this fact
@@ -142,6 +158,10 @@ namespace Unity.Pipeline.Editor
         protected override void ServerStopped()
         {
             UnsubscribeSettleTick();
+            EditorApplication.update -= SampleEditorState;
+            m_EditorState = null;
+            m_DomainReloading = false;
+            m_NextStateSample = 0;
         }
 
         /// <summary>
@@ -224,6 +244,7 @@ namespace Unity.Pipeline.Editor
         internal void SnapshotStatusForDialogGate()
         {
             m_LastStatusBeforeDialog = EditorStatusCommand.GetEditorStatus();
+            m_EditorState = m_LastStatusBeforeDialog;
         }
 
         /// <summary>
@@ -244,6 +265,9 @@ namespace Unity.Pipeline.Editor
                 Status = "blocked_by_dialog",
                 Compiling = m_LastStatusBeforeDialog.Compiling,
                 DomainReloadInProgress = m_LastStatusBeforeDialog.DomainReloadInProgress,
+                CodeLoadCount = m_LastStatusBeforeDialog.CodeLoadCount,
+                AutoRefresh = m_LastStatusBeforeDialog.AutoRefresh,
+                CompilationFailed = m_LastStatusBeforeDialog.CompilationFailed,
                 PlayMode = m_LastStatusBeforeDialog.PlayMode,
                 LastHeartbeat = DateTime.UtcNow,
                 ProjectPath = m_LastStatusBeforeDialog.ProjectPath,
@@ -351,6 +375,8 @@ namespace Unity.Pipeline.Editor
             string status = openDialogs.Count > 0 ? "blocked_by_dialog"
                 : !IsSettled ? "settling"
                 : (HasInstanceDescriptor ? "ready" : "error");
+            var editorState = m_EditorState;
+            var phase = GetEditorPhase(status, editorState);
 
             // Keep the common case's shape unchanged (no "dialog" key at all) rather than
             // always emitting "dialog": null — this is a widely-polled endpoint, not worth
@@ -363,6 +389,9 @@ namespace Unity.Pipeline.Editor
                 return new
                 {
                     status,
+                    phase,
+                    busyReason = phase,
+                    editorState,
                     lastHeartbeat = m_InstanceDescriptor?.LastHeartbeat,
                     capabilities = Capabilities,
                     dialog = BasePipelineServer.BuildDialogPayload(openDialogs[0])
@@ -371,9 +400,29 @@ namespace Unity.Pipeline.Editor
             return new
             {
                 status,
+                phase,
+                busyReason = phase == "ready" || phase == "compile_failed" || phase == "error" ? null : phase,
+                editorState,
                 lastHeartbeat = m_InstanceDescriptor?.LastHeartbeat,
                 capabilities = Capabilities
             };
+        }
+
+        private string GetEditorPhase(string status, StatusResponse state)
+        {
+            if (status == "blocked_by_dialog" || status == "error")
+                return status;
+            if (m_DomainReloading)
+                return "reloading";
+            if (state?.Compiling == true)
+                return "compiling";
+            // On older Editors the old domainReloadInProgress field used isUpdating.
+            // A real reload is identified by the assembly reload event instead.
+            if (state?.DomainReloadInProgress == true)
+                return "importing";
+            if (status == "settling")
+                return "loading";
+            return state?.CompilationFailed == true ? "compile_failed" : "ready";
         }
 
         /// <summary>The bearer token clients must present to authenticate requests.</summary>

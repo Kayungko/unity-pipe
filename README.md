@@ -156,6 +156,8 @@ upipe commands                                      # 浏览当前编辑器支�
 
 `upipe recompile` 等待编译结果，失败时退出 `20`，编译诊断见 `error.data.errors`。`--no-wait` 只提交请求，使用 `recompile_status` 查看编译结果。
 
+`upipe status` 的 `server.phase` 报告可识别的 Editor 阶段，`server.editorState` 包含 Auto Refresh 及会话内代码加载次数。写命令发出后连接丢失时，退出码为 `11` 且 `error.data.outcome` 为 `unknown`。先检查 Editor 状态或实际写入结果，再决定是否重新执行。
+
 > 新建的 `.cs` 文件首次编译前需 `upipe eval "UnityEditor.AssetDatabase.Refresh();"` 触发导入——AI 技能已内置此处理，手动模式才需要你自己记。
 </details>
 
@@ -270,7 +272,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.15`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.16`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

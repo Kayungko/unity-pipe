@@ -49,7 +49,7 @@ namespace Unity.Pipeline.Editor
         // Unity reads kAutoRefreshMode (0=disabled, 1=enabled, 2=enabled outside play mode) since 2021.2;
         // kAutoRefresh is the pre-2021.2 bool. Set both — writing only the legacy key is a no-op on Unity 6.
         private const string AutoRefreshPref = "kAutoRefresh";
-        private const string AutoRefreshModePref = "kAutoRefreshMode";
+        internal const string AutoRefreshModePref = "kAutoRefreshMode";
 
         private static bool s_Watching;
         private static string s_WatchPath;

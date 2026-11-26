@@ -31,6 +31,15 @@ namespace Unity.Pipeline.Editor.Commands
                 Status = GetOverallStatus(),
                 Compiling = EditorApplication.isCompiling,
                 DomainReloadInProgress = EditorApplication.isUpdating,
+                CodeLoadCount = PipelineServerStartup.CodeLoadCount,
+                AutoRefresh = EditorPrefs.GetInt(EditorHotReloadWatcher.AutoRefreshModePref, 1) switch
+                {
+                    0 => "disabled",
+                    1 => "enabled",
+                    2 => "enabled_outside_play_mode",
+                    _ => "unknown"
+                },
+                CompilationFailed = EditorUtility.scriptCompilationFailed,
                 PlayMode = GetPlayModeStatus(),
                 LastHeartbeat = DateTime.UtcNow,
                 ProjectPath = Path.GetDirectoryName(Application.dataPath),

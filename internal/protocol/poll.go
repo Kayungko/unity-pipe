@@ -56,7 +56,7 @@ func Poll(fn func() (PollStep, error), cfg PollConfig, sleep SleepFunc, now func
 		step, err := fn()
 		if err != nil {
 			ue := AsUpipeError(err)
-			if !reloadRetryable(ue.Code) {
+			if !reloadRetryable(ue) {
 				return nil, ue
 			}
 			// Connectivity blip (likely a domain reload) — keep polling.

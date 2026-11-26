@@ -2,9 +2,57 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
+
+func TestWriteResponseLossStopsReplay(t *testing.T) {
+	for _, cmd := range []struct {
+		name string
+		job  bool
+	}{
+		{"change_object", false}, {"eval", false}, {"editor_status", true},
+	} {
+		t.Run(cmd.name, func(t *testing.T) {
+			ft := &fakeTransport{steps: []fakeStep{{err: errors.New("EOF")}, okStep()}}
+			_, err := newTestClient(ft).ExecReloadTolerant(cmd.name, ExecOptions{Job: cmd.job}, 3)
+			failure := AsUpipeError(err)
+			if failure == nil || failure.Code != ExitConnectionLost || failure.Kind != "ConnectionLost" || failure.Retryable {
+				t.Fatalf("unexpected error: %+v", failure)
+			}
+			state, ok := failure.Data.(map[string]string)
+			if !ok || state["outcome"] != "unknown" || state["command"] != cmd.name || ft.calls != 1 {
+				t.Fatalf("outcome = %v, calls = %d", failure.Data, ft.calls)
+			}
+		})
+	}
+}
+
+func TestReloadTolerantCanRetryBeforeSendAndForKnownReads(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		err     error
+	}{
+		{"change_object", &RequestNotSent{Cause: errors.New("connection refused")}},
+		{"editor_status", errors.New("EOF")},
+	} {
+		ft := &fakeTransport{steps: []fakeStep{{err: test.err}, okStep()}}
+		if _, err := newTestClient(ft).ExecReloadTolerant(test.command, ExecOptions{}, 2); err != nil || ft.calls != 2 {
+			t.Fatalf("%s: calls = %d, err = %v", test.command, ft.calls, err)
+		}
+	}
+}
+
+func TestReloadTolerantReturnsModalBusyImmediately(t *testing.T) {
+	body := `{"status":"busy","busyReason":"blocked_by_dialog","retryable":true}`
+	ft := &fakeTransport{steps: []fakeStep{{resp: Response{StatusCode: 503, Body: []byte(body)}}, okStep()}}
+	_, err := newTestClient(ft).ExecReloadTolerant("change_object", ExecOptions{}, 3)
+	failure := AsUpipeError(err)
+	if failure == nil || failure.Code != ExitBusy || !failure.Retryable || ft.calls != 1 {
+		t.Fatalf("calls = %d, err = %+v", ft.calls, failure)
+	}
+}
 
 // recordingTransport captures every request so tests can assert on the wire
 // format (body fields, round-trip deadline) while scripting responses.

@@ -135,7 +135,8 @@ Editor 服务器会隐藏 Runtime-only 命令；Runtime 服务器反之。
 客户端契约（upipe 已内建）：
 
 - **每次请求前重读端口文件**（不缓存 descriptor）
-- 连接类错误按退避梯重试（upipe：0.2/0.5/1/2/5/10/30s，可通过环境变量 `UPIPE_RELOAD_LADDER` 覆盖，逗号分隔的 Go duration 列表，如 `200ms,500ms,1s,2s,5s,10s,30s,60s`——大型 P4 工程域重载耗时经常超出内置 30s 上限时使用；值非法直接 exit 2，不会静默回退默认梯），HTTP 语义错误（4xx/5xx 结构化信封）不盲重试
+- 已知只读查询、未取得连接的请求和服务器明确拒绝执行的暂时忙碌，可按退避梯重试（upipe 默认 0.2/0.5/1/2/5/10/30s，可用 `UPIPE_RELOAD_LADDER` 设置逗号分隔的 Go duration，值非法返回退出码 2）。已检测到阻塞弹窗时直接返回其忙碌结果。
+- 写命令、未知命令或后台任务提交已取得连接后丢失回包，返回 `error.code=11`、`error.kind="ConnectionLost"`、`error.retryable=false`，并附 `error.data.outcome="unknown"` 和命令名。调用方应先查看实际状态，再决定是否执行新请求。
 - 重载状态文件（`Temp/pipeline_recompile_status.json`）在重载前写入，重载后轮询者仍可读到终态
 
 ## 7. 轮询型命令的状态值（实测自包源码）

@@ -31,6 +31,8 @@ namespace Unity.Pipeline.Editor
     static class PipelineServerStartup
     {
         private static EditorPipelineServer m_Server;
+        private const string CodeLoadCountKey = "Unity.Pipeline.CodeLoadCount";
+        internal static int CodeLoadCount { get; }
 
         /// <summary>
         /// The live editor pipeline server instance (null when stopped). Exposed so the test guard
@@ -50,6 +52,8 @@ namespace Unity.Pipeline.Editor
             // Don't start server in AssetImportWorker processes
             if (!IsMainProcess())
                 return;
+            CodeLoadCount = SessionState.GetInt(CodeLoadCountKey, 0) + 1;
+            SessionState.SetInt(CodeLoadCountKey, CodeLoadCount);
             // Setup command discovery using TypeCache for fast Editor performance
             CommandRegistry.SetDiscovery(new TypeCacheCommandDiscovery());
 
@@ -342,9 +346,7 @@ namespace Unity.Pipeline.Editor
         /// </summary>
         private static void OnBeforeAssemblyReload()
         {
-            // Server will be automatically recreated after reload due to [InitializeOnLoad]
-            // Instance descriptor file will be cleaned up and recreated
-
+            m_Server?.MarkDomainReloading();
         }
 
         /// <summary>

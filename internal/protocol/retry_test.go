@@ -118,7 +118,7 @@ type fakeStep struct {
 func (f *fakeTransport) Do(req Request) (Response, error) {
 	if f.calls >= len(f.steps) {
 		f.calls++
-		return Response{}, errors.New("connection refused (script exhausted)")
+		return Response{}, &RequestNotSent{Cause: errors.New("connection refused (script exhausted)")}
 	}
 	s := f.steps[f.calls]
 	f.calls++
@@ -183,7 +183,7 @@ func TestReloadTolerantRetriesConnectionErrors(t *testing.T) {
 	// First call: connection refused (domain reload in flight).
 	// Second call: 503 settling. Third call: success.
 	ft := &fakeTransport{steps: []fakeStep{
-		{err: errors.New("connection refused")},
+		{err: &RequestNotSent{Cause: errors.New("connection refused")}},
 		{resp: Response{StatusCode: 503, Body: []byte(`{"error":"Busy","errorDetails":"settling"}`)}},
 		{resp: Response{StatusCode: 200, Body: []byte(`{"success":true,"command":"x","result":null}`)}},
 	}}

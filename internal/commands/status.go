@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/Kayungko/unity-pipe/internal/protocol"
@@ -32,9 +33,18 @@ func StatusCommand() SubCommand {
 			}
 			var editor *protocol.ExecResponse
 			if desc.Mode != "player" && protocol.ExtractStatus(server) != "blocked_by_dialog" {
-				editor, err = rt.Client.EditorStatus()
-				if err != nil {
-					return nil, err
+				var snapshot struct {
+					EditorState *protocol.ExecResponse `json:"editorState"`
+				}
+				// New Editors sample state on their update loop. Prefer that snapshot
+				// so a status probe can complete while a command holds the exec gate.
+				if json.Unmarshal(server, &snapshot) == nil && snapshot.EditorState != nil {
+					editor = snapshot.EditorState
+				} else {
+					editor, err = rt.Client.EditorStatus()
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 

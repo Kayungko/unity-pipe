@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +10,40 @@ import (
 
 	"github.com/Kayungko/unity-pipe/internal/protocol"
 )
+
+func TestTransportDistinguishesBeforeConnectFromLostPostResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer server.Close()
+	closed, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := closed.Addr().String()
+	_ = closed.Close()
+
+	tr := New()
+	defer tr.Close()
+	req := protocol.Request{Method: http.MethodPost, Path: "/api/exec", Body: []byte(`{"command":"create"}`)}
+	for _, test := range []struct {
+		addr    string
+		notSent bool
+	}{
+		{server.Listener.Addr().String(), false},
+		{addr, true},
+	} {
+		req.HostPort = test.addr
+		_, err := tr.Do(req)
+		var notSent *protocol.RequestNotSent
+		if err == nil || errors.As(err, &notSent) != test.notSent {
+			t.Fatalf("%s: failure = %v, want before-send = %v", test.addr, err, test.notSent)
+		}
+	}
+}
 
 // The per-request timeout must extend beyond the old hardcoded 120s client
 // cap: a request with an explicit long Timeout (slow eval) must not be
