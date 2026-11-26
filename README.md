@@ -160,21 +160,24 @@ upipe commands                                      # 浏览当前编辑器支�
 
 ### 比较 Git 或 P4 中的 Unity 资产
 
-两个命令均可在 Editor 关闭时使用。Git 默认从当前目录读取，也可用 `--project-path` 指定 Git 仓库内的 Unity 工程目录。
+这些命令均可在 Editor 关闭时使用。Git 默认从当前目录读取，也可用 `--project-path` 指定 Git 仓库内的 Unity 工程目录。
 
 ```powershell
 upipe asset-guid --at REV GUID --json
+upipe asset-refs --at REV --under Assets/UI GUID --json
 upipe asset-diff --from OLD --to NEW Assets/UI/Screen.prefab --json
 upipe asset-diff --include-inherited --from OLD --to NEW Assets/UI/Screen.prefab --json
 ```
 
-P4 用已提交的数字 changelist 作为 `--at`、`--from` 或 `--to`。两个命令都支持以下读取参数。P4 Suite 负责认证和路径编码。
+P4 用已提交的数字 changelist 作为 `--at`、`--from` 或 `--to`。三个命令都支持以下读取参数。P4 Suite 负责认证和路径编码。
 
 ```powershell
 upipe asset-guid --at CL GUID --p4-root //depot/Project --p4-ops PATH_TO_P4_OPS_JS --p4-port SERVER --p4-user USER --p4-client CLIENT --json
 ```
 
 GUID 解析范围为选定版本中纳管的 `Assets/` 和 `Packages/`。报告区分已解析、未解析、重复 GUID、只有元数据的资源以及 Unity 内建引用。未纳管的注册表包引用可能无法解析。
+
+`asset-refs` 查找该版本中每个文本 Prefab 和 Scene 直接保存的对象引用，返回资产路径、节点、组件、字段和引用 File ID。嵌套 Prefab 的源引用和已保存的对象引用覆盖分别出现在对应字段中。覆盖还提供目标 GUID、File ID 和属性路径。被删资源的 GUID 仍可用于定位残留引用。用 `--under` 指定目录或单个资产可以缩小搜索范围。未读取的二进制资源或 Git LFS 指针列在 `skippedFiles` 中，此时 `complete` 为 `false`。零匹配使用正常成功响应。
 
 差异支持 Unity 文本序列化的 `.prefab` 和 `.unity`，以类型和本地 File ID 配对节点及组件。同名兄弟节点按层级顺序标记，字段使用 JSON Pointer。嵌套 Prefab 实例以源资产名标识，实例的序列化覆盖和引用在实例下显示。资源移动会展示两边不同的路径，引用无法解析时保留原 GUID 和 File ID。资产本身改名可用 `--to-path` 指定新路径。
 

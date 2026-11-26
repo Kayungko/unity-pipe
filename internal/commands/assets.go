@@ -126,6 +126,45 @@ func AssetGUIDCommand() SubCommand {
 	}
 }
 
+func AssetRefsCommand() SubCommand {
+	return SubCommand{
+		Name:      "asset-refs",
+		Synopsis:  "find Prefab and Scene references to a Unity GUID in a fixed revision: upipe asset-refs --at REV GUID",
+		NoRuntime: true,
+		Run: func(rt *Runtime, args []string) (any, error) {
+			fs := newFlagSet("upipe asset-refs")
+			at := fs.String("at", "", "Git revision or submitted P4 changelist")
+			under := fs.String("under", "", "restrict the search to a project-relative folder or asset under Assets or Packages")
+			source := attachAssetSource(fs)
+			attachShared(fs, rt.Opts)
+			guids, err := parseArgs(fs, args)
+			if err != nil {
+				return nil, err
+			}
+			if len(guids) != 1 || !assetversion.ValidGUID(guids[0]) {
+				return nil, usageErr("asset-refs: provide one Unity GUID")
+			}
+			if !assetversion.ValidReferenceScope(*under) {
+				return nil, usageErr("asset-refs: invalid --under path")
+			}
+			if err := source.validate(*at); err != nil {
+				return nil, err
+			}
+			ctx, cancel := assetDeadline(rt)
+			defer cancel()
+			version, err := source.open(ctx, rt, *at)
+			if err != nil {
+				return nil, assetError(ctx, err)
+			}
+			result, err := version.FindReferences(ctx, guids[0], *under)
+			if err != nil {
+				return nil, assetError(ctx, err)
+			}
+			return result, nil
+		},
+	}
+}
+
 func AssetDiffCommand() SubCommand {
 	return SubCommand{
 		Name:      "asset-diff",

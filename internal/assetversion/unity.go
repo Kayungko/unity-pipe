@@ -303,9 +303,8 @@ func flattenWithArrays(node *yaml.Node, prefix string, index GuidIndex, out map[
 		for i, item := range node.Content {
 			key := strconv.Itoa(i)
 			if prefix == "/m_Modification/m_Modifications" {
-				target := field(item, "target")
-				if property := text(item, "propertyPath"); property != "" {
-					key = text(target, "guid") + ":" + text(target, "fileID") + ":" + property
+				if modification := modificationKey(item); modification != "" {
+					key = modification
 				}
 			}
 			if err := flattenWithArrays(item, prefix+"/"+pointer(key), index, out, lengths); err != nil {
@@ -316,6 +315,15 @@ func flattenWithArrays(node *yaml.Node, prefix string, index GuidIndex, out map[
 		return fmt.Errorf("unsupported Unity field at %s", prefix)
 	}
 	return nil
+}
+
+func modificationKey(item *yaml.Node) string {
+	property := text(item, "propertyPath")
+	if property == "" {
+		return ""
+	}
+	target := field(item, "target")
+	return text(target, "guid") + ":" + text(target, "fileID") + ":" + property
 }
 
 type FieldValue struct {
