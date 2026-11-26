@@ -4,6 +4,8 @@
 
 MIT License（见 LICENSE），Copyright (c) 2026 Kayungko。
 
+Unity 文本资产读取使用 `go.yaml.in/yaml/v3`。其许可与声明见 [LICENSE](licenses/go-yaml-v3-LICENSE.txt) 和 [NOTICE](licenses/go-yaml-v3-NOTICE.txt)。
+
 ## `package/` 目录 — com.unity.pipeline
 
 `package/upstream/` 与 `package/com.unity.pipeline/` 的内容来自 **Unity Technologies** 的

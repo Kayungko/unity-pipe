@@ -18,11 +18,12 @@ import (
 
 // allowed maps each internal package to the internal packages it may import.
 var allowed = map[string]map[string]bool{
-	"cli":       {"cli": true, "commands": true, "options": true, "protocol": true, "transport": true},
-	"commands":  {"commands": true, "options": true, "protocol": true},
-	"options":   {"options": true},
-	"protocol":  {"protocol": true},
-	"transport": {"transport": true, "protocol": true},
+	"assetversion": {"assetversion": true},
+	"cli":          {"cli": true, "commands": true, "options": true, "protocol": true, "transport": true},
+	"commands":     {"commands": true, "options": true, "protocol": true, "assetversion": true},
+	"options":      {"options": true},
+	"protocol":     {"protocol": true},
+	"transport":    {"transport": true, "protocol": true},
 }
 
 func TestLayering(t *testing.T) {

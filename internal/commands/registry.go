@@ -41,6 +41,8 @@ func All() []SubCommand {
 		TestCommand(),
 		BuildCommand(),
 		AuditCommand(),
+		AssetGUIDCommand(),
+		AssetDiffCommand(),
 		JobCommand(),
 		JobCancelCommand(),
 		ProgressCommand(),

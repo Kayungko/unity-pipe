@@ -158,6 +158,27 @@ upipe commands                                      # 浏览当前编辑器支�
 
 `upipe status` 的 `server.phase` 报告可识别的 Editor 阶段，`server.editorState` 包含 Auto Refresh 及会话内代码加载次数。写命令发出后连接丢失时，退出码为 `11` 且 `error.data.outcome` 为 `unknown`。先检查 Editor 状态或实际写入结果，再决定是否重新执行。
 
+### 比较 Git 或 P4 中的 Unity 资产
+
+两个命令均可在 Editor 关闭时使用。Git 默认从当前目录读取，也可用 `--project-path` 指定 Git 仓库内的 Unity 工程目录。
+
+```powershell
+upipe asset-guid --at REV GUID --json
+upipe asset-diff --from OLD --to NEW Assets/UI/Screen.prefab --json
+```
+
+P4 用已提交的数字 changelist 作为 `--at`、`--from` 或 `--to`。两个命令都支持以下读取参数。P4 Suite 负责认证和路径编码。
+
+```powershell
+upipe asset-guid --at CL GUID --p4-root //depot/Project --p4-ops PATH_TO_P4_OPS_JS --p4-port SERVER --p4-user USER --p4-client CLIENT --json
+```
+
+GUID 解析范围为选定版本中纳管的 `Assets/` 和 `Packages/`。报告区分已解析、未解析、重复 GUID、只有元数据的资源以及 Unity 内建引用。未纳管的注册表包引用可能无法解析。
+
+差异支持 Unity 文本序列化的 `.prefab` 和 `.unity`，以类型和本地 File ID 配对节点及组件。同名兄弟节点按层级顺序标记，字段使用 JSON Pointer。嵌套 Prefab 实例以源资产名标识，实例的序列化覆盖和引用在实例下显示。资源移动会展示两边不同的路径，引用无法解析时保留原 GUID 和 File ID。资产本身改名可用 `--to-path` 指定新路径。
+
+输入错误返回 `2`，版本读取或格式失败返回 `20`，读取超时返回 `21`。差异和未解析 GUID 是正常的查询结果，退出码为 `0`。
+
 > 新建的 `.cs` 文件首次编译前需 `upipe eval "UnityEditor.AssetDatabase.Refresh();"` 触发导入——AI 技能已内置此处理，手动模式才需要你自己记。
 </details>
 
