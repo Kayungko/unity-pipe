@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本为 **0.6.0-2022.14**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
+本仓库 vendored 版本为 **0.6.0-2022.15**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
@@ -26,6 +26,7 @@
 | 异步脚本求值 | `patches/0017-async-eval-and-compile-only.patch` | 直接等待脚本中的 await、只编译和源诊断、协作式取消 | 复测同步兼容、主线程续跑、超时、取消和重载重连 |
 | 自定义命令注册 | `patches/0018-dynamic-command-registration.patch` | 自定义静态和绑定实例命令加入既有命令目录，支持撤销 | 复测命令发现、注册冲突、域重载和 IL2CPP Player |
 | Profiler 计数器与元数据 | `patches/0019-profiler-counters-and-marker-info.patch` | 读取本地捕获中的非 GPU 计数器及 marker 原生元数据 | 对照 Editor 与 IL2CPP Player 捕获，验证原始单位、真实零值及缺测帧 |
+| 自定义命令结果 | `patches/0020-custom-command-results.patch` | 结构化成功与失败、终态日志和跨 await 的后台任务取消 | 对照 Editor 与 IL2CPP Player 的直接执行、后台任务和原有返回类型 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

@@ -5,6 +5,12 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-2022.15] - Local candidate
+
+- Support typed command results, structured failures and terminal logs in attached and detached execution.
+- Keep cooperative cancellation scoped to the originating job across async continuations.
+- Enforce the async eval timeout while the Editor's synchronization context is paused.
+
 ## [0.6.0-2022.14] - Local candidate
 
 - Add offline non-GPU counter discovery, statistics and per-frame values in native units.

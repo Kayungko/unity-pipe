@@ -57,12 +57,11 @@ func (c *PipelineClient) do(method, path string, body []byte, timeout time.Durat
 		return resp, ErrProtocol(fmt.Sprintf("endpoint %s not found — package/server version mismatch", path))
 	case resp.StatusCode >= 400:
 		// Best-effort decode of the server envelope for a richer message.
-		var env struct {
-			Error        string `json:"error"`
-			ErrorDetails string `json:"errorDetails"`
-			Message      string `json:"message"`
-		}
+		var env ExecResponse
 		_ = json.Unmarshal(resp.Body, &env)
+		if env.ErrorCode == ReportedCommandFailure {
+			return resp, ErrCommandFailed(&env)
+		}
 		if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests {
 			msg := firstNonEmpty(env.ErrorDetails, env.Message, "server busy (settling or job queue full)")
 			var data any // server envelope body, when present

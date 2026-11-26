@@ -30,9 +30,7 @@ namespace Unity.Pipeline.Compilation
             Stopwatch stopwatch)
         {
 #if UNITY_EDITOR || (UNITY_STANDALONE && DEBUG)
-            // CurrentServer is thread-local during reflection dispatch. Capture this job before
-            // yielding so the continuation can never observe a different job.
-            var job = BasePipelineServer.CurrentServer?.JobRegistry.CurrentRunning;
+            var job = BasePipelineServer.CurrentJob;
             var id = "PipelineEval_" + Guid.NewGuid().ToString("N");
             var isAsync = false;
             using var compileBudget = new CancellationTokenSource(timeoutMs);
@@ -77,19 +75,22 @@ namespace Unity.Pipeline.Compilation
                         executionTimeMs: stopwatch.ElapsedMilliseconds);
 
                 using var execution = new CancellationTokenSource();
-                var task = (Task<object>)method.Invoke(null, new object[] { execution.Token });
+                // Start the snippet and its result serialization on Unity's synchronization
+                // context. The watchdog itself must stay responsive when Unity pauses that
+                // context, such as in a background Editor with Play Mode paused.
+                var task = SerializeWhenFinished((Task<object>)method.Invoke(null, new object[] { execution.Token }));
                 while (!task.IsCompleted && job?.CancellationRequested != true &&
                     stopwatch.ElapsedMilliseconds < timeoutMs)
                 {
                     var remaining = timeoutMs - stopwatch.ElapsedMilliseconds;
-                    await Task.Delay((int)Math.Max(1, Math.Min(25, remaining)));
+                    await Task.Delay((int)Math.Max(1, Math.Min(25, remaining))).ConfigureAwait(false);
                 }
                 if (job?.CancellationRequested == true || !task.IsCompleted)
                 {
                     try { execution.Cancel(); }
                     catch (AggregateException ex) { UnityEngine.Debug.LogWarning(ex.Message); }
                     // Give cooperative code an opportunity to unwind on Unity's main thread.
-                    if (await Task.WhenAny(task, Task.Delay(200)) != task || task.IsFaulted)
+                    if (await Task.WhenAny(task, Task.Delay(200)).ConfigureAwait(false) != task || task.IsFaulted)
                         _ = task.ContinueWith(fault => { _ = fault.Exception; }, CancellationToken.None,
                             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                             TaskScheduler.Default);
@@ -97,7 +98,7 @@ namespace Unity.Pipeline.Compilation
                         throw new OperationCanceledException();
                     return TimedOut(stopwatch, timeoutMs);
                 }
-                return EvalResponse.EvalSuccess(SerializeResult(await task), executionTimeMs: stopwatch.ElapsedMilliseconds);
+                return EvalResponse.EvalSuccess(await task.ConfigureAwait(false), executionTimeMs: stopwatch.ElapsedMilliseconds);
             }
             catch (OperationCanceledException) when (job?.CancellationRequested == true)
             {
@@ -119,6 +120,8 @@ namespace Unity.Pipeline.Compilation
         }
 
 #if UNITY_EDITOR || (UNITY_STANDALONE && DEBUG)
+        static async Task<object> SerializeWhenFinished(Task<object> task) => SerializeResult(await task);
+
         static CompilationResult Compile(string header, string code, string id, bool dryRun, CancellationToken token) =>
             RoslynCompilationService.Compile(new CompilationRequest
             {

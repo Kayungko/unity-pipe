@@ -1,6 +1,7 @@
 using System.Reflection;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
+using Unity.Pipeline.Commands;
 using Unity.Pipeline.Models;
 
 namespace Unity.Pipeline
@@ -86,10 +87,12 @@ namespace Unity.Pipeline
                             // format="value" reading a genuinely-null field), so a successful
                             // reply always carries "result", explicitly null when null (Include
                             // also defeats the omitNulls serializer settings). On failure the
-                            // result is structurally meaningless and stays omitted.
+                            // ordinary failures omit the result. An explicit command failure
+                            // can retain its diagnostic payload.
                             property.NullValueHandling = NullValueHandling.Include;
                             property.ShouldSerialize = instance =>
-                                !(instance is CommandExecutionResponse response) || response.Success;
+                                !(instance is CommandExecutionResponse response) || response.Success ||
+                                (response.ErrorCode == PipelineCommandResult.FailureCode && response.Result != null);
                             break;
                     }
                 }

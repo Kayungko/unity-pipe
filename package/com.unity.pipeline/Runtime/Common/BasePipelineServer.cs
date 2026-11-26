@@ -88,6 +88,8 @@ namespace Unity.Pipeline
         /// </summary>
         [ThreadStatic] private static BasePipelineServer m_CurrentServer;
         internal static BasePipelineServer CurrentServer => m_CurrentServer;
+        private static readonly AsyncLocal<PipelineJobRecord> s_CurrentJob = new AsyncLocal<PipelineJobRecord>();
+        internal static PipelineJobRecord CurrentJob => s_CurrentJob.Value;
 
         private bool m_WatchdogEnabled;
         private bool m_WatchdogArmed;
@@ -1437,22 +1439,31 @@ namespace Unity.Pipeline
                     try
                     {
                         var result = await ExecuteCommandByName(command, commandRequest.Parameters,
-                            UnboundedJobDispatcherTimeoutMs);
+                            UnboundedJobDispatcherTimeoutMs, record);
+                        var outcome = result as PipelineCommandResult;
                         if (record.CancellationRequested)
                         {
                             // The code honored (or raced) a cancellation request; report
                             // canceled rather than a half-relevant result.
-                            JobRegistry.MarkCanceled(record);
+                            JobRegistry.MarkCanceled(record, outcome?.Logs);
+                        }
+                        else if (outcome != null && !outcome.Success)
+                        {
+                            JobRegistry.MarkFailed(record, outcome.Error, outcome.Error, outcome.Value,
+                                PipelineCommandResult.FailureCode, outcome.Logs);
                         }
                         else
                         {
                             succeeded = IsSuccessfulResult(result);
-                            JobRegistry.MarkCompleted(record, result);
+                            JobRegistry.MarkCompleted(record, outcome == null ? result : outcome.Value, outcome?.Logs);
                         }
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException ex)
                     {
-                        JobRegistry.MarkCanceled(record);
+                        if (command.IsDynamic && !record.CancellationRequested)
+                            JobRegistry.MarkFailed(record, ex.Message, ex.Message, errorCode: PipelineCommandResult.FailureCode);
+                        else
+                            JobRegistry.MarkCanceled(record);
                     }
                     catch (ArgumentException ex)
                     {
@@ -1552,6 +1563,8 @@ namespace Unity.Pipeline
                     result = record.Result,
                     error = record.Error,
                     errorDetails = record.ErrorDetails,
+                    errorCode = record.ErrorCode,
+                    logs = record.Logs,
                     progress,
                     // Corrective guidance for the caller (e.g. an unparseable omit_nulls value);
                     // null when there is nothing to say.
@@ -2051,14 +2064,23 @@ namespace Unity.Pipeline
                 // Send success response, attaching any dialog(s) that opened during this call
                 // (dialogsDuringExecution) so a caller learns about them even without polling
                 // /api/dialog concurrently while the call was in flight.
-                var successResponse = WithBoundParameters(
-                    CommandExecutionResponse.CmdSuccess(commandRequest.Command, result), commandRequest);
+                var outcome = result as PipelineCommandResult;
+                var responseBody = outcome != null && !outcome.Success
+                    ? ReportedCommandFailure(commandRequest.Command, outcome.Error, outcome.Value)
+                    : CommandExecutionResponse.CmdSuccess(commandRequest.Command, outcome == null ? result : outcome.Value);
+                responseBody.Logs = outcome?.Logs;
+                var executionResponse = WithBoundParameters(responseBody, commandRequest);
                 var dialogEvents = Dialogs.EventsSince(execStartUtc);
                 if (dialogEvents.Count > 0)
-                    successResponse.DialogsDuringExecution = dialogEvents.Select(BuildDialogPayload).ToList();
+                    executionResponse.DialogsDuringExecution = dialogEvents.Select(BuildDialogPayload).ToList();
 
-                await SendExecResponse(response, 200, successResponse, requestBody, verbose, omitNulls,
+                await SendExecResponse(response, responseBody.Success ? 200 : 400, executionResponse, requestBody, verbose, omitNulls,
                     executed, IsSuccessfulResult(result), timer.ElapsedMilliseconds, commandRequest.Parameters);
+            }
+            catch (OperationCanceledException ex) when (executed?.IsDynamic == true)
+            {
+                await SendExecResponse(response, 400, ReportedCommandFailure(cmd, ex.Message, null),
+                    requestBody, verbose, omitNulls, executed, false, timer.ElapsedMilliseconds, executedParameters);
             }
             catch (ArgumentException ex)
             {
@@ -2201,6 +2223,8 @@ namespace Unity.Pipeline
         {
             switch (result)
             {
+                case PipelineCommandResult outcome:
+                    return outcome.Success;
                 case CommandExecutionResponse commandResponse:
                     return commandResponse.Success;
                 case BaseResponse baseResponse:
@@ -2208,6 +2232,14 @@ namespace Unity.Pipeline
                 default:
                     return true;
             }
+        }
+
+        private static CommandExecutionResponse ReportedCommandFailure(string command, string message, object value)
+        {
+            var response = CommandExecutionResponse.CmdFailure(command, message, message);
+            response.ErrorCode = PipelineCommandResult.FailureCode;
+            response.Result = value;
+            return response;
         }
 
         /// <summary>
@@ -2479,7 +2511,8 @@ namespace Unity.Pipeline
         /// Execute a pre-resolved command with JSON parameters (parameter extraction, required
         /// validation, threading).
         /// </summary>
-        private async Task<object> ExecuteCommandByName(CommandInfo command, JObject parametersJson, int dispatcherTimeoutMs = 60000)
+        private async Task<object> ExecuteCommandByName(CommandInfo command, JObject parametersJson,
+            int dispatcherTimeoutMs = 60000, PipelineJobRecord job = null)
         {
             // Legacy clients (unity-tools heritage) echo the auth token into the parameter object.
             // No command declares a "token" parameter (verified), so strip it once here at the
@@ -2505,14 +2538,15 @@ namespace Unity.Pipeline
             }
 
             // Execute command with appropriate threading
-            return await ExecuteCommand(command, parameters, dispatcherTimeoutMs);
+            return await ExecuteCommand(command, parameters, dispatcherTimeoutMs, job);
         }
 
         /// <summary>
         /// Execute the command method with provided parameters.
         /// Handles main thread execution if required.
         /// </summary>
-        private async Task<object> ExecuteCommand(CommandInfo command, object[] parameters, int dispatcherTimeoutMs = 60000)
+        private async Task<object> ExecuteCommand(CommandInfo command, object[] parameters, int dispatcherTimeoutMs,
+            PipelineJobRecord job)
         {
             object raw;
             if (command.MainThreadRequired)
@@ -2520,7 +2554,7 @@ namespace Unity.Pipeline
                 // Execute on the main thread using THIS server's dispatcher.
                 if (m_Dispatcher.IsMainThread())
                 {
-                    raw = ExecuteCommandDirect(command, parameters);
+                    raw = ExecuteCommandDirect(command, parameters, job);
                 }
                 else
                 {
@@ -2535,13 +2569,13 @@ namespace Unity.Pipeline
                     var waitBudgetMs = dispatcherTimeoutMs == UnboundedJobDispatcherTimeoutMs
                         ? dispatcherTimeoutMs
                         : requestedTimeoutMs ?? dispatcherTimeoutMs;
-                    raw = await Task.Run(() => m_Dispatcher.Invoke(() => ExecuteCommandDirect(command, parameters), waitBudgetMs));
+                    raw = await Task.Run(() => m_Dispatcher.Invoke(() => ExecuteCommandDirect(command, parameters, job), waitBudgetMs));
                 }
             }
             else
             {
                 // Execute on background thread
-                raw = await Task.Run(() => ExecuteCommandDirect(command, parameters));
+                raw = await Task.Run(() => ExecuteCommandDirect(command, parameters, job));
             }
 
             return await UnwrapResult(raw);
@@ -2639,7 +2673,7 @@ namespace Unity.Pipeline
             if (!string.IsNullOrEmpty(validationError))
                 throw new ArgumentException(validationError);
 
-            var raw = ExecuteCommandDirect(command, parameters);
+            var raw = ExecuteCommandDirect(command, parameters, CurrentJob);
             // Unwrap a Task result inline. WARNING: this GetResult() blocks the main thread, so it is
             // only safe for results that are already complete (synchronous commands, or async methods
             // that happened to complete synchronously). An async command driven to completion by
@@ -2655,10 +2689,12 @@ namespace Unity.Pipeline
         /// duration so CliProgress/PipelineCancellation calls inside the command body resolve to
         /// this server, regardless of which thread this ends up running on.
         /// </summary>
-        private object ExecuteCommandDirect(CommandInfo command, object[] parameters)
+        private object ExecuteCommandDirect(CommandInfo command, object[] parameters, PipelineJobRecord job)
         {
             var previousServer = m_CurrentServer;
+            var previousJob = s_CurrentJob.Value;
             m_CurrentServer = this;
+            s_CurrentJob.Value = job;
             try
             {
                 if (command.IsDynamic && !CommandRegistry.IsRegistered(command))
@@ -2689,6 +2725,7 @@ namespace Unity.Pipeline
             finally
             {
                 m_CurrentServer = previousServer;
+                s_CurrentJob.Value = previousJob;
             }
         }
 

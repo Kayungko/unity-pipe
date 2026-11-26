@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
+using Unity.Pipeline.Commands;
 
 namespace Unity.Pipeline
 {
@@ -26,6 +28,8 @@ namespace Unity.Pipeline
         public object Result;
         public string Error;
         public string ErrorDetails;
+        public string ErrorCode;
+        public IReadOnlyList<CommandLog> Logs;
         public DateTime EnqueuedAt;
         public DateTime? StartedAt;
         public DateTime? CompletedAt;
@@ -132,34 +136,40 @@ namespace Unity.Pipeline
             m_CurrentRunning = record;
         }
 
-        internal void MarkCompleted(PipelineJobRecord record, object result)
+        internal void MarkCompleted(PipelineJobRecord record, object result, IReadOnlyList<CommandLog> logs = null)
         {
             lock (record.Gate)
             {
                 record.State = PipelineJobState.Completed;
                 record.Result = result;
+                record.Logs = logs;
                 record.CompletedAt = DateTime.UtcNow;
             }
             ClearCurrent(record);
         }
 
-        internal void MarkFailed(PipelineJobRecord record, string error, string details)
+        internal void MarkFailed(PipelineJobRecord record, string error, string details,
+            object result = null, string errorCode = null, IReadOnlyList<CommandLog> logs = null)
         {
             lock (record.Gate)
             {
                 record.State = PipelineJobState.Failed;
                 record.Error = error;
                 record.ErrorDetails = details;
+                record.ErrorCode = errorCode;
+                record.Result = result;
+                record.Logs = logs;
                 record.CompletedAt = DateTime.UtcNow;
             }
             ClearCurrent(record);
         }
 
-        internal void MarkCanceled(PipelineJobRecord record)
+        internal void MarkCanceled(PipelineJobRecord record, IReadOnlyList<CommandLog> logs = null)
         {
             lock (record.Gate)
             {
                 record.State = PipelineJobState.Canceled;
+                record.Logs = logs;
                 record.CompletedAt = DateTime.UtcNow;
             }
             ClearCurrent(record);
@@ -241,22 +251,13 @@ namespace Unity.Pipeline
     /// </code>
     /// <para>Arbitrary synchronous code cannot be aborted safely from outside, so a running job
     /// that never checks this flag runs to completion (its state still reports canceled).</para>
-    /// <para>This is a thin static façade over the executing server's own
-    /// <see cref="PipelineJobRegistry"/> (resolved via <see cref="BasePipelineServer.CurrentServer"/>)
-    /// so command code — which has no reference to "which server is running me" — can keep
-    /// calling this the same way regardless of which server dispatched it.</para>
+    /// <para>The flag follows the submitted job across awaits, including when several servers
+    /// are listening. Each command sees only its own job's cancellation request.</para>
     /// </summary>
     public static class PipelineCancellation
     {
         /// <summary>True when the currently executing job has been asked to cancel.</summary>
-        public static bool IsCancellationRequested
-        {
-            get
-            {
-                var current = BasePipelineServer.CurrentServer?.JobRegistry.CurrentRunning;
-                return current != null && current.CancellationRequested;
-            }
-        }
+        public static bool IsCancellationRequested => BasePipelineServer.CurrentJob?.CancellationRequested == true;
 
         /// <summary>Throw <see cref="OperationCanceledException"/> when cancellation was requested.</summary>
         public static void ThrowIfCancellationRequested()

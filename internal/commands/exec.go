@@ -2,7 +2,9 @@ package commands
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -24,6 +26,7 @@ func ExecCommand() SubCommand {
 			fs.Var(&sets, "set", "command parameter k=v (repeatable; JSON-scalar values keep their type)")
 			paramsJSON := fs.String("params", "", "command parameters as a JSON object (merged after --set)")
 			job := fs.Bool("job", false, "submit as a detached job; prints the jobId handle")
+			logs := attachCommandLogFlags(fs)
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
 			if err != nil {
@@ -31,6 +34,9 @@ func ExecCommand() SubCommand {
 			}
 			if len(rest) != 1 {
 				return nil, usageErr("exec: exactly one command name expected, e.g. upipe exec editor_status")
+			}
+			if err := logs.validate(); err != nil {
+				return nil, err
 			}
 			name := rest[0]
 
@@ -67,10 +73,55 @@ func ExecCommand() SubCommand {
 			}
 			resp, err := rt.Client.ExecReloadTolerant(name, opts, 0)
 			if err != nil {
+				logs.write(protocol.AsUpipeError(err).Logs)
 				return nil, err
 			}
+			logs.write(resp.Logs)
+			resp.Logs = nil
 			return resp, nil
 		},
+	}
+}
+
+type commandLogFlags struct {
+	level  string
+	format string
+}
+
+func attachCommandLogFlags(fs *flag.FlagSet) *commandLogFlags {
+	settings := &commandLogFlags{}
+	fs.StringVar(&settings.level, "log-level", "info", "minimum command log level: debug | info | warning | error")
+	fs.StringVar(&settings.format, "log-format", "text", "stderr command log format: text | json")
+	return settings
+}
+
+var commandLogLevels = map[string]int{"debug": 1, "info": 2, "warning": 3, "error": 4}
+
+func (settings *commandLogFlags) validate() error {
+	if commandLogLevels[settings.level] == 0 {
+		return usageErr("--log-level must be debug, info, warning, or error")
+	}
+	if settings.format != "text" && settings.format != "json" {
+		return usageErr("--log-format must be text or json")
+	}
+	return nil
+}
+
+func (settings *commandLogFlags) write(logs []protocol.CommandLog) {
+	if len(logs) == 0 {
+		return
+	}
+	encoder := json.NewEncoder(os.Stderr)
+	minimum := commandLogLevels[settings.level]
+	for _, log := range logs {
+		if commandLogLevels[log.Level] < minimum {
+			continue
+		}
+		if settings.format == "json" {
+			_ = encoder.Encode(log)
+		} else {
+			fmt.Fprintf(os.Stderr, "[%s] %s\n", log.Level, log.Message)
+		}
 	}
 }
 

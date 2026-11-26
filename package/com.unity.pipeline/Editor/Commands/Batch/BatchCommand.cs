@@ -314,6 +314,12 @@ namespace Unity.Pipeline.Editor.Commands.Batch
                         // holds the main thread for its entire turn — the Editor cannot transition
                         // into a busy state between two ops of the same batch.
                         var raw = server.DispatchCommandOnMainThread(command, resolvedParams);
+                        if (raw is PipelineCommandResult outcome)
+                        {
+                            if (!outcome.Success)
+                                throw new InvalidOperationException(outcome.Error);
+                            raw = outcome.Value;
+                        }
 
                         // Capture the result as a token for later references. A serialization failure
                         // here must NOT fail an op that already ran — leave the slot null (a later

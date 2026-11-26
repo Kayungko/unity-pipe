@@ -43,6 +43,15 @@ type CommandsResponse struct {
 	Count    int           `json:"count"`
 }
 
+// ReportedCommandFailure is the wire marker for a typed custom command failure.
+const ReportedCommandFailure = "COMMAND_REPORTED_FAILURE"
+
+// CommandLog is a leveled message returned with a custom command's result.
+type CommandLog struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+
 // ExecResponse is the envelope of POST /api/exec, GET /api/job and the
 // editor_status endpoint (BaseResponse + CommandExecutionResponse).
 // Unknown fields are tolerated so newer server versions keep working.
@@ -53,6 +62,8 @@ type ExecResponse struct {
 	Message         string          `json:"message"`
 	Error           string          `json:"error"`
 	ErrorDetails    string          `json:"errorDetails"`
+	ErrorCode       string          `json:"errorCode,omitempty"`
+	Logs            []CommandLog    `json:"logs,omitempty"`
 	ExecutedAt      time.Time       `json:"executedAt"`
 	ExecutionTimeMs *int64          `json:"executionTimeMs"`
 	Status          string          `json:"status,omitempty"`
@@ -178,10 +189,12 @@ func (r *ExecResponse) CommandError(command string) error {
 
 // JobResponse is the shape of GET /api/job?id=… (job state envelope).
 type JobResponse struct {
-	JobId    string          `json:"jobId"`
-	Command  string          `json:"command,omitempty"`
-	State    string          `json:"state"` // queued | running | completed | failed | canceled (US; CLI also accepts cancelled)
-	Progress json.RawMessage `json:"progress"`
-	Result   json.RawMessage `json:"result"` // detached jobs retain the raw command result
-	Error    string          `json:"error"`
+	JobId     string          `json:"jobId"`
+	Command   string          `json:"command,omitempty"`
+	State     string          `json:"state"` // queued | running | completed | failed | canceled (US; CLI also accepts cancelled)
+	Progress  json.RawMessage `json:"progress"`
+	Result    json.RawMessage `json:"result"` // detached jobs retain the raw command result
+	Error     string          `json:"error"`
+	ErrorCode string          `json:"errorCode,omitempty"`
+	Logs      []CommandLog    `json:"logs,omitempty"`
 }

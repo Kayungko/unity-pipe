@@ -31,6 +31,9 @@ namespace Unity.Pipeline.Models
         [JsonProperty("result")]
         public object Result { get; set; }
 
+        [JsonProperty("logs", NullValueHandling = NullValueHandling.Ignore)]
+        public IReadOnlyList<Unity.Pipeline.Commands.CommandLog> Logs { get; set; }
+
         /// <summary>
         /// Execution duration in milliseconds.
         /// </summary>

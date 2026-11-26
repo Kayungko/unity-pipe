@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace Unity.Pipeline.Commands
 {
@@ -8,6 +10,63 @@ namespace Unity.Pipeline.Commands
         ReadOnly,
         Stateful,
         Destructive
+    }
+
+    public enum CommandLogLevel
+    {
+        Debug,
+        Info,
+        Warning,
+        Error
+    }
+
+    /// <summary>A log entry to return with a command's terminal result.</summary>
+    public sealed class CommandLog
+    {
+        [JsonProperty("level")]
+        public string Level { get; }
+        [JsonProperty("message")]
+        public string Message { get; }
+
+        public CommandLog(CommandLogLevel level, string message)
+        {
+            if (level < CommandLogLevel.Debug || level > CommandLogLevel.Error)
+                throw new ArgumentOutOfRangeException(nameof(level));
+            Level = level.ToString().ToLowerInvariant();
+            Message = message ?? throw new ArgumentNullException(nameof(message));
+        }
+    }
+
+    /// <summary>
+    /// Return directly or as a Task result to report a command's outcome with optional logs.
+    /// Existing methods can continue returning their ordinary payload.
+    /// </summary>
+    public sealed class PipelineCommandResult
+    {
+        internal const string FailureCode = "COMMAND_REPORTED_FAILURE";
+
+        internal bool Success => Error == null;
+        internal object Value { get; }
+        internal string Error { get; }
+        internal IReadOnlyList<CommandLog> Logs { get; }
+
+        private PipelineCommandResult(object value, string error, CommandLog[] logs)
+        {
+            Value = value;
+            Error = error;
+            if (logs != null && logs.Length > 0)
+                Logs = Array.AsReadOnly((CommandLog[])logs.Clone());
+        }
+
+        public static PipelineCommandResult Succeed(object value = null, params CommandLog[] logs) =>
+            new PipelineCommandResult(value, null, logs);
+
+        public static PipelineCommandResult Fail(string message, object data = null, params CommandLog[] logs)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+                throw new ArgumentException("Provide a message for the failed command.", nameof(message));
+            return new PipelineCommandResult(data, message, logs);
+        }
     }
 
     /// <summary>

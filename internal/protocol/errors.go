@@ -25,11 +25,12 @@ const (
 // the exit code, a short machine-readable kind, and optional structured data
 // (e.g. the compile error list of a failed recompile).
 type UpipeError struct {
-	Code      int    `json:"code"`
-	Kind      string `json:"kind"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-	Data      any    `json:"data,omitempty"`
+	Code      int          `json:"code"`
+	Kind      string       `json:"kind"`
+	Message   string       `json:"message"`
+	Retryable bool         `json:"retryable"`
+	Data      any          `json:"data,omitempty"`
+	Logs      []CommandLog `json:"-"`
 }
 
 func (e *UpipeError) Error() string {
@@ -66,6 +67,7 @@ func ErrCommandFailed(resp *ExecResponse) *UpipeError {
 		Code:    ExitCommandFailed,
 		Kind:    "CommandFailed",
 		Message: resp.ErrorMessage(),
+		Logs:    resp.Logs,
 	}
 	if len(resp.Result) > 0 {
 		e.Data = json.RawMessage(resp.Result)

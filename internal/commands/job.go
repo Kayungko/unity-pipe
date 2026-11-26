@@ -14,6 +14,7 @@ func JobCommand() SubCommand {
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe job")
 			noWait := fs.Bool("no-wait", false, "single snapshot instead of waiting for terminal state")
+			logs := attachCommandLogFlags(fs)
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
 			if err != nil {
@@ -22,15 +23,29 @@ func JobCommand() SubCommand {
 			if len(rest) != 1 {
 				return nil, usageErr("job: exactly one job id expected")
 			}
+			if err := logs.validate(); err != nil {
+				return nil, err
+			}
 
 			job := rest[0]
 			if *noWait {
-				return rt.Client.GetJob(job)
+				reply, err := rt.Client.GetJob(job)
+				if err != nil {
+					return nil, err
+				}
+				logs.write(reply.Logs)
+				reply.Logs = nil
+				return reply, nil
 			}
 			result, err := protocol.Poll(func() (protocol.PollStep, error) {
 				jr, err := rt.Client.GetJob(job)
 				if err != nil {
 					return protocol.PollStep{}, err
+				}
+				logs.write(jr.Logs)
+				jr.Logs = nil
+				if jr.State == "failed" && jr.ErrorCode == protocol.ReportedCommandFailure {
+					return protocol.PollStep{}, protocol.ErrCommandFailed(&protocol.ExecResponse{Error: jr.Error, Result: jr.Result})
 				}
 				if jr.State == "completed" && jr.Result != nil {
 					response := protocol.ExecResponse{Success: true, Result: jr.Result}

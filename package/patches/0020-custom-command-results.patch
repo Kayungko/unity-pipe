@@ -1,0 +1,582 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index 49a60ad..4c5d5f4 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,12 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
++## [0.6.0-2022.15] - Local candidate
++
++- Support typed command results, structured failures and terminal logs in attached and detached execution.
++- Keep cooperative cancellation scoped to the originating job across async continuations.
++- Enforce the async eval timeout while the Editor's synchronization context is paused.
++
+ ## [0.6.0-2022.14] - Local candidate
+
+ - Add offline non-GPU counter discovery, statistics and per-frame values in native units.
+diff --git a/com.unity.pipeline/Documentation~/creating-commands.md b/com.unity.pipeline/Documentation~/creating-commands.md
+index 1351ab5..43afc92 100644
+--- a/com.unity.pipeline/Documentation~/creating-commands.md
++++ b/com.unity.pipeline/Documentation~/creating-commands.md
+@@ -285,6 +285,30 @@ Commands are discovered by `CommandRegistry`, which scans for `[CliCommand]`-tag
+
+ Results are cached until the next domain reload. **A newly added command becomes available after the next recompile** — no registration call is needed; just declare it and recompile.
+
++## Structured outcomes and logs
++
++Return `PipelineCommandResult` (or `Task<PipelineCommandResult>`) if the command needs to report an explicit failure or attach logs. Ordinary return values still work.
++
++```csharp
++using Unity.Pipeline.Commands;
++
++public static PipelineCommandResult ValidateCount(int count)
++{
++    if (count < 0)
++        return PipelineCommandResult.Fail("Count must be non-negative.", new { count },
++            new CommandLog(CommandLogLevel.Warning, "Rejected the supplied count."));
++
++    return PipelineCommandResult.Succeed(new { count },
++        new CommandLog(CommandLogLevel.Info, "Validation completed."));
++}
++```
++
++`upipe exec` and `upipe job <id>` expose the value on success and the diagnostic payload in `error.data` on failure (exit 20). Logs arrive with the terminal result. Use `--log-level debug|info|warning|error` to choose the minimum stderr level and `--log-format json` for one JSON object per log entry. The default level is `info`. The stdout envelope stays singular with `--json`.
++
++An asynchronous detached handler can read `Unity.Pipeline.PipelineCancellation.IsCancellationRequested` after an `await`. A requested cancellation ends the job with exit 22. If the handler returns a result when winding down, its logs remain available. A dynamically registered command that cancels itself before any cancellation request ends as a failure.
++
++In a batch, a synchronous handler's successful value is available to subsequent operations. An explicit failure enters the batch's existing error and rollback path.
++
+ ## Minimal custom command template
+
+ ```csharp
+diff --git a/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs b/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
+index fd8581e..22796ec 100644
+--- a/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
+@@ -314,6 +314,12 @@ namespace Unity.Pipeline.Editor.Commands.Batch
+                         // holds the main thread for its entire turn — the Editor cannot transition
+                         // into a busy state between two ops of the same batch.
+                         var raw = server.DispatchCommandOnMainThread(command, resolvedParams);
++                        if (raw is PipelineCommandResult outcome)
++                        {
++                            if (!outcome.Success)
++                                throw new InvalidOperationException(outcome.Error);
++                            raw = outcome.Value;
++                        }
+
+                         // Capture the result as a token for later references. A serialization failure
+                         // here must NOT fail an op that already ran — leave the slot null (a later
+diff --git a/com.unity.pipeline/Runtime/Commands/CodeEvalCommand.cs b/com.unity.pipeline/Runtime/Commands/CodeEvalCommand.cs
+index 58def71..bdb55e5 100644
+--- a/com.unity.pipeline/Runtime/Commands/CodeEvalCommand.cs
++++ b/com.unity.pipeline/Runtime/Commands/CodeEvalCommand.cs
+@@ -1,5 +1,6 @@
+ using System;
+ using System.IO;
++using System.Threading;
+ using System.Threading.Tasks;
+ using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Compilation;
+@@ -63,8 +64,16 @@ namespace Unity.Pipeline.Runtime.Commands
+                 return Reject(command, code, $"Timeout must be between 1ms and {MaxTimeoutMs}ms", dryRun);
+
+             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+-            var response = await EvalCodeCompiler.CompileAndExecuteAsync(code, timeout, dryRun, stopwatch);
+-            Record(command, code, response);
++            var context = SynchronizationContext.Current;
++            var threadId = Thread.CurrentThread.ManagedThreadId;
++            var response = await EvalCodeCompiler.CompileAndExecuteAsync(code, timeout, dryRun, stopwatch).ConfigureAwait(false);
++            if (Thread.CurrentThread.ManagedThreadId == threadId)
++                Record(command, code, response);
++            else
++            {
++                try { context?.Post(_ => Record(command, code, response), null); }
++                catch { /* A stale telemetry context must not alter the command outcome. */ }
++            }
+             return response;
+         }
+
+diff --git a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+index 156bf64..f8f497d 100644
+--- a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
++++ b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+@@ -88,6 +88,8 @@ namespace Unity.Pipeline
+         /// </summary>
+         [ThreadStatic] private static BasePipelineServer m_CurrentServer;
+         internal static BasePipelineServer CurrentServer => m_CurrentServer;
++        private static readonly AsyncLocal<PipelineJobRecord> s_CurrentJob = new AsyncLocal<PipelineJobRecord>();
++        internal static PipelineJobRecord CurrentJob => s_CurrentJob.Value;
+
+         private bool m_WatchdogEnabled;
+         private bool m_WatchdogArmed;
+@@ -1437,22 +1439,31 @@ namespace Unity.Pipeline
+                     try
+                     {
+                         var result = await ExecuteCommandByName(command, commandRequest.Parameters,
+-                            UnboundedJobDispatcherTimeoutMs);
++                            UnboundedJobDispatcherTimeoutMs, record);
++                        var outcome = result as PipelineCommandResult;
+                         if (record.CancellationRequested)
+                         {
+                             // The code honored (or raced) a cancellation request; report
+                             // canceled rather than a half-relevant result.
+-                            JobRegistry.MarkCanceled(record);
++                            JobRegistry.MarkCanceled(record, outcome?.Logs);
++                        }
++                        else if (outcome != null && !outcome.Success)
++                        {
++                            JobRegistry.MarkFailed(record, outcome.Error, outcome.Error, outcome.Value,
++                                PipelineCommandResult.FailureCode, outcome.Logs);
+                         }
+                         else
+                         {
+                             succeeded = IsSuccessfulResult(result);
+-                            JobRegistry.MarkCompleted(record, result);
++                            JobRegistry.MarkCompleted(record, outcome == null ? result : outcome.Value, outcome?.Logs);
+                         }
+                     }
+-                    catch (OperationCanceledException)
++                    catch (OperationCanceledException ex)
+                     {
+-                        JobRegistry.MarkCanceled(record);
++                        if (command.IsDynamic && !record.CancellationRequested)
++                            JobRegistry.MarkFailed(record, ex.Message, ex.Message, errorCode: PipelineCommandResult.FailureCode);
++                        else
++                            JobRegistry.MarkCanceled(record);
+                     }
+                     catch (ArgumentException ex)
+                     {
+@@ -1552,6 +1563,8 @@ namespace Unity.Pipeline
+                     result = record.Result,
+                     error = record.Error,
+                     errorDetails = record.ErrorDetails,
++                    errorCode = record.ErrorCode,
++                    logs = record.Logs,
+                     progress,
+                     // Corrective guidance for the caller (e.g. an unparseable omit_nulls value);
+                     // null when there is nothing to say.
+@@ -2051,15 +2064,24 @@ namespace Unity.Pipeline
+                 // Send success response, attaching any dialog(s) that opened during this call
+                 // (dialogsDuringExecution) so a caller learns about them even without polling
+                 // /api/dialog concurrently while the call was in flight.
+-                var successResponse = WithBoundParameters(
+-                    CommandExecutionResponse.CmdSuccess(commandRequest.Command, result), commandRequest);
++                var outcome = result as PipelineCommandResult;
++                var responseBody = outcome != null && !outcome.Success
++                    ? ReportedCommandFailure(commandRequest.Command, outcome.Error, outcome.Value)
++                    : CommandExecutionResponse.CmdSuccess(commandRequest.Command, outcome == null ? result : outcome.Value);
++                responseBody.Logs = outcome?.Logs;
++                var executionResponse = WithBoundParameters(responseBody, commandRequest);
+                 var dialogEvents = Dialogs.EventsSince(execStartUtc);
+                 if (dialogEvents.Count > 0)
+-                    successResponse.DialogsDuringExecution = dialogEvents.Select(BuildDialogPayload).ToList();
++                    executionResponse.DialogsDuringExecution = dialogEvents.Select(BuildDialogPayload).ToList();
+
+-                await SendExecResponse(response, 200, successResponse, requestBody, verbose, omitNulls,
++                await SendExecResponse(response, responseBody.Success ? 200 : 400, executionResponse, requestBody, verbose, omitNulls,
+                     executed, IsSuccessfulResult(result), timer.ElapsedMilliseconds, commandRequest.Parameters);
+             }
++            catch (OperationCanceledException ex) when (executed?.IsDynamic == true)
++            {
++                await SendExecResponse(response, 400, ReportedCommandFailure(cmd, ex.Message, null),
++                    requestBody, verbose, omitNulls, executed, false, timer.ElapsedMilliseconds, executedParameters);
++            }
+             catch (ArgumentException ex)
+             {
+                 // Parameter validation errors
+@@ -2201,6 +2223,8 @@ namespace Unity.Pipeline
+         {
+             switch (result)
+             {
++                case PipelineCommandResult outcome:
++                    return outcome.Success;
+                 case CommandExecutionResponse commandResponse:
+                     return commandResponse.Success;
+                 case BaseResponse baseResponse:
+@@ -2210,6 +2234,14 @@ namespace Unity.Pipeline
+             }
+         }
+
++        private static CommandExecutionResponse ReportedCommandFailure(string command, string message, object value)
++        {
++            var response = CommandExecutionResponse.CmdFailure(command, message, message);
++            response.ErrorCode = PipelineCommandResult.FailureCode;
++            response.Result = value;
++            return response;
++        }
++
+         /// <summary>
+         /// Convert a single JSON parameter token to the command's parameter type.
+         ///
+@@ -2479,7 +2511,8 @@ namespace Unity.Pipeline
+         /// Execute a pre-resolved command with JSON parameters (parameter extraction, required
+         /// validation, threading).
+         /// </summary>
+-        private async Task<object> ExecuteCommandByName(CommandInfo command, JObject parametersJson, int dispatcherTimeoutMs = 60000)
++        private async Task<object> ExecuteCommandByName(CommandInfo command, JObject parametersJson,
++            int dispatcherTimeoutMs = 60000, PipelineJobRecord job = null)
+         {
+             // Legacy clients (unity-tools heritage) echo the auth token into the parameter object.
+             // No command declares a "token" parameter (verified), so strip it once here at the
+@@ -2505,14 +2538,15 @@ namespace Unity.Pipeline
+             }
+
+             // Execute command with appropriate threading
+-            return await ExecuteCommand(command, parameters, dispatcherTimeoutMs);
++            return await ExecuteCommand(command, parameters, dispatcherTimeoutMs, job);
+         }
+
+         /// <summary>
+         /// Execute the command method with provided parameters.
+         /// Handles main thread execution if required.
+         /// </summary>
+-        private async Task<object> ExecuteCommand(CommandInfo command, object[] parameters, int dispatcherTimeoutMs = 60000)
++        private async Task<object> ExecuteCommand(CommandInfo command, object[] parameters, int dispatcherTimeoutMs,
++            PipelineJobRecord job)
+         {
+             object raw;
+             if (command.MainThreadRequired)
+@@ -2520,7 +2554,7 @@ namespace Unity.Pipeline
+                 // Execute on the main thread using THIS server's dispatcher.
+                 if (m_Dispatcher.IsMainThread())
+                 {
+-                    raw = ExecuteCommandDirect(command, parameters);
++                    raw = ExecuteCommandDirect(command, parameters, job);
+                 }
+                 else
+                 {
+@@ -2535,13 +2569,13 @@ namespace Unity.Pipeline
+                     var waitBudgetMs = dispatcherTimeoutMs == UnboundedJobDispatcherTimeoutMs
+                         ? dispatcherTimeoutMs
+                         : requestedTimeoutMs ?? dispatcherTimeoutMs;
+-                    raw = await Task.Run(() => m_Dispatcher.Invoke(() => ExecuteCommandDirect(command, parameters), waitBudgetMs));
++                    raw = await Task.Run(() => m_Dispatcher.Invoke(() => ExecuteCommandDirect(command, parameters, job), waitBudgetMs));
+                 }
+             }
+             else
+             {
+                 // Execute on background thread
+-                raw = await Task.Run(() => ExecuteCommandDirect(command, parameters));
++                raw = await Task.Run(() => ExecuteCommandDirect(command, parameters, job));
+             }
+
+             return await UnwrapResult(raw);
+@@ -2639,7 +2673,7 @@ namespace Unity.Pipeline
+             if (!string.IsNullOrEmpty(validationError))
+                 throw new ArgumentException(validationError);
+
+-            var raw = ExecuteCommandDirect(command, parameters);
++            var raw = ExecuteCommandDirect(command, parameters, CurrentJob);
+             // Unwrap a Task result inline. WARNING: this GetResult() blocks the main thread, so it is
+             // only safe for results that are already complete (synchronous commands, or async methods
+             // that happened to complete synchronously). An async command driven to completion by
+@@ -2655,10 +2689,12 @@ namespace Unity.Pipeline
+         /// duration so CliProgress/PipelineCancellation calls inside the command body resolve to
+         /// this server, regardless of which thread this ends up running on.
+         /// </summary>
+-        private object ExecuteCommandDirect(CommandInfo command, object[] parameters)
++        private object ExecuteCommandDirect(CommandInfo command, object[] parameters, PipelineJobRecord job)
+         {
+             var previousServer = m_CurrentServer;
++            var previousJob = s_CurrentJob.Value;
+             m_CurrentServer = this;
++            s_CurrentJob.Value = job;
+             try
+             {
+                 if (command.IsDynamic && !CommandRegistry.IsRegistered(command))
+@@ -2689,6 +2725,7 @@ namespace Unity.Pipeline
+             finally
+             {
+                 m_CurrentServer = previousServer;
++                s_CurrentJob.Value = previousJob;
+             }
+         }
+
+diff --git a/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs b/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
+index 7a0a0f2..131af35 100644
+--- a/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
++++ b/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
+@@ -1,4 +1,6 @@
+ using System;
++using System.Collections.Generic;
++using Newtonsoft.Json;
+
+ namespace Unity.Pipeline.Commands
+ {
+@@ -10,6 +12,63 @@ namespace Unity.Pipeline.Commands
+         Destructive
+     }
+
++    public enum CommandLogLevel
++    {
++        Debug,
++        Info,
++        Warning,
++        Error
++    }
++
++    /// <summary>A log entry to return with a command's terminal result.</summary>
++    public sealed class CommandLog
++    {
++        [JsonProperty("level")]
++        public string Level { get; }
++        [JsonProperty("message")]
++        public string Message { get; }
++
++        public CommandLog(CommandLogLevel level, string message)
++        {
++            if (level < CommandLogLevel.Debug || level > CommandLogLevel.Error)
++                throw new ArgumentOutOfRangeException(nameof(level));
++            Level = level.ToString().ToLowerInvariant();
++            Message = message ?? throw new ArgumentNullException(nameof(message));
++        }
++    }
++
++    /// <summary>
++    /// Return directly or as a Task result to report a command's outcome with optional logs.
++    /// Existing methods can continue returning their ordinary payload.
++    /// </summary>
++    public sealed class PipelineCommandResult
++    {
++        internal const string FailureCode = "COMMAND_REPORTED_FAILURE";
++
++        internal bool Success => Error == null;
++        internal object Value { get; }
++        internal string Error { get; }
++        internal IReadOnlyList<CommandLog> Logs { get; }
++
++        private PipelineCommandResult(object value, string error, CommandLog[] logs)
++        {
++            Value = value;
++            Error = error;
++            if (logs != null && logs.Length > 0)
++                Logs = Array.AsReadOnly((CommandLog[])logs.Clone());
++        }
++
++        public static PipelineCommandResult Succeed(object value = null, params CommandLog[] logs) =>
++            new PipelineCommandResult(value, null, logs);
++
++        public static PipelineCommandResult Fail(string message, object data = null, params CommandLog[] logs)
++        {
++            if (string.IsNullOrWhiteSpace(message))
++                throw new ArgumentException("Provide a message for the failed command.", nameof(message));
++            return new PipelineCommandResult(data, message, logs);
++        }
++    }
++
+     /// <summary>
+     /// Attribute to mark static methods as CLI-accessible commands.
+     /// Commands with this attribute can be executed remotely via Pipeline Server.
+diff --git a/com.unity.pipeline/Runtime/Common/ExecResponseSerializer.cs b/com.unity.pipeline/Runtime/Common/ExecResponseSerializer.cs
+index 62cb2b9..bcb9a70 100644
+--- a/com.unity.pipeline/Runtime/Common/ExecResponseSerializer.cs
++++ b/com.unity.pipeline/Runtime/Common/ExecResponseSerializer.cs
+@@ -1,6 +1,7 @@
+ using System.Reflection;
+ using Newtonsoft.Json;
+ using Newtonsoft.Json.Serialization;
++using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Models;
+
+ namespace Unity.Pipeline
+@@ -86,10 +87,12 @@ namespace Unity.Pipeline
+                             // format="value" reading a genuinely-null field), so a successful
+                             // reply always carries "result", explicitly null when null (Include
+                             // also defeats the omitNulls serializer settings). On failure the
+-                            // result is structurally meaningless and stays omitted.
++                            // ordinary failures omit the result. An explicit command failure
++                            // can retain its diagnostic payload.
+                             property.NullValueHandling = NullValueHandling.Include;
+                             property.ShouldSerialize = instance =>
+-                                !(instance is CommandExecutionResponse response) || response.Success;
++                                !(instance is CommandExecutionResponse response) || response.Success ||
++                                (response.ErrorCode == PipelineCommandResult.FailureCode && response.Result != null);
+                             break;
+                     }
+                 }
+diff --git a/com.unity.pipeline/Runtime/Common/PipelineJobs.cs b/com.unity.pipeline/Runtime/Common/PipelineJobs.cs
+index 8dc0dd9..07f32ab 100644
+--- a/com.unity.pipeline/Runtime/Common/PipelineJobs.cs
++++ b/com.unity.pipeline/Runtime/Common/PipelineJobs.cs
+@@ -1,6 +1,8 @@
+ using System;
+ using System.Collections.Concurrent;
++using System.Collections.Generic;
+ using System.Linq;
++using Unity.Pipeline.Commands;
+
+ namespace Unity.Pipeline
+ {
+@@ -26,6 +28,8 @@ namespace Unity.Pipeline
+         public object Result;
+         public string Error;
+         public string ErrorDetails;
++        public string ErrorCode;
++        public IReadOnlyList<CommandLog> Logs;
+         public DateTime EnqueuedAt;
+         public DateTime? StartedAt;
+         public DateTime? CompletedAt;
+@@ -132,34 +136,40 @@ namespace Unity.Pipeline
+             m_CurrentRunning = record;
+         }
+
+-        internal void MarkCompleted(PipelineJobRecord record, object result)
++        internal void MarkCompleted(PipelineJobRecord record, object result, IReadOnlyList<CommandLog> logs = null)
+         {
+             lock (record.Gate)
+             {
+                 record.State = PipelineJobState.Completed;
+                 record.Result = result;
++                record.Logs = logs;
+                 record.CompletedAt = DateTime.UtcNow;
+             }
+             ClearCurrent(record);
+         }
+
+-        internal void MarkFailed(PipelineJobRecord record, string error, string details)
++        internal void MarkFailed(PipelineJobRecord record, string error, string details,
++            object result = null, string errorCode = null, IReadOnlyList<CommandLog> logs = null)
+         {
+             lock (record.Gate)
+             {
+                 record.State = PipelineJobState.Failed;
+                 record.Error = error;
+                 record.ErrorDetails = details;
++                record.ErrorCode = errorCode;
++                record.Result = result;
++                record.Logs = logs;
+                 record.CompletedAt = DateTime.UtcNow;
+             }
+             ClearCurrent(record);
+         }
+
+-        internal void MarkCanceled(PipelineJobRecord record)
++        internal void MarkCanceled(PipelineJobRecord record, IReadOnlyList<CommandLog> logs = null)
+         {
+             lock (record.Gate)
+             {
+                 record.State = PipelineJobState.Canceled;
++                record.Logs = logs;
+                 record.CompletedAt = DateTime.UtcNow;
+             }
+             ClearCurrent(record);
+@@ -241,22 +251,13 @@ namespace Unity.Pipeline
+     /// </code>
+     /// <para>Arbitrary synchronous code cannot be aborted safely from outside, so a running job
+     /// that never checks this flag runs to completion (its state still reports canceled).</para>
+-    /// <para>This is a thin static façade over the executing server's own
+-    /// <see cref="PipelineJobRegistry"/> (resolved via <see cref="BasePipelineServer.CurrentServer"/>)
+-    /// so command code — which has no reference to "which server is running me" — can keep
+-    /// calling this the same way regardless of which server dispatched it.</para>
++    /// <para>The flag follows the submitted job across awaits, including when several servers
++    /// are listening. Each command sees only its own job's cancellation request.</para>
+     /// </summary>
+     public static class PipelineCancellation
+     {
+         /// <summary>True when the currently executing job has been asked to cancel.</summary>
+-        public static bool IsCancellationRequested
+-        {
+-            get
+-            {
+-                var current = BasePipelineServer.CurrentServer?.JobRegistry.CurrentRunning;
+-                return current != null && current.CancellationRequested;
+-            }
+-        }
++        public static bool IsCancellationRequested => BasePipelineServer.CurrentJob?.CancellationRequested == true;
+
+         /// <summary>Throw <see cref="OperationCanceledException"/> when cancellation was requested.</summary>
+         public static void ThrowIfCancellationRequested()
+diff --git a/com.unity.pipeline/Runtime/Compilation/EvalCodeCompiler.cs b/com.unity.pipeline/Runtime/Compilation/EvalCodeCompiler.cs
+index 7de1b5e..e9d17dd 100644
+--- a/com.unity.pipeline/Runtime/Compilation/EvalCodeCompiler.cs
++++ b/com.unity.pipeline/Runtime/Compilation/EvalCodeCompiler.cs
+@@ -30,9 +30,7 @@ namespace Unity.Pipeline.Compilation
+             Stopwatch stopwatch)
+         {
+ #if UNITY_EDITOR || (UNITY_STANDALONE && DEBUG)
+-            // CurrentServer is thread-local during reflection dispatch. Capture this job before
+-            // yielding so the continuation can never observe a different job.
+-            var job = BasePipelineServer.CurrentServer?.JobRegistry.CurrentRunning;
++            var job = BasePipelineServer.CurrentJob;
+             var id = "PipelineEval_" + Guid.NewGuid().ToString("N");
+             var isAsync = false;
+             using var compileBudget = new CancellationTokenSource(timeoutMs);
+@@ -77,19 +75,22 @@ namespace Unity.Pipeline.Compilation
+                         executionTimeMs: stopwatch.ElapsedMilliseconds);
+
+                 using var execution = new CancellationTokenSource();
+-                var task = (Task<object>)method.Invoke(null, new object[] { execution.Token });
++                // Start the snippet and its result serialization on Unity's synchronization
++                // context. The watchdog itself must stay responsive when Unity pauses that
++                // context, such as in a background Editor with Play Mode paused.
++                var task = SerializeWhenFinished((Task<object>)method.Invoke(null, new object[] { execution.Token }));
+                 while (!task.IsCompleted && job?.CancellationRequested != true &&
+                     stopwatch.ElapsedMilliseconds < timeoutMs)
+                 {
+                     var remaining = timeoutMs - stopwatch.ElapsedMilliseconds;
+-                    await Task.Delay((int)Math.Max(1, Math.Min(25, remaining)));
++                    await Task.Delay((int)Math.Max(1, Math.Min(25, remaining))).ConfigureAwait(false);
+                 }
+                 if (job?.CancellationRequested == true || !task.IsCompleted)
+                 {
+                     try { execution.Cancel(); }
+                     catch (AggregateException ex) { UnityEngine.Debug.LogWarning(ex.Message); }
+                     // Give cooperative code an opportunity to unwind on Unity's main thread.
+-                    if (await Task.WhenAny(task, Task.Delay(200)) != task || task.IsFaulted)
++                    if (await Task.WhenAny(task, Task.Delay(200)).ConfigureAwait(false) != task || task.IsFaulted)
+                         _ = task.ContinueWith(fault => { _ = fault.Exception; }, CancellationToken.None,
+                             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                             TaskScheduler.Default);
+@@ -97,7 +98,7 @@ namespace Unity.Pipeline.Compilation
+                         throw new OperationCanceledException();
+                     return TimedOut(stopwatch, timeoutMs);
+                 }
+-                return EvalResponse.EvalSuccess(SerializeResult(await task), executionTimeMs: stopwatch.ElapsedMilliseconds);
++                return EvalResponse.EvalSuccess(await task.ConfigureAwait(false), executionTimeMs: stopwatch.ElapsedMilliseconds);
+             }
+             catch (OperationCanceledException) when (job?.CancellationRequested == true)
+             {
+@@ -119,6 +120,8 @@ namespace Unity.Pipeline.Compilation
+         }
+
+ #if UNITY_EDITOR || (UNITY_STANDALONE && DEBUG)
++        static async Task<object> SerializeWhenFinished(Task<object> task) => SerializeResult(await task);
++
+         static CompilationResult Compile(string header, string code, string id, bool dryRun, CancellationToken token) =>
+             RoslynCompilationService.Compile(new CompilationRequest
+             {
+diff --git a/com.unity.pipeline/Runtime/Models/CommandExecutionResponse.cs b/com.unity.pipeline/Runtime/Models/CommandExecutionResponse.cs
+index f42d1b9..65dec40 100644
+--- a/com.unity.pipeline/Runtime/Models/CommandExecutionResponse.cs
++++ b/com.unity.pipeline/Runtime/Models/CommandExecutionResponse.cs
+@@ -31,6 +31,9 @@ namespace Unity.Pipeline.Models
+         [JsonProperty("result")]
+         public object Result { get; set; }
+
++        [JsonProperty("logs", NullValueHandling = NullValueHandling.Ignore)]
++        public IReadOnlyList<Unity.Pipeline.Commands.CommandLog> Logs { get; set; }
++
+         /// <summary>
+         /// Execution duration in milliseconds.
+         /// </summary>
+@@ -205,4 +208,4 @@ namespace Unity.Pipeline.Models
+             };
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index d0b3eb4..d692d10 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.14",
++  "version": "0.6.0-2022.15",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

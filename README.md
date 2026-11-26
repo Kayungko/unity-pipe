@@ -152,6 +152,8 @@ upipe commands                                      # 浏览当前编辑器支�
 
 `exec run_script` 执行失败、`exec batch` 事务回滚时退出 `20`，原始诊断和逐步结果在 `error.data`。后台任务的最终退出码由 `upipe job <id>` 返回。
 
+自定义命令可用 `PipelineCommandResult` 返回结构化失败和分级日志。`upipe exec` 和 `upipe job` 接收 `--log-level` 与 `--log-format json`，命令日志在结果就绪时写到 stderr。连接本地开发 Player 时，提交、等待和取消任务均使用同一个 `--player-path`。用法见 [自定义命令文档](package/com.unity.pipeline/Documentation~/creating-commands.md#structured-outcomes-and-logs)。
+
 `upipe recompile` 等待编译结果，失败时退出 `20`，编译诊断见 `error.data.errors`。`--no-wait` 只提交请求，使用 `recompile_status` 查看编译结果。
 
 > 新建的 `.cs` 文件首次编译前需 `upipe eval "UnityEditor.AssetDatabase.Refresh();"` 触发导入——AI 技能已内置此处理，手动模式才需要你自己记。
@@ -268,7 +270,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.14`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.15`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

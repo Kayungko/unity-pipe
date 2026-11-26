@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Unity.Pipeline.Commands;
 using Unity.Pipeline.Compilation;
@@ -63,8 +64,16 @@ namespace Unity.Pipeline.Runtime.Commands
                 return Reject(command, code, $"Timeout must be between 1ms and {MaxTimeoutMs}ms", dryRun);
 
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var response = await EvalCodeCompiler.CompileAndExecuteAsync(code, timeout, dryRun, stopwatch);
-            Record(command, code, response);
+            var context = SynchronizationContext.Current;
+            var threadId = Thread.CurrentThread.ManagedThreadId;
+            var response = await EvalCodeCompiler.CompileAndExecuteAsync(code, timeout, dryRun, stopwatch).ConfigureAwait(false);
+            if (Thread.CurrentThread.ManagedThreadId == threadId)
+                Record(command, code, response);
+            else
+            {
+                try { context?.Post(_ => Record(command, code, response), null); }
+                catch { /* A stale telemetry context must not alter the command outcome. */ }
+            }
             return response;
         }
 

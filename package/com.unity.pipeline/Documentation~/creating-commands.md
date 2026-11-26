@@ -285,6 +285,30 @@ Commands are discovered by `CommandRegistry`, which scans for `[CliCommand]`-tag
 
 Results are cached until the next domain reload. **A newly added command becomes available after the next recompile** — no registration call is needed; just declare it and recompile.
 
+## Structured outcomes and logs
+
+Return `PipelineCommandResult` (or `Task<PipelineCommandResult>`) if the command needs to report an explicit failure or attach logs. Ordinary return values still work.
+
+```csharp
+using Unity.Pipeline.Commands;
+
+public static PipelineCommandResult ValidateCount(int count)
+{
+    if (count < 0)
+        return PipelineCommandResult.Fail("Count must be non-negative.", new { count },
+            new CommandLog(CommandLogLevel.Warning, "Rejected the supplied count."));
+
+    return PipelineCommandResult.Succeed(new { count },
+        new CommandLog(CommandLogLevel.Info, "Validation completed."));
+}
+```
+
+`upipe exec` and `upipe job <id>` expose the value on success and the diagnostic payload in `error.data` on failure (exit 20). Logs arrive with the terminal result. Use `--log-level debug|info|warning|error` to choose the minimum stderr level and `--log-format json` for one JSON object per log entry. The default level is `info`. The stdout envelope stays singular with `--json`.
+
+An asynchronous detached handler can read `Unity.Pipeline.PipelineCancellation.IsCancellationRequested` after an `await`. A requested cancellation ends the job with exit 22. If the handler returns a result when winding down, its logs remain available. A dynamically registered command that cancels itself before any cancellation request ends as a failure.
+
+In a batch, a synchronous handler's successful value is available to subsequent operations. An explicit failure enters the batch's existing error and rollback path.
+
 ## Minimal custom command template
 
 ```csharp
