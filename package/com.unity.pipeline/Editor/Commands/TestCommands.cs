@@ -22,7 +22,7 @@ namespace Unity.Pipeline.Editor.Commands
         /// Execute Unity tests with filtering options.
         /// Synchronous by default (blocks until completion), async mode available with --async-tests flag.
         /// </summary>
-        [CliCommand("run_tests", "Execute Unity tests with filtering options", MainThreadRequired = true, Tags = new[] { "tests" })]
+        [CliCommand("run_tests", "Execute Unity tests with filtering options", MainThreadRequired = true, Effect = CommandEffect.Stateful, Tags = new[] { "tests" })]
         public static async Task<TestExecutionResponse> RunTests(
             [CliArg("mode", "Test mode: all, editor, playmode (default: all)")] string mode = "all",
             [CliArg("filter", "Test name filter pattern (case-insensitive partial match)")] string filter = "",
@@ -99,7 +99,7 @@ namespace Unity.Pipeline.Editor.Commands
         /// <summary>
         /// Get current test status for async test execution
         /// </summary>
-        [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Tags = new[] { "tests" })]
+        [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "tests" })]
         public static string GetTestStatus(
             [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full")
         {
@@ -127,7 +127,7 @@ namespace Unity.Pipeline.Editor.Commands
         /// <summary>
         /// Cancel running test execution
         /// </summary>
-        [CliCommand("cancel_tests", "Cancel running test execution", MainThreadRequired = true, Tags = new[] { "tests" })]
+        [CliCommand("cancel_tests", "Cancel running test execution", MainThreadRequired = true, Effect = CommandEffect.Stateful, Tags = new[] { "tests" })]
         public static object CancelTests()
         {
             return PipelineTestRunner.CancelTests();

@@ -78,7 +78,9 @@ func Poll(fn func() (PollStep, error), cfg PollConfig, sleep SleepFunc, now func
 			}
 			for _, s := range cfg.TerminalCancel {
 				if step.Status == s {
-					return nil, ErrJobCancelled(fmt.Sprintf("job cancelled (status %q)", step.Status))
+					failure := ErrJobCancelled(fmt.Sprintf("job cancelled (status %q)", step.Status))
+					failure.Data = json.RawMessage(step.Body)
+					return nil, failure
 				}
 			}
 		}

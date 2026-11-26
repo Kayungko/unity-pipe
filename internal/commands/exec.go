@@ -43,8 +43,13 @@ func ExecCommand() SubCommand {
 				params[k] = coerceScalar(v)
 			}
 			if *paramsJSON != "" {
+				if !json.Valid([]byte(*paramsJSON)) {
+					return nil, usageErr("exec: --params is not valid JSON")
+				}
 				var extra map[string]any
-				if err := json.Unmarshal([]byte(*paramsJSON), &extra); err != nil {
+				decoder := json.NewDecoder(strings.NewReader(*paramsJSON))
+				decoder.UseNumber()
+				if err := decoder.Decode(&extra); err != nil {
 					return nil, usageErr(fmt.Sprintf("exec: --params is not a JSON object: %v", err))
 				}
 				for k, v := range extra {
@@ -55,6 +60,10 @@ func ExecCommand() SubCommand {
 			opts := protocol.ExecOptions{Parameters: params, Job: *job}
 			if rt.Opts.Timeout > 0 {
 				opts.Timeout = rt.Opts.Timeout
+			}
+			// A lost response may already have registered a wait and its capture.
+			if name == "wait_start" {
+				return rt.Client.Exec(name, opts)
 			}
 			resp, err := rt.Client.ExecReloadTolerant(name, opts, 0)
 			if err != nil {

@@ -1010,7 +1010,8 @@ namespace Unity.Pipeline
                 name = command.Name,
                 description = command.Description,
                 tags = command.Tags,
-                package = command.Package
+                package = command.Package,
+                effect = GetCommandEffect(command)
             };
         }
 
@@ -1043,6 +1044,7 @@ namespace Unity.Pipeline
                 package = command.Package,
                 mainThreadRequired = command.MainThreadRequired,
                 runtimeOnly = command.RuntimeOnly,
+                effect = GetCommandEffect(command),
                 parameters = command.Parameters.Select(p => new
                 {
                     name = p.Name,
@@ -1052,6 +1054,17 @@ namespace Unity.Pipeline
                     defaultValue = p.DefaultValue
                 }).ToList()
             });
+        }
+
+        private static string GetCommandEffect(CommandInfo command)
+        {
+            switch (command.Effect)
+            {
+                case CommandEffect.ReadOnly: return "read_only";
+                case CommandEffect.Stateful: return "stateful";
+                case CommandEffect.Destructive: return "destructive";
+                default: return "unknown";
+            }
         }
 
         /// <summary>

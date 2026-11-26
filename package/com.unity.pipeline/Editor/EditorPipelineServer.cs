@@ -294,7 +294,7 @@ namespace Unity.Pipeline.Editor
             // Create and write instance descriptor for CLI discovery
             var automated = DetectAutomatedMode(System.Environment.GetCommandLineArgs());
             m_InstanceDescriptor = InstanceDescriptor.CreateCurrent(Port, automated);
-            InstanceDescriptor.WriteToProjectRoot(m_InstanceDescriptor);
+            InstanceDescriptor.PublishToProjectRoot(m_InstanceDescriptor);
         }
 
         /// <summary>Remove the shared instance descriptor file on shutdown.</summary>

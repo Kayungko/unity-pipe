@@ -31,7 +31,7 @@ namespace Unity.Pipeline.Editor.Commands.Capture
     {
         private const int MaxDimension = 4096;
 
-        [CliCommand("capture_game_view", "Render the game view to a PNG. source=camera (default) renders a camera and misses Screen Space - Overlay UI; source=screen captures the composited backbuffer incl. overlay canvases (Play Mode only). Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
+        [CliCommand("capture_game_view", "Render the game view to a PNG. source=camera (default) renders a camera and misses Screen Space - Overlay UI; source=screen captures the composited backbuffer incl. overlay canvases (Play Mode only). Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Effect = CommandEffect.Destructive, Tags = new[] { "capture" })]
         public static CaptureResult CaptureGameView(
             [CliArg("width", "Output width in px (default 1280; capped 4096).")] int width = 1280,
             [CliArg("height", "Output height in px (default 720; capped 4096).")] int height = 720,
@@ -87,7 +87,7 @@ namespace Unity.Pipeline.Editor.Commands.Capture
             }
         }
 
-        [CliCommand("capture_scene_view", "Capture the active Scene View to PNG. Use source=screen for its displayed window with gizmos and toolbars. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
+        [CliCommand("capture_scene_view", "Capture the active Scene View to PNG. Use source=screen for its displayed window with gizmos and toolbars. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Effect = CommandEffect.Destructive, Tags = new[] { "capture" })]
         public static CaptureResult CaptureSceneView(
             [CliArg("width", "Output width in px (default 1280; capped 4096).")] int width = 1280,
             [CliArg("height", "Output height in px (default 720; capped 4096).")] int height = 720,

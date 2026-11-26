@@ -28,7 +28,7 @@ namespace Unity.Pipeline.Runtime.Commands
         /// <summary>Default number of entries returned when <c>tail</c> is not supplied.</summary>
         public const int DefaultTail = 100;
 
-        [CliCommand("console", "Get captured Unity console output (Editor or Player; supports tail, level filtering, and follow via a cursor)", MainThreadRequired = false, Tags = new[] { "observability/console" })]
+        [CliCommand("console", "Get captured Unity console output (Editor or Player; supports tail, level filtering, and follow via a cursor)", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "observability/console" })]
         public static ConsoleLogResponse GetConsole(
             [CliArg("tail", "Maximum number of most-recent entries to return")] int tail = DefaultTail,
             [CliArg("level", "Minimum severity to include: log | warn | error")] string level = ConsoleLogBuffer.LevelLog,
@@ -46,7 +46,7 @@ namespace Unity.Pipeline.Runtime.Commands
             return response;
         }
 
-        [CliCommand("console_status", "Read retained severity counts, cursor and the most recent Editor console and compiler sample.", MainThreadRequired = false, Tags = new[] { "observability/console" })]
+        [CliCommand("console_status", "Read retained severity counts, cursor and the most recent Editor console and compiler sample.", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "observability/console" })]
         public static ConsoleLogResponse GetStatus()
         {
             var response = ConsoleLogCapture.Buffer.Stats();

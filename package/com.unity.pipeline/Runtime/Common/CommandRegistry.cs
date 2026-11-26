@@ -213,8 +213,10 @@ namespace Unity.Pipeline.Commands
                 parameters,
                 commandAttr.RuntimeOnly,
                 commandAttr.Tags,
-                method.DeclaringType?.Assembly.GetName().Name
-            );
+                method.DeclaringType?.Assembly.GetName().Name)
+            {
+                Effect = commandAttr.Effect
+            };
         }
 
         /// <summary>

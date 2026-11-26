@@ -53,7 +53,7 @@ func TestCommand() SubCommand {
 
 			result, err := rt.pollCommand("test_status", protocol.PollConfig{
 				TerminalOK:   []string{"completed", "no_tests"},
-				TerminalFail: []string{"error", "cancelled"},
+				TerminalFail: []string{"error", "interrupted"}, TerminalCancel: []string{"cancelled", "canceled"},
 			})
 			if err != nil {
 				return nil, err

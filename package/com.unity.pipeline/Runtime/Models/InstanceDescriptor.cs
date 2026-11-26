@@ -175,26 +175,48 @@ namespace Unity.Pipeline.Models
             }
         }
 
-        private static void WriteToProjectRootLocked(InstanceDescriptor descriptor)
+        internal static void PublishToProjectRoot(InstanceDescriptor descriptor)
+        {
+            lock (m_WriteGate)
+                WriteToProjectRootLocked(descriptor, initialize: true);
+        }
+
+        private static void WriteToProjectRootLocked(InstanceDescriptor descriptor, bool initialize = false)
         {
             try
             {
                 var filePath = GetDescriptorFilePath(descriptor.ProjectPath);
-                var isNewFile = !File.Exists(filePath);
                 // The descriptor lives under Library/Pipeline, which may not exist yet.
                 Directory.CreateDirectory(Path.GetDirectoryName(filePath));
                 var json = JsonConvert.SerializeObject(descriptor, Formatting.Indented);
-                File.WriteAllText(filePath, json);
-
-                // The descriptor carries the auth token; keep it readable only by the current user.
-                // Applied once on creation (heartbeat rewrites preserve the existing permissions).
-                if (isNewFile)
-                    FilePermissions.RestrictToCurrentUser(filePath);
+                if (initialize || !File.Exists(filePath))
+                    PublishPrivateDescriptor(filePath, json, FilePermissions.RequireCurrentUserOnly);
+                else
+                    File.WriteAllText(filePath, json);
             }
             catch (Exception ex)
             {
                 UnityEngine.Debug.LogError($"WriteToProjectRoot failed: {ex.Message}");
                 UnityEngine.Debug.LogError($"Descriptor: {descriptor?.ProjectPath}, PID: {descriptor?.Pid}");
+                throw;
+            }
+        }
+
+        internal static void PublishPrivateDescriptor(string path, string contents, Action<string> restrict)
+        {
+            // Drop stale content and inherited ACLs from a previous session.
+            File.Delete(path);
+            using (File.Open(path, FileMode.CreateNew, FileAccess.Write)) { }
+            try
+            {
+                // The empty file carries no credential. Only write the descriptor after
+                // confirming the permission change succeeded.
+                restrict(path);
+                File.WriteAllText(path, contents);
+            }
+            catch
+            {
+                File.Delete(path);
                 throw;
             }
         }

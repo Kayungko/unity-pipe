@@ -51,7 +51,7 @@ namespace Unity.Pipeline.Editor.Commands
             CompilationPipeline.compilationFinished += OnCompilationFinished;
         }
 
-        [CliCommand("recompile", "Force a script recompile (works while unfocused/minimized). Poll recompile_status for completion.", MainThreadRequired = true, Tags = new[] { "scripts/compile" })]
+        [CliCommand("recompile", "Force a script recompile (works while unfocused/minimized). Poll recompile_status for completion.", MainThreadRequired = true, Effect = CommandEffect.Stateful, Tags = new[] { "scripts/compile" })]
         public static object Recompile(
             [CliArg("focus", "If true, bring the Editor to the foreground before compiling. Off by default.")] bool focus = false)
         {
@@ -85,7 +85,7 @@ namespace Unity.Pipeline.Editor.Commands
             return new { status = "up_to_date", message = "No scripts needed recompilation." };
         }
 
-        [CliCommand("recompile_status", "Get the status of the last recompile: idle | triggered | compiling | completed | up_to_date.", MainThreadRequired = false, Tags = new[] { "scripts/compile" })]
+        [CliCommand("recompile_status", "Get the status of the last recompile: idle | triggered | compiling | completed | up_to_date.", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "scripts/compile" })]
         public static string RecompileStatus()
         {
             if (File.Exists(StatusFile))

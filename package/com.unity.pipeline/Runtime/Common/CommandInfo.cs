@@ -54,6 +54,8 @@ namespace Unity.Pipeline.Commands
         /// </summary>
         public IReadOnlyList<CommandParameterInfo> Parameters { get; }
 
+        public CommandEffect Effect { get; internal set; }
+
         /// <summary>
         /// Create command information from discovery.
         /// </summary>

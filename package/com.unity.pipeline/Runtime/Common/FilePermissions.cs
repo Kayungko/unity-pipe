@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
@@ -24,20 +25,25 @@ namespace Unity.Pipeline
         {
             try
             {
-                switch (Application.platform)
-                {
-                    case RuntimePlatform.WindowsEditor:
-                    case RuntimePlatform.WindowsPlayer:
-                        RestrictWindows(path);
-                        break;
-                    default:
-                        RestrictUnix(path);
-                        break;
-                }
+                RequireCurrentUserOnly(path);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"Pipeline: Could not restrict permissions on '{path}': {ex.Message}");
+            }
+        }
+
+        internal static void RequireCurrentUserOnly(string path)
+        {
+            switch (Application.platform)
+            {
+                case RuntimePlatform.WindowsEditor:
+                case RuntimePlatform.WindowsPlayer:
+                    RestrictWindows(path);
+                    break;
+                default:
+                    RestrictUnix(path);
+                    break;
             }
         }
 
@@ -48,13 +54,13 @@ namespace Unity.Pipeline
             var sid = GetCurrentUserSid();
             if (string.IsNullOrEmpty(sid))
             {
-                Debug.LogWarning($"Pipeline: Could not resolve current user SID; leaving default permissions on '{path}'.");
-                return;
+                throw new IOException("Pipeline could not resolve the current user SID.");
             }
 
             // /inheritance:r drops inherited ACEs; /grant:r replaces the DACL with a single
             // full-control grant to the current user.
-            Run("icacls", $"\"{path}\" /inheritance:r /grant:r \"*{sid}:(F)\"", out _);
+            if (!Run("icacls", $"\"{path}\" /inheritance:r /grant:r \"*{sid}:(F)\"", out _))
+                throw new IOException("Pipeline could not restrict descriptor permissions with icacls.");
         }
 
         private static string GetCurrentUserSid()
@@ -104,7 +110,8 @@ namespace Unity.Pipeline
         {
             // 0600 (octal) == owner read/write only.
             const uint ownerReadWrite = 0x180;
-            chmod(path, ownerReadWrite);
+            if (chmod(path, ownerReadWrite) != 0)
+                throw new IOException($"Pipeline could not restrict descriptor permissions (errno {Marshal.GetLastWin32Error()}).");
         }
     }
 }

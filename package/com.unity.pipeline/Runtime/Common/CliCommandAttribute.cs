@@ -2,6 +2,14 @@ using System;
 
 namespace Unity.Pipeline.Commands
 {
+    public enum CommandEffect
+    {
+        Unknown,
+        ReadOnly,
+        Stateful,
+        Destructive
+    }
+
     /// <summary>
     /// Attribute to mark static methods as CLI-accessible commands.
     /// Commands with this attribute can be executed remotely via Pipeline Server.
@@ -35,6 +43,8 @@ namespace Unity.Pipeline.Commands
         /// Default: false (listed on the Editor server).
         /// </summary>
         public bool RuntimeOnly { get; set; } = false;
+
+        public CommandEffect Effect { get; set; } = CommandEffect.Unknown;
 
         /// <summary>
         /// Optional hierarchical tags used to group and browse commands.

@@ -33,6 +33,7 @@ type CommandSpec struct {
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
 	Package     string   `json:"package"`
+	Effect      string   `json:"effect,omitempty"`
 }
 
 // CommandsResponse is the envelope of GET /api/commands (flat mode).
@@ -80,6 +81,28 @@ func (r *ExecResponse) CommandError(command string) error {
 	}
 	var message string
 	switch command {
+	case "wait_status":
+		var result struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(r.Result, &result) != nil {
+			return nil
+		}
+		switch result.Status {
+		case "timed_out":
+			failure := ErrTimeout("async wait timed out")
+			failure.Data = r.Result
+			return failure
+		case "cancelled":
+			failure := ErrJobCancelled("async wait was cancelled")
+			failure.Data = r.Result
+			return failure
+		case "interrupted", "failed":
+			message = result.Message
+		default:
+			return nil
+		}
 	case "run_script", "run_tests":
 		var result struct {
 			Success *bool  `json:"success"`

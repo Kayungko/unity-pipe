@@ -44,6 +44,16 @@ Wait for an Editor condition without blocking the Unity main thread. The command
 
 A match returns `status=matched`. A condition timeout exits 21. Use `--job` to submit a cancellable wait and `upipe job-cancel` to stop it. Detached jobs belong to the current Editor domain.
 
+### `wait_start`, `wait_status`, and `wait_cancel`
+
+`wait_start` returns a `waitId` immediately and releases the command queue. Pass an existing object or component as `target`, a public scalar instance `field`, a comparison `value`, and optionally `component` to select one component on a GameObject. Use `op=eq|ne|gt|ge|lt|le` and `timeout_ms` to set the comparison and budget. Boolean and text fields support `eq` and `ne`. Field reads do not invoke property getters or methods.
+
+Pass `capture_path` ending in `.png` to save Game View pixels during the same Editor update as the match. The path resolves under the authoring root and can overwrite an existing PNG. `capture_source=camera` renders a camera. `capture_source=screen` requires Play Mode and a verified fresh Game View frame. Optional `capture_width` and `capture_height` control the output dimensions. The result includes `matchedFrame`, `captureFrame`, `value` and the capture metadata.
+
+Poll with `wait_status` and pass the ID as `wait_id`. The CLI returns the terminal result under `error.data` for `timed_out` (21), `cancelled` (22), `failed` or `interrupted` (20). Use `wait_cancel` to stop a pending wait. A domain reload interrupts pending waits and retains their terminal results in the current Editor session. The limit is 32 pending waits and 128 retained results.
+
+The command catalog advertises `effect` as `read_only`, `stateful`, `destructive`, or `unknown`. Unknown is the default for commands without an explicit declaration.
+
 ### `editor_focus`
 Bring the Unity Editor window to the foreground.
 

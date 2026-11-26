@@ -102,6 +102,9 @@ func TestPollTerminalAndDeadline(t *testing.T) {
 	if AsUpipeError(err).Code != ExitJobCancelled {
 		t.Fatalf("TerminalCancel → %v, want ExitJobCancelled", err)
 	}
+	if body, ok := AsUpipeError(err).Data.(json.RawMessage); !ok || string(body) != `{"state":"canceled"}` {
+		t.Fatalf("TerminalCancel data = %v", AsUpipeError(err).Data)
+	}
 }
 
 // fakeClock advances 10ms per call so the deadline test terminates instantly.

@@ -104,7 +104,7 @@ When a server starts, it writes a small JSON **instance descriptor** so clients 
 | **Editor** | `<projectPath>/Library/Pipeline/.unity-pipeline-port` |
 | **Runtime** | `<workingDirectory>/.unity-pipeline-runtime-port` |
 
-The Editor descriptor lives under the git-ignored `Library/` folder. The file is created with permissions restricted to the current user (it carries the auth token). The server rewrites it on every heartbeat to refresh `lastHeartbeat`, and deletes it on shutdown.
+The Editor descriptor lives under the git-ignored `Library/` folder. The server restricts permissions to the current user before writing the descriptor contents. If permission setup fails, it removes the empty descriptor and reports the startup error. Heartbeats update the protected file and shutdown removes it.
 
 The Runtime descriptor is written next to the Player, at `{Application.dataPath}/..`:
 

@@ -1,0 +1,749 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index dee1246..b397658 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
++## [0.6.0-2022.4] - Local candidate
++
++- Add non-blocking field waits with same-update screenshot capture and retained reload outcomes.
++- Expose command effects and require protected Editor descriptors before publishing connection details.
++
+ ## [0.6.0-2022.3] - Local candidate
+
+ - Backport Unity 1.0.1 Editor lifecycle, Console, capture, Prefab addressing and Profiler features for Unity 2022.3.
+diff --git a/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md b/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md
+index 9518197..a018775 100644
+--- a/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md
++++ b/com.unity.pipeline/Documentation~/commands/editor-lifecycle-and-observability.md
+@@ -44,6 +44,16 @@ Wait for an Editor condition without blocking the Unity main thread. The command
+
+ A match returns `status=matched`. A condition timeout exits 21. Use `--job` to submit a cancellable wait and `upipe job-cancel` to stop it. Detached jobs belong to the current Editor domain.
+
++### `wait_start`, `wait_status`, and `wait_cancel`
++
++`wait_start` returns a `waitId` immediately and releases the command queue. Pass an existing object or component as `target`, a public scalar instance `field`, a comparison `value`, and optionally `component` to select one component on a GameObject. Use `op=eq|ne|gt|ge|lt|le` and `timeout_ms` to set the comparison and budget. Boolean and text fields support `eq` and `ne`. Field reads do not invoke property getters or methods.
++
++Pass `capture_path` ending in `.png` to save Game View pixels during the same Editor update as the match. The path resolves under the authoring root and can overwrite an existing PNG. `capture_source=camera` renders a camera. `capture_source=screen` requires Play Mode and a verified fresh Game View frame. Optional `capture_width` and `capture_height` control the output dimensions. The result includes `matchedFrame`, `captureFrame`, `value` and the capture metadata.
++
++Poll with `wait_status` and pass the ID as `wait_id`. The CLI returns the terminal result under `error.data` for `timed_out` (21), `cancelled` (22), `failed` or `interrupted` (20). Use `wait_cancel` to stop a pending wait. A domain reload interrupts pending waits and retains their terminal results in the current Editor session. The limit is 32 pending waits and 128 retained results.
++
++The command catalog advertises `effect` as `read_only`, `stateful`, `destructive`, or `unknown`. Unknown is the default for commands without an explicit declaration.
++
+ ### `editor_focus`
+ Bring the Unity Editor window to the foreground.
+
+diff --git a/com.unity.pipeline/Documentation~/connectivity.md b/com.unity.pipeline/Documentation~/connectivity.md
+index 1a4b4ce..f2330e3 100644
+--- a/com.unity.pipeline/Documentation~/connectivity.md
++++ b/com.unity.pipeline/Documentation~/connectivity.md
+@@ -104,7 +104,7 @@ When a server starts, it writes a small JSON **instance descriptor** so clients
+ | **Editor** | `<projectPath>/Library/Pipeline/.unity-pipeline-port` |
+ | **Runtime** | `<workingDirectory>/.unity-pipeline-runtime-port` |
+
+-The Editor descriptor lives under the git-ignored `Library/` folder. The file is created with permissions restricted to the current user (it carries the auth token). The server rewrites it on every heartbeat to refresh `lastHeartbeat`, and deletes it on shutdown.
++The Editor descriptor lives under the git-ignored `Library/` folder. The server restricts permissions to the current user before writing the descriptor contents. If permission setup fails, it removes the empty descriptor and reports the startup error. Heartbeats update the protected file and shutdown removes it.
+
+ The Runtime descriptor is written next to the Player, at `{Application.dataPath}/..`:
+
+diff --git a/com.unity.pipeline/Documentation~/testing.md b/com.unity.pipeline/Documentation~/testing.md
+index f5333ec..427abdc 100644
+--- a/com.unity.pipeline/Documentation~/testing.md
++++ b/com.unity.pipeline/Documentation~/testing.md
+@@ -1,6 +1,6 @@
+ # Tests architecture
+
+-Poll an asynchronous test run with `upipe exec test_status`. Use `--set detail=failures` for failed test details or `--set detail=summary` for counts only. The default `full` returns every result. Use `upipe test` to propagate a failed run to the process exit code.
++Poll an asynchronous test run with `upipe exec test_status`. Use `--set detail=failures` for failed test details or `--set detail=summary` for counts only. The default `full` returns every result. Use `upipe test` to propagate a failed run (exit 20) or cancellation (exit 22). The terminal result is reported in `error.data` under `--json`.
+
+ How the package's tests exercise commands. There are two complementary styles — **ViaClient** (over real HTTP, end-to-end) and **CommandDirect** (calling the static command method straight) — backed by a small set of shared test helpers.
+
+diff --git a/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs b/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
+index 8fb4a05..aea942d 100644
+--- a/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/Batch/BatchCommand.cs
+@@ -138,7 +138,7 @@ namespace Unity.Pipeline.Editor.Commands.Batch
+             // Assets & files (AssetDatabase ops / direct file IO).
+             "create_asset", "import_asset", "move_asset", "copy_asset", "rename_asset", "delete_asset",
+             "create_folder", "set_import_settings", "write_text_file", "create_script",
+-            "capture_editor_window", "capture_editor_element", "capture_asset_preview",
++            "capture_editor_window", "capture_editor_element", "capture_asset_preview", "wait_start", "wait_cancel",
+             "profiler_record", "profiler_cancel", "profiler_analyze", "memory_snapshot",
+             // Prefab ASSET writes (scene-side prefab ops — instantiate/unpack/revert overrides — are
+             // Undo-tracked and stay batchable).
+diff --git a/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs b/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs
+index 175381d..dc1a894 100644
+--- a/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Capture/CaptureCommands.cs
+@@ -31,7 +31,7 @@ namespace Unity.Pipeline.Editor.Commands.Capture
+     {
+         private const int MaxDimension = 4096;
+
+-        [CliCommand("capture_game_view", "Render the game view to a PNG. source=camera (default) renders a camera and misses Screen Space - Overlay UI; source=screen captures the composited backbuffer incl. overlay canvases (Play Mode only). Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
++        [CliCommand("capture_game_view", "Render the game view to a PNG. source=camera (default) renders a camera and misses Screen Space - Overlay UI; source=screen captures the composited backbuffer incl. overlay canvases (Play Mode only). Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Effect = CommandEffect.Destructive, Tags = new[] { "capture" })]
+         public static CaptureResult CaptureGameView(
+             [CliArg("width", "Output width in px (default 1280; capped 4096).")] int width = 1280,
+             [CliArg("height", "Output height in px (default 720; capped 4096).")] int height = 720,
+@@ -87,7 +87,7 @@ namespace Unity.Pipeline.Editor.Commands.Capture
+             }
+         }
+
+-        [CliCommand("capture_scene_view", "Capture the active Scene View to PNG. Use source=screen for its displayed window with gizmos and toolbars. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Tags = new[] { "capture" })]
++        [CliCommand("capture_scene_view", "Capture the active Scene View to PNG. Use source=screen for its displayed window with gizmos and toolbars. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Effect = CommandEffect.Destructive, Tags = new[] { "capture" })]
+         public static CaptureResult CaptureSceneView(
+             [CliArg("width", "Output width in px (default 1280; capped 4096).")] int width = 1280,
+             [CliArg("height", "Output height in px (default 720; capped 4096).")] int height = 720,
+diff --git a/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs b/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
+index 1597f96..ea67f1d 100644
+--- a/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/EditorStatusCommand.cs
+@@ -1,10 +1,16 @@
+ #if UNITY_EDITOR
+ using System;
++using System.Collections.Generic;
+ using System.IO;
++using System.Linq;
++using System.Reflection;
+ using System.Threading.Tasks;
++using Newtonsoft.Json;
++using Newtonsoft.Json.Linq;
+ using Unity.Pipeline.Editor.Authoring;
+ using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Models;
++using Unity.Pipeline.Editor.Commands.Capture;
+ using UnityEditor;
+ using UnityEngine;
+
+@@ -17,7 +23,7 @@ namespace Unity.Pipeline.Editor.Commands
+     /// </summary>
+     static class EditorStatusCommand
+     {
+-        [CliCommand("editor_status", "Get detailed Unity Editor status and state information", Tags = new[] { "editor" })]
++        [CliCommand("editor_status", "Get detailed Unity Editor status and state information", Effect = CommandEffect.ReadOnly, Tags = new[] { "editor" })]
+         public static StatusResponse GetEditorStatus()
+         {
+             return new StatusResponse
+@@ -32,7 +38,7 @@ namespace Unity.Pipeline.Editor.Commands
+             };
+         }
+
+-        [CliCommand("wait", "Wait for an Editor, asset, or scene object condition without blocking the main thread.", Tags = new[] { "editor" })]
++        [CliCommand("wait", "Wait for an Editor, asset, or scene object condition without blocking the main thread.", Effect = CommandEffect.ReadOnly, Tags = new[] { "editor" })]
+         public static Task<object> Wait(
+             [CliArg("condition", "editor_ready, playing, stopped, not_compiling, asset_exists, or object_active.", Required = true)] string condition,
+             [CliArg("path", "Asset path for asset_exists.")] string path = null,
+@@ -138,5 +144,245 @@ namespace Unity.Pipeline.Editor.Commands
+             return "stopped";
+         }
+     }
++
++    [InitializeOnLoad]
++    static class AsyncWaitCommands
++    {
++        const string SessionKey = "Unity.Pipeline.AsyncWaitResults";
++        const int MaxPending = 32;
++        const int MaxResults = 128;
++
++        sealed class Pending
++        {
++            public UnityEngine.Object Target;
++            public FieldInfo Field;
++            public string Comparison;
++            public JValue Expected;
++            public string CapturePath;
++            public string CaptureSource;
++            public int Width;
++            public int Height;
++            public int TimeoutMs;
++            public System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
++            public JObject Result;
++        }
++
++        static readonly Dictionary<string, Pending> s_Pending = new Dictionary<string, Pending>();
++        static readonly List<JObject> s_Results = RestoreResults();
++
++        static AsyncWaitCommands()
++        {
++            AssemblyReloadEvents.beforeAssemblyReload += BeforeReload;
++        }
++
++        [CliCommand("wait_start", "Start a non-blocking wait on a public scalar field and optionally save the Game View when it matches. The capture can overwrite its output file.", Effect = CommandEffect.Destructive, Tags = new[] { "editor", "wait" })]
++        public static JObject Start(
++            [CliArg("target", "Object reference to an existing scene object or component.", Required = true)] ObjectRef target,
++            [CliArg("field", "Public instance field name. Properties and method calls are not supported.", Required = true)] string field,
++            [CliArg("value", "Scalar value to compare with.", Required = true, ArbitraryKeys = true)] JToken value,
++            [CliArg("component", "Component short or full name when targeting a GameObject.")] string component = null,
++            [CliArg("op", "eq, ne, gt, ge, lt or le.")] string comparison = "eq",
++            [CliArg("timeout_ms", "Wait budget in milliseconds (1 to 600000).")] int timeoutMs = 10000,
++            [CliArg("capture_path", "Optional PNG path under the authoring root.")] string capturePath = null,
++            [CliArg("capture_source", "camera or screen. Screen requires a fresh Game View frame.")] string captureSource = "camera",
++            [CliArg("capture_width", "Capture width (1 to 4096).")] int width = 1280,
++            [CliArg("capture_height", "Capture height (1 to 4096).")] int height = 720)
++        {
++            if (s_Pending.Count >= MaxPending)
++                throw new InvalidOperationException("Too many active waits.");
++            if (timeoutMs < 1 || timeoutMs > 600000)
++                throw new ArgumentOutOfRangeException(nameof(timeoutMs));
++            if (!ObjectResolver.TryResolve(target, out var obj, out var error))
++                throw new ArgumentException(error, nameof(target));
++
++            if (!string.IsNullOrEmpty(component))
++            {
++                if (!(obj is GameObject gameObject))
++                    throw new ArgumentException("component requires a GameObject target.", nameof(component));
++                var matches = gameObject.GetComponents<Component>()
++                    .Where(c => c != null && (c.GetType().Name == component || c.GetType().FullName == component)).ToArray();
++                if (matches.Length != 1)
++                    throw new ArgumentException("component must resolve to exactly one component.", nameof(component));
++                obj = matches[0];
++            }
++
++            var member = obj.GetType().GetField(field, BindingFlags.Public | BindingFlags.Instance);
++            if (member == null || !IsScalar(member.FieldType))
++                throw new ArgumentException("field must name a public scalar instance field.", nameof(field));
++            var expected = value as JValue ?? (value == null ? JValue.CreateNull() : null);
++            if (expected == null)
++                throw new ArgumentException("value must be a scalar.", nameof(value));
++            ValidateComparison(member.FieldType, expected, comparison);
++
++            if (capturePath != null)
++            {
++                capturePath = ProjectPaths.Resolve(capturePath, out error);
++                if (capturePath == null || !string.Equals(Path.GetExtension(capturePath), ".png", StringComparison.OrdinalIgnoreCase))
++                    throw new ArgumentException(error ?? "capture_path must end in .png.", nameof(capturePath));
++                if (captureSource != "camera" && captureSource != "screen")
++                    throw new ArgumentException("capture_source must be camera or screen.", nameof(captureSource));
++                if (width < 1 || width > 4096 || height < 1 || height > 4096)
++                    throw new ArgumentException("Capture dimensions must be between 1 and 4096.");
++            }
++
++            var id = Guid.NewGuid().ToString("N");
++            var pending = new Pending
++            {
++                Target = obj, Field = member, Comparison = comparison, Expected = expected,
++                CapturePath = capturePath, CaptureSource = captureSource, Width = width, Height = height,
++                TimeoutMs = timeoutMs,
++                Result = new JObject { ["waitId"] = id, ["status"] = "waiting", ["field"] = field }
++            };
++            if (s_Pending.Count == 0)
++                EditorApplication.update += Tick;
++            s_Pending.Add(id, pending);
++            return (JObject)pending.Result.DeepClone();
++        }
++
++        [CliCommand("wait_status", "Read an async wait result by id.", Effect = CommandEffect.ReadOnly, Tags = new[] { "editor", "wait" })]
++        public static JObject Status([CliArg("wait_id", "Wait id from wait_start.", Required = true)] string id)
++        {
++            if (s_Pending.TryGetValue(id, out var pending))
++                return (JObject)pending.Result.DeepClone();
++            var result = s_Results.FirstOrDefault(entry => (string)entry["waitId"] == id);
++            if (result == null)
++                throw new ArgumentException("Unknown wait id.", nameof(id));
++            return (JObject)result.DeepClone();
++        }
++
++        [CliCommand("wait_cancel", "Cancel an active async wait and return its outcome.", Effect = CommandEffect.Stateful, Tags = new[] { "editor", "wait" })]
++        public static JObject Cancel([CliArg("wait_id", "Wait id from wait_start.", Required = true)] string id)
++        {
++            if (s_Pending.TryGetValue(id, out var pending))
++                Finish(id, pending, "cancelled");
++            return Status(id);
++        }
++
++        static void Tick()
++        {
++            foreach (var entry in s_Pending.ToArray())
++            {
++                var id = entry.Key;
++                var pending = entry.Value;
++                try
++                {
++                    if (pending.Clock.ElapsedMilliseconds >= pending.TimeoutMs)
++                    {
++                        Finish(id, pending, "timed_out");
++                        continue;
++                    }
++
++                    if (pending.Target == null)
++                        throw new InvalidOperationException("Wait target was destroyed.");
++
++                    var value = new JValue(pending.Field.GetValue(pending.Target));
++                    pending.Result["value"] = value;
++                    if (!Matches(value, pending.Expected, pending.Comparison))
++                        continue;
++
++                    pending.Result["matchedFrame"] = Time.frameCount;
++                    if (pending.CapturePath != null)
++                    {
++                        // Read and capture on this same Editor update, without queueing another command.
++                        var capture = CaptureCommands.CaptureGameView(pending.Width, pending.Height,
++                            savePath: pending.CapturePath, source: pending.CaptureSource,
++                            requireFreshFrame: pending.CaptureSource == "screen");
++                        pending.Result["capture"] = JObject.FromObject(capture);
++                        pending.Result["captureFrame"] = Time.frameCount;
++                    }
++                    Finish(id, pending, "matched");
++                }
++                catch (Exception ex)
++                {
++                    pending.Result["message"] = ex.Message;
++                    Finish(id, pending, "failed");
++                }
++            }
++        }
++
++        static void Finish(string id, Pending pending, string status)
++        {
++            pending.Result["status"] = status;
++            pending.Result["elapsedMs"] = pending.Clock.ElapsedMilliseconds;
++            s_Pending.Remove(id);
++            if (s_Pending.Count == 0)
++                EditorApplication.update -= Tick;
++            s_Results.Add(pending.Result);
++            if (s_Results.Count > MaxResults)
++                s_Results.RemoveAt(0);
++        }
++
++        static void BeforeReload()
++        {
++            foreach (var entry in s_Pending.ToArray())
++            {
++                entry.Value.Result["message"] = "Editor assemblies were reloaded while waiting.";
++                Finish(entry.Key, entry.Value, "interrupted");
++            }
++            SessionState.SetString(SessionKey, new JArray(s_Results).ToString(Formatting.None));
++        }
++
++        static List<JObject> RestoreResults()
++        {
++            try { return JArray.Parse(SessionState.GetString(SessionKey, "[]")).OfType<JObject>().ToList(); }
++            catch (JsonException) { return new List<JObject>(); }
++        }
++
++        static bool IsNumber(JTokenType type) => type == JTokenType.Integer || type == JTokenType.Float;
++
++        static bool IsScalar(Type type) =>
++            type == typeof(string) || type == typeof(bool) ||
++            (type.IsPrimitive && type != typeof(char) && type != typeof(IntPtr) && type != typeof(UIntPtr)) ||
++            type == typeof(decimal);
++
++        static void ValidateComparison(Type type, JValue expected, string op)
++        {
++            switch (op)
++            {
++                case "eq":
++                case "ne":
++                case "gt":
++                case "ge":
++                case "lt":
++                case "le":
++                    break;
++                default:
++                    throw new ArgumentException("Unknown comparison. Use eq, ne, gt, ge, lt or le.", nameof(op));
++            }
++
++            if (type == typeof(bool) || type == typeof(string))
++            {
++                if (op != "eq" && op != "ne")
++                    throw new ArgumentException("Boolean and string fields support eq and ne.");
++                if (type == typeof(bool) && expected.Type != JTokenType.Boolean ||
++                    type == typeof(string) && expected.Type != JTokenType.String && expected.Type != JTokenType.Null)
++                    throw new ArgumentException("value type does not match the field.");
++            }
++            else if (!IsNumber(expected.Type))
++            {
++                throw new ArgumentException("Numeric fields require a numeric value.");
++            }
++        }
++
++        static bool Matches(JValue current, JValue expected, string op)
++        {
++            var numeric = IsNumber(current.Type) && IsNumber(expected.Type);
++            var comparison = numeric
++                ? (current.Value is float || current.Value is double || expected.Value is float || expected.Value is double
++                    ? current.Value<double>().CompareTo(expected.Value<double>())
++                    : current.Value<decimal>().CompareTo(expected.Value<decimal>()))
++                : (JToken.DeepEquals(current, expected) ? 0 : 1);
++            switch (op)
++            {
++                case "eq": return comparison == 0;
++                case "ne": return comparison != 0;
++                case "gt": return comparison > 0;
++                case "ge": return comparison >= 0;
++                case "lt": return comparison < 0;
++                case "le": return comparison <= 0;
++                default: throw new ArgumentException("Invalid comparison.", nameof(op));
++            }
++        }
++    }
+ }
+ #endif
+diff --git a/com.unity.pipeline/Editor/Commands/RecompileCommand.cs b/com.unity.pipeline/Editor/Commands/RecompileCommand.cs
+index c0f87ab..23907e4 100644
+--- a/com.unity.pipeline/Editor/Commands/RecompileCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/RecompileCommand.cs
+@@ -51,7 +51,7 @@ namespace Unity.Pipeline.Editor.Commands
+             CompilationPipeline.compilationFinished += OnCompilationFinished;
+         }
+
+-        [CliCommand("recompile", "Force a script recompile (works while unfocused/minimized). Poll recompile_status for completion.", MainThreadRequired = true, Tags = new[] { "scripts/compile" })]
++        [CliCommand("recompile", "Force a script recompile (works while unfocused/minimized). Poll recompile_status for completion.", MainThreadRequired = true, Effect = CommandEffect.Stateful, Tags = new[] { "scripts/compile" })]
+         public static object Recompile(
+             [CliArg("focus", "If true, bring the Editor to the foreground before compiling. Off by default.")] bool focus = false)
+         {
+@@ -85,7 +85,7 @@ namespace Unity.Pipeline.Editor.Commands
+             return new { status = "up_to_date", message = "No scripts needed recompilation." };
+         }
+
+-        [CliCommand("recompile_status", "Get the status of the last recompile: idle | triggered | compiling | completed | up_to_date.", MainThreadRequired = false, Tags = new[] { "scripts/compile" })]
++        [CliCommand("recompile_status", "Get the status of the last recompile: idle | triggered | compiling | completed | up_to_date.", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "scripts/compile" })]
+         public static string RecompileStatus()
+         {
+             if (File.Exists(StatusFile))
+diff --git a/com.unity.pipeline/Editor/Commands/TestCommands.cs b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+index 98e591f..a6e09a3 100644
+--- a/com.unity.pipeline/Editor/Commands/TestCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+@@ -22,7 +22,7 @@ namespace Unity.Pipeline.Editor.Commands
+         /// Execute Unity tests with filtering options.
+         /// Synchronous by default (blocks until completion), async mode available with --async-tests flag.
+         /// </summary>
+-        [CliCommand("run_tests", "Execute Unity tests with filtering options", MainThreadRequired = true, Tags = new[] { "tests" })]
++        [CliCommand("run_tests", "Execute Unity tests with filtering options", MainThreadRequired = true, Effect = CommandEffect.Stateful, Tags = new[] { "tests" })]
+         public static async Task<TestExecutionResponse> RunTests(
+             [CliArg("mode", "Test mode: all, editor, playmode (default: all)")] string mode = "all",
+             [CliArg("filter", "Test name filter pattern (case-insensitive partial match)")] string filter = "",
+@@ -99,7 +99,7 @@ namespace Unity.Pipeline.Editor.Commands
+         /// <summary>
+         /// Get current test status for async test execution
+         /// </summary>
+-        [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Tags = new[] { "tests" })]
++        [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "tests" })]
+         public static string GetTestStatus(
+             [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full")
+         {
+@@ -127,7 +127,7 @@ namespace Unity.Pipeline.Editor.Commands
+         /// <summary>
+         /// Cancel running test execution
+         /// </summary>
+-        [CliCommand("cancel_tests", "Cancel running test execution", MainThreadRequired = true, Tags = new[] { "tests" })]
++        [CliCommand("cancel_tests", "Cancel running test execution", MainThreadRequired = true, Effect = CommandEffect.Stateful, Tags = new[] { "tests" })]
+         public static object CancelTests()
+         {
+             return PipelineTestRunner.CancelTests();
+diff --git a/com.unity.pipeline/Editor/EditorPipelineServer.cs b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+index 9b76bee..1e126ee 100644
+--- a/com.unity.pipeline/Editor/EditorPipelineServer.cs
++++ b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+@@ -294,7 +294,7 @@ namespace Unity.Pipeline.Editor
+             // Create and write instance descriptor for CLI discovery
+             var automated = DetectAutomatedMode(System.Environment.GetCommandLineArgs());
+             m_InstanceDescriptor = InstanceDescriptor.CreateCurrent(Port, automated);
+-            InstanceDescriptor.WriteToProjectRoot(m_InstanceDescriptor);
++            InstanceDescriptor.PublishToProjectRoot(m_InstanceDescriptor);
+         }
+
+         /// <summary>Remove the shared instance descriptor file on shutdown.</summary>
+diff --git a/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs b/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs
+index e858d4d..c13f4ad 100644
+--- a/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs
++++ b/com.unity.pipeline/Runtime/Commands/ConsoleCommand.cs
+@@ -28,7 +28,7 @@ namespace Unity.Pipeline.Runtime.Commands
+         /// <summary>Default number of entries returned when <c>tail</c> is not supplied.</summary>
+         public const int DefaultTail = 100;
+
+-        [CliCommand("console", "Get captured Unity console output (Editor or Player; supports tail, level filtering, and follow via a cursor)", MainThreadRequired = false, Tags = new[] { "observability/console" })]
++        [CliCommand("console", "Get captured Unity console output (Editor or Player; supports tail, level filtering, and follow via a cursor)", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "observability/console" })]
+         public static ConsoleLogResponse GetConsole(
+             [CliArg("tail", "Maximum number of most-recent entries to return")] int tail = DefaultTail,
+             [CliArg("level", "Minimum severity to include: log | warn | error")] string level = ConsoleLogBuffer.LevelLog,
+@@ -46,7 +46,7 @@ namespace Unity.Pipeline.Runtime.Commands
+             return response;
+         }
+
+-        [CliCommand("console_status", "Read retained severity counts, cursor and the most recent Editor console and compiler sample.", MainThreadRequired = false, Tags = new[] { "observability/console" })]
++        [CliCommand("console_status", "Read retained severity counts, cursor and the most recent Editor console and compiler sample.", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "observability/console" })]
+         public static ConsoleLogResponse GetStatus()
+         {
+             var response = ConsoleLogCapture.Buffer.Stats();
+diff --git a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+index 7425582..12bf22c 100644
+--- a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
++++ b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+@@ -1010,7 +1010,8 @@ namespace Unity.Pipeline
+                 name = command.Name,
+                 description = command.Description,
+                 tags = command.Tags,
+-                package = command.Package
++                package = command.Package,
++                effect = GetCommandEffect(command)
+             };
+         }
+
+@@ -1043,6 +1044,7 @@ namespace Unity.Pipeline
+                 package = command.Package,
+                 mainThreadRequired = command.MainThreadRequired,
+                 runtimeOnly = command.RuntimeOnly,
++                effect = GetCommandEffect(command),
+                 parameters = command.Parameters.Select(p => new
+                 {
+                     name = p.Name,
+@@ -1054,6 +1056,17 @@ namespace Unity.Pipeline
+             });
+         }
+
++        private static string GetCommandEffect(CommandInfo command)
++        {
++            switch (command.Effect)
++            {
++                case CommandEffect.ReadOnly: return "read_only";
++                case CommandEffect.Stateful: return "stateful";
++                case CommandEffect.Destructive: return "destructive";
++                default: return "unknown";
++            }
++        }
++
+         /// <summary>
+         /// Attaches the bound-parameter echo for raw-form requests, and only for those, leaving
+         /// the structured path's envelope unchanged.
+diff --git a/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs b/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
+index c35c534..7a0a0f2 100644
+--- a/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
++++ b/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
+@@ -2,6 +2,14 @@ using System;
+
+ namespace Unity.Pipeline.Commands
+ {
++    public enum CommandEffect
++    {
++        Unknown,
++        ReadOnly,
++        Stateful,
++        Destructive
++    }
++
+     /// <summary>
+     /// Attribute to mark static methods as CLI-accessible commands.
+     /// Commands with this attribute can be executed remotely via Pipeline Server.
+@@ -36,6 +44,8 @@ namespace Unity.Pipeline.Commands
+         /// </summary>
+         public bool RuntimeOnly { get; set; } = false;
+
++        public CommandEffect Effect { get; set; } = CommandEffect.Unknown;
++
+         /// <summary>
+         /// Optional hierarchical tags used to group and browse commands.
+         /// Path-style: a '/' separates tag from subtag (e.g. "assets", "assets/import").
+@@ -54,4 +64,4 @@ namespace Unity.Pipeline.Commands
+             Description = description ?? throw new ArgumentNullException(nameof(description));
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/com.unity.pipeline/Runtime/Common/CommandInfo.cs b/com.unity.pipeline/Runtime/Common/CommandInfo.cs
+index 300f55d..0fd19d6 100644
+--- a/com.unity.pipeline/Runtime/Common/CommandInfo.cs
++++ b/com.unity.pipeline/Runtime/Common/CommandInfo.cs
+@@ -54,6 +54,8 @@ namespace Unity.Pipeline.Commands
+         /// </summary>
+         public IReadOnlyList<CommandParameterInfo> Parameters { get; }
+
++        public CommandEffect Effect { get; internal set; }
++
+         /// <summary>
+         /// Create command information from discovery.
+         /// </summary>
+@@ -86,4 +88,4 @@ namespace Unity.Pipeline.Commands
+             return $"{Name} MainThreadRequired:{MainThreadRequired} Parameters:{Parameters.Count}";
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/com.unity.pipeline/Runtime/Common/CommandRegistry.cs b/com.unity.pipeline/Runtime/Common/CommandRegistry.cs
+index 3fab627..8b8d794 100644
+--- a/com.unity.pipeline/Runtime/Common/CommandRegistry.cs
++++ b/com.unity.pipeline/Runtime/Common/CommandRegistry.cs
+@@ -213,8 +213,10 @@ namespace Unity.Pipeline.Commands
+                 parameters,
+                 commandAttr.RuntimeOnly,
+                 commandAttr.Tags,
+-                method.DeclaringType?.Assembly.GetName().Name
+-            );
++                method.DeclaringType?.Assembly.GetName().Name)
++            {
++                Effect = commandAttr.Effect
++            };
+         }
+
+         /// <summary>
+@@ -280,4 +282,4 @@ namespace Unity.Pipeline.Commands
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/com.unity.pipeline/Runtime/Common/FilePermissions.cs b/com.unity.pipeline/Runtime/Common/FilePermissions.cs
+index 044c06d..5b92955 100644
+--- a/com.unity.pipeline/Runtime/Common/FilePermissions.cs
++++ b/com.unity.pipeline/Runtime/Common/FilePermissions.cs
+@@ -1,5 +1,6 @@
+ using System;
+ using System.Diagnostics;
++using System.IO;
+ using System.Runtime.InteropServices;
+ using UnityEngine;
+ using Debug = UnityEngine.Debug;
+@@ -24,16 +25,7 @@ namespace Unity.Pipeline
+         {
+             try
+             {
+-                switch (Application.platform)
+-                {
+-                    case RuntimePlatform.WindowsEditor:
+-                    case RuntimePlatform.WindowsPlayer:
+-                        RestrictWindows(path);
+-                        break;
+-                    default:
+-                        RestrictUnix(path);
+-                        break;
+-                }
++                RequireCurrentUserOnly(path);
+             }
+             catch (Exception ex)
+             {
+@@ -41,6 +33,20 @@ namespace Unity.Pipeline
+             }
+         }
+
++        internal static void RequireCurrentUserOnly(string path)
++        {
++            switch (Application.platform)
++            {
++                case RuntimePlatform.WindowsEditor:
++                case RuntimePlatform.WindowsPlayer:
++                    RestrictWindows(path);
++                    break;
++                default:
++                    RestrictUnix(path);
++                    break;
++            }
++        }
++
+         private static void RestrictWindows(string path)
+         {
+             // Grant by SID rather than account name: AzureAD/Entra-joined accounts (e.g.
+@@ -48,13 +54,13 @@ namespace Unity.Pipeline
+             var sid = GetCurrentUserSid();
+             if (string.IsNullOrEmpty(sid))
+             {
+-                Debug.LogWarning($"Pipeline: Could not resolve current user SID; leaving default permissions on '{path}'.");
+-                return;
++                throw new IOException("Pipeline could not resolve the current user SID.");
+             }
+
+             // /inheritance:r drops inherited ACEs; /grant:r replaces the DACL with a single
+             // full-control grant to the current user.
+-            Run("icacls", $"\"{path}\" /inheritance:r /grant:r \"*{sid}:(F)\"", out _);
++            if (!Run("icacls", $"\"{path}\" /inheritance:r /grant:r \"*{sid}:(F)\"", out _))
++                throw new IOException("Pipeline could not restrict descriptor permissions with icacls.");
+         }
+
+         private static string GetCurrentUserSid()
+@@ -104,7 +110,8 @@ namespace Unity.Pipeline
+         {
+             // 0600 (octal) == owner read/write only.
+             const uint ownerReadWrite = 0x180;
+-            chmod(path, ownerReadWrite);
++            if (chmod(path, ownerReadWrite) != 0)
++                throw new IOException($"Pipeline could not restrict descriptor permissions (errno {Marshal.GetLastWin32Error()}).");
+         }
+     }
+ }
+diff --git a/com.unity.pipeline/Runtime/Models/InstanceDescriptor.cs b/com.unity.pipeline/Runtime/Models/InstanceDescriptor.cs
+index 4c2e15f..7afc8bd 100644
+--- a/com.unity.pipeline/Runtime/Models/InstanceDescriptor.cs
++++ b/com.unity.pipeline/Runtime/Models/InstanceDescriptor.cs
+@@ -175,21 +175,24 @@ namespace Unity.Pipeline.Models
+             }
+         }
+
+-        private static void WriteToProjectRootLocked(InstanceDescriptor descriptor)
++        internal static void PublishToProjectRoot(InstanceDescriptor descriptor)
++        {
++            lock (m_WriteGate)
++                WriteToProjectRootLocked(descriptor, initialize: true);
++        }
++
++        private static void WriteToProjectRootLocked(InstanceDescriptor descriptor, bool initialize = false)
+         {
+             try
+             {
+                 var filePath = GetDescriptorFilePath(descriptor.ProjectPath);
+-                var isNewFile = !File.Exists(filePath);
+                 // The descriptor lives under Library/Pipeline, which may not exist yet.
+                 Directory.CreateDirectory(Path.GetDirectoryName(filePath));
+                 var json = JsonConvert.SerializeObject(descriptor, Formatting.Indented);
+-                File.WriteAllText(filePath, json);
+-
+-                // The descriptor carries the auth token; keep it readable only by the current user.
+-                // Applied once on creation (heartbeat rewrites preserve the existing permissions).
+-                if (isNewFile)
+-                    FilePermissions.RestrictToCurrentUser(filePath);
++                if (initialize || !File.Exists(filePath))
++                    PublishPrivateDescriptor(filePath, json, FilePermissions.RequireCurrentUserOnly);
++                else
++                    File.WriteAllText(filePath, json);
+             }
+             catch (Exception ex)
+             {
+@@ -199,6 +202,25 @@ namespace Unity.Pipeline.Models
+             }
+         }
+
++        internal static void PublishPrivateDescriptor(string path, string contents, Action<string> restrict)
++        {
++            // Drop stale content and inherited ACLs from a previous session.
++            File.Delete(path);
++            using (File.Open(path, FileMode.CreateNew, FileAccess.Write)) { }
++            try
++            {
++                // The empty file carries no credential. Only write the descriptor after
++                // confirming the permission change succeeded.
++                restrict(path);
++                File.WriteAllText(path, contents);
++            }
++            catch
++            {
++                File.Delete(path);
++                throw;
++            }
++        }
++
+         /// <summary>
+         /// Read instance descriptor from project root
+         /// </summary>
+@@ -270,4 +292,4 @@ namespace Unity.Pipeline.Models
+             return Path.Combine(projectPath, "Library", "Pipeline", DescriptorFileName);
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index ebe67c5..1f6e785 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.3",
++  "version": "0.6.0-2022.4",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",
