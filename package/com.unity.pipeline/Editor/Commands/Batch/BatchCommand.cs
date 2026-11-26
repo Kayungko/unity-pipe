@@ -480,7 +480,8 @@ namespace Unity.Pipeline.Editor.Commands.Batch
                     "while the batch holds the main thread — the batch would deadlock the Editor. Call it " +
                     "standalone instead.");
 
-            if (transactional && m_NonRevertibleCommands.Contains(name))
+            if (transactional && (m_NonRevertibleCommands.Contains(name) ||
+                command.IsDynamic && command.Effect != CommandEffect.ReadOnly))
                 throw new ArgumentException(
                     $"Command '{name}' is not batchable in a transactional batch (not_batchable_transactional): " +
                     "it mutates state outside the Editor Undo system (asset/file/settings writes), so a rollback " +

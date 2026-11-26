@@ -2661,7 +2661,9 @@ namespace Unity.Pipeline
             m_CurrentServer = this;
             try
             {
-                return command.Method.Invoke(null, parameters);
+                if (command.IsDynamic && !CommandRegistry.IsRegistered(command))
+                    throw new InvalidOperationException($"Command '{command.Name}' was unregistered before execution.");
+                return command.Method.Invoke(command.InvocationTarget, parameters);
             }
             catch (System.Reflection.TargetInvocationException tie) when (tie.InnerException != null)
             {

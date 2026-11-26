@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using Unity.Pipeline.HotReload;
 using UnityEngine;
 #if UNITY_6000_3_OR_NEWER
@@ -21,21 +22,110 @@ namespace Unity.Pipeline.Commands
 #if UNITY_6000_5_OR_NEWER
     [NoAutoStaticsCleanup]
 #endif
-    static class CommandRegistry
+    public static class CommandRegistry
     {
         private static IReadOnlyList<CommandInfo> m_CachedCommands;
+        private static volatile IReadOnlyList<CommandInfo> m_Catalog;
         private static ICommandDiscovery m_Discovery;
         private static readonly object m_DiscoveryLock = new object();
+        private static readonly Dictionary<string, CommandInfo> m_Registered =
+            new Dictionary<string, CommandInfo>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Register a project-owned method on the current domain's command catalog.
+        /// Dispose the returned handle when the owner goes away.
+        /// </summary>
+        public static IDisposable RegisterCommand(string name, string description, Delegate handler,
+            bool mainThreadRequired = true, bool runtimeOnly = false,
+            CommandEffect effect = CommandEffect.Unknown, params string[] tags)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name.Any(ch => char.IsWhiteSpace(ch) || char.IsControl(ch)))
+                throw new ArgumentException("Command names must be nonempty single tokens.", nameof(name));
+            if (string.IsNullOrWhiteSpace(description))
+                throw new ArgumentException("A command description is required.", nameof(description));
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler));
+            if (tags != null && tags.Any(tag => string.IsNullOrWhiteSpace(tag) ||
+                tag.Split('/').Any(string.IsNullOrWhiteSpace)))
+                throw new ArgumentException("Tags must be nonempty slash-separated paths.", nameof(tags));
+            var method = handler.Method;
+            if (handler.GetInvocationList().Length != 1 || method.IsStatic != (handler.Target == null) ||
+                method.ReturnType.IsByRef || method.GetParameters().Any(p => p.ParameterType.IsByRef))
+                throw new ArgumentException("Use a single static or bound instance handler without ref or out parameters.",
+                    nameof(handler));
+
+            var parameters = DiscoverParameters(method).ToArray();
+            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "token" };
+            if (parameters.Any(p => string.IsNullOrWhiteSpace(p.Name) || !keys.Add(p.Name)))
+                throw new ArgumentException("Command parameter names must be unique, nonempty, and cannot be 'token'.",
+                    nameof(handler));
+
+            var command = new CommandInfo(name, description, mainThreadRequired, method, parameters,
+                runtimeOnly, tags?.Distinct(StringComparer.Ordinal).ToArray(), method.DeclaringType?.Assembly.GetName().Name)
+            {
+                Effect = effect,
+                InvocationTarget = handler.Target,
+                IsDynamic = true
+            };
+            lock (m_DiscoveryLock)
+            {
+                if (DiscoverCommands().Any(existing => existing.Name == name))
+                    throw new ArgumentException($"A command named '{name}' is already registered.", nameof(name));
+                m_Registered.Add(name, command);
+                m_Catalog = null;
+            }
+            return new Registration(command);
+        }
+
+        /// <summary>Remove a dynamically registered command. Attribute commands remain in the catalog.</summary>
+        public static bool UnregisterCommand(string name) => RemoveRegistration(name, null);
+
+        static bool RemoveRegistration(string name, CommandInfo expected)
+        {
+            if (string.IsNullOrEmpty(name))
+                return false;
+            lock (m_DiscoveryLock)
+            {
+                if (!m_Registered.TryGetValue(name, out var command) || (expected != null && !ReferenceEquals(command, expected)))
+                    return false;
+                m_Registered.Remove(name);
+                m_Catalog = null;
+                return true;
+            }
+        }
+
+        internal static bool IsRegistered(CommandInfo command)
+        {
+            lock (m_DiscoveryLock)
+                return m_Registered.TryGetValue(command.Name, out var current) && ReferenceEquals(current, command);
+        }
+
+        sealed class Registration : IDisposable
+        {
+            CommandInfo m_Command;
+
+            public Registration(CommandInfo command) => m_Command = command;
+
+            public void Dispose()
+            {
+                var command = Interlocked.Exchange(ref m_Command, null);
+                if (command != null)
+                    RemoveRegistration(command.Name, command);
+            }
+        }
 
         /// <summary>
         /// Set the command discovery mechanism.
         /// Editor assembly provides TypeCache-based discovery, Runtime uses reflection fallback.
         /// </summary>
         /// <param name="discovery">The discovery mechanism to use.</param>
-        public static void SetDiscovery(ICommandDiscovery discovery)
+        internal static void SetDiscovery(ICommandDiscovery discovery)
         {
-            m_Discovery = discovery;
-            ClearCache(); // Re-discover with new mechanism
+            lock (m_DiscoveryLock)
+            {
+                m_Discovery = discovery;
+                ClearCache();
+            }
         }
 
         /// <summary>
@@ -44,11 +134,12 @@ namespace Unity.Pipeline.Commands
         /// Results are cached until domain reload.
         /// </summary>
         /// <returns>All discovered commands.</returns>
-        public static IEnumerable<CommandInfo> DiscoverCommands()
+        internal static IEnumerable<CommandInfo> DiscoverCommands()
         {
-            if (m_CachedCommands != null)
+            var catalog = m_Catalog;
+            if (catalog != null)
             {
-                return m_CachedCommands;
+                return catalog;
             }
 
             lock (m_DiscoveryLock)
@@ -62,20 +153,22 @@ namespace Unity.Pipeline.Commands
 
                     m_CachedCommands = discovered;
                 }
+                if (m_Catalog == null)
+                    m_Catalog = m_CachedCommands.Concat(m_Registered.Values).ToArray();
+                return m_Catalog;
             }
-
-            return m_CachedCommands;
         }
 
         /// <summary>
         /// Clear the command cache. Called automatically on domain reload.
         /// Can be called manually for testing or dynamic command registration.
         /// </summary>
-        public static void ClearCache()
+        internal static void ClearCache()
         {
             lock (m_DiscoveryLock)
             {
                 m_CachedCommands = null;
+                m_Catalog = null;
             }
         }
 

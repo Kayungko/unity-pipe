@@ -32,6 +32,22 @@ Every discovered command also carries the **package** it originates from (derive
 
 The method **must be `static`**, but its accessibility does not matter: `public`, `internal`, and `private` static methods can all be registered. `CommandRegistry` invokes handlers through reflection, so a `private` handler runs exactly like a `public` one. Only a non-static (instance) method fails to register — `CommandRegistry` skips it and logs a warning.
 
+### Register a method from project code
+
+Use `Unity.Pipeline.Commands.CommandRegistry.RegisterCommand` for commands whose lifetime follows an object or feature. Pass a delegate to a static method or a bound instance method, plus a command name, description, and optional effect and tags. The delegate's method parameters are the command schema. `[CliArg]` can provide explicit names, descriptions and required flags.
+
+```csharp
+using System;
+using Unity.Pipeline.Commands;
+
+var registration = CommandRegistry.RegisterCommand("qa_health", "Read the fixture's health",
+    (Func<int>)fixture.ReadHealth, effect: CommandEffect.ReadOnly, tags: new[] { "qa/health" });
+```
+
+Dispose the returned handle when the owner goes away, or remove a dynamic command by name with `UnregisterCommand`. Names are case-sensitive. A duplicate name raises an error and the previous command stays registered. Disposing an old handle does not remove a replacement. Calls already running may finish. Register during initialization for each new Editor domain or Player process.
+
+Use `upipe commands --group-by tag --tag qa` to browse the subtree, `upipe help --group qa qa_health` for the schema, and `upipe exec qa_health` to invoke it. Commands that can mutate state are refused in a transactional batch. A `Task`-returning handler must be called outside a batch.
+
 ### Tag taxonomy
 
 Every shipped command carries at least one tag (enforced by `CommandRegistrationTests.CommandRegistry_DiscoverCommands_AllShippedCommandsCarryTags`). Tags are lowercase `/`-separated paths. Pick from the established top-level tags before inventing a new one, and add a subtag when a family is large enough to browse on its own:

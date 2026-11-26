@@ -14,14 +14,24 @@ func CommandsCommand() SubCommand {
 	return SubCommand{
 		Name:     "commands",
 		Aliases:  []string{"command-list"},
-		Synopsis: "list the commands exposed by the connected editor instance",
+		Synopsis: "list the commands exposed by the connected editor instance [--group-by flat|tag|package] [--tag <subtree>]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe commands")
 			full := fs.Bool("full", false, "include parameter JSON schemas (default: compact index)")
 			query := fs.String("query", "", "case-insensitive substring filter on name/description/tags")
+			group := fs.String("group-by", "flat", "flat command list, tag tree, or package groups")
+			tag := fs.String("tag", "", "filter to a tag subtree")
 			attachShared(fs, rt.Opts)
 			if err := fs.Parse(args); err != nil {
 				return nil, usageErr("commands: " + err.Error())
+			}
+			switch *group {
+			case "flat", "tag", "package":
+			default:
+				return nil, usageErr("commands: --group-by must be flat, tag, or package")
+			}
+			if *group != "flat" || *tag != "" {
+				return rt.Client.CommandCatalog(*group, *tag, *query, *full)
 			}
 
 			if *full {
@@ -53,18 +63,27 @@ func CommandsCommand() SubCommand {
 func CommandHelp() SubCommand {
 	return SubCommand{
 		Name:     "help",
-		Synopsis: "show parameters for one Editor or Player command: upipe help <name>",
+		Synopsis: "show command parameters or browse a tag subtree: upipe help <name> [--group <tag>]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe help")
+			group := fs.String("group", "", "scope lookup or browse to a tag subtree")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
 			if err != nil {
 				return nil, usageErr("help: " + err.Error())
 			}
+			if len(rest) == 0 && *group != "" {
+				return rt.Client.CommandCatalog("tag", *group, "", false)
+			}
 			if len(rest) != 1 {
 				return nil, usageErr("help: provide one command name from upipe commands")
 			}
-			raw, err := rt.Client.ListCommandsFull()
+			var raw json.RawMessage
+			if *group == "" {
+				raw, err = rt.Client.ListCommandsFull()
+			} else {
+				raw, err = rt.Client.CommandCatalog("flat", *group, "", true)
+			}
 			if err != nil {
 				return nil, err
 			}

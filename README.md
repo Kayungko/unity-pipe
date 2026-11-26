@@ -188,6 +188,7 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 | `commands` / `commands --full` | 服务端命令索引 / 含参数 schema |
 | `exec <name> [--set k=v] [--params JSON] [--job]` | 主通道，任意命令直通；`--set` 值自动做 JSON 标量类型推断 |
 | `help <name>` | 精确显示当前 Editor 或开发 Player 中一条命令的参数、默认值以及副作用。支持 `--json` |
+| `commands --group-by tag` / `help --group <tag> [name]` | 按 tag 浏览或在指定 tag 子树中查找精确命令。也可用 `--group-by package` 按程序集分组 |
 | `build [--dry-run|--confirm] [--no-wait]` | 校验目标、场景和输出路径，或构建 Player 并等待对应的 BuildReport |
 | `dialog` | 从 Editor 读取已识别的模态对话框，主线程被阻塞时也可查询 |
 | `eval "<code>"` / `eval-file <path>` | C# 求值，支持 `await` 和 `--dry-run`。用 `--job` 提交可取消的后台任务 |
@@ -263,7 +264,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.12`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.13`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

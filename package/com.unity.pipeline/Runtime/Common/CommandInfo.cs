@@ -56,6 +56,9 @@ namespace Unity.Pipeline.Commands
 
         public CommandEffect Effect { get; internal set; }
 
+        internal object InvocationTarget { get; set; }
+        internal bool IsDynamic { get; set; }
+
         /// <summary>
         /// Create command information from discovery.
         /// </summary>

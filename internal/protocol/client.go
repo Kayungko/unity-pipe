@@ -145,6 +145,34 @@ func (c *PipelineClient) ListCommandsFull() (json.RawMessage, error) {
 	return json.RawMessage(resp.Body), nil
 }
 
+// CommandCatalog returns the server's grouped or tag-filtered command index.
+func (c *PipelineClient) CommandCatalog(groupBy, tag, query string, full bool) (json.RawMessage, error) {
+	detail := "compact"
+	if full {
+		detail = "full"
+	}
+	args := url.Values{"detail": {detail}, "group_by": {groupBy}}
+	if tag != "" {
+		args.Set("tag", tag)
+	}
+	if query != "" {
+		args.Set("query", query)
+	}
+	var raw json.RawMessage
+	if err := c.getJSON("/api/commands?"+args.Encode(), &raw, 0); err != nil {
+		return nil, err
+	}
+	var body struct {
+		Commands []json.RawMessage `json:"commands"`
+		Groups   []json.RawMessage `json:"groups"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || (groupBy == "flat" && body.Commands == nil) ||
+		(groupBy != "flat" && body.Groups == nil) {
+		return nil, ErrProtocol("server did not return the requested command catalog")
+	}
+	return raw, nil
+}
+
 // DefaultRoundTripTimeout is the client-side round-trip ceiling for a single
 // /api/exec call when no explicit timeout was given. It mirrors
 // options.DefaultTimeout (10 minutes); it is restated here because the
