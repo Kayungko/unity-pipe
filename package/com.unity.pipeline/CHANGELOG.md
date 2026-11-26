@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-2022.7] - Local candidate
+
+- Wait for delayed scene components, nested readable members and value changes. Capture and pause on the matched frame.
+- Quit the Editor with an explicit save or discard choice for dirty scenes and an open dirty Prefab.
+
 ## [0.6.0-2022.6] - Local candidate
 
 - Run EditMode and PlayMode under one async test ID, with combined results after domain reload and a shared cancellation and timeout lifecycle.

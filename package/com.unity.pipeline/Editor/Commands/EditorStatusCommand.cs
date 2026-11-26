@@ -154,10 +154,18 @@ namespace Unity.Pipeline.Editor.Commands
 
         sealed class Pending
         {
-            public UnityEngine.Object Target;
-            public FieldInfo Field;
+            public ObjectRef Target;
+            public Type FindType;
+            public string Component;
+            public string[] Path;
+            public UnityEngine.Object Bound;
+            public MemberInfo[] Members;
+            public Type LeafType;
             public string Comparison;
             public JValue Expected;
+            public JValue Initial;
+            public bool TolerateMissing;
+            public bool Pause;
             public string CapturePath;
             public string CaptureSource;
             public int Width;
@@ -175,48 +183,43 @@ namespace Unity.Pipeline.Editor.Commands
             AssemblyReloadEvents.beforeAssemblyReload += BeforeReload;
         }
 
-        [CliCommand("wait_start", "Start a non-blocking wait on a public scalar field and optionally save the Game View when it matches. The capture can overwrite its output file.", Effect = CommandEffect.Destructive, Tags = new[] { "editor", "wait" })]
+        [CliCommand("wait_start", "Wait for a public scalar member on a scene object, optionally saving the Game View or pausing on the matching frame.", Effect = CommandEffect.Destructive, Tags = new[] { "editor", "wait" })]
         public static JObject Start(
-            [CliArg("target", "Object reference to an existing scene object or component.", Required = true)] ObjectRef target,
-            [CliArg("field", "Public instance field name. Properties and method calls are not supported.", Required = true)] string field,
-            [CliArg("value", "Scalar value to compare with.", Required = true, ArbitraryKeys = true)] JToken value,
+            [CliArg("target", "Object reference to a scene object or component. Use target or find_type.")] ObjectRef target = null,
+            [CliArg("field", "Dotted public instance member path ending in a scalar. Read-only properties are supported.", Required = true)] string field = null,
+            [CliArg("value", "Scalar value to compare with. Omit for changed.", ArbitraryKeys = true)] JToken value = null,
             [CliArg("component", "Component short or full name when targeting a GameObject.")] string component = null,
-            [CliArg("op", "eq, ne, gt, ge, lt or le.")] string comparison = "eq",
+            [CliArg("op", "eq, ne, gt, ge, lt, le or changed.")] string comparison = "eq",
             [CliArg("timeout_ms", "Wait budget in milliseconds (1 to 600000).")] int timeoutMs = 10000,
             [CliArg("capture_path", "Optional PNG path under the authoring root.")] string capturePath = null,
             [CliArg("capture_source", "camera or screen. Screen requires a fresh Game View frame.")] string captureSource = "camera",
             [CliArg("capture_width", "Capture width (1 to 4096).")] int width = 1280,
-            [CliArg("capture_height", "Capture height (1 to 4096).")] int height = 720)
+            [CliArg("capture_height", "Capture height (1 to 4096).")] int height = 720,
+            [CliArg("find_type", "Fully qualified Component type. Waits for a single live scene instance.")] string findType = null,
+            [CliArg("tolerate_missing", "Keep waiting when the target or an intermediate member is absent.")] bool tolerateMissing = false,
+            [CliArg("pause", "Pause Play Mode when the condition matches, after any same-frame capture.")] bool pause = false)
         {
             if (s_Pending.Count >= MaxPending)
                 throw new InvalidOperationException("Too many active waits.");
             if (timeoutMs < 1 || timeoutMs > 600000)
                 throw new ArgumentOutOfRangeException(nameof(timeoutMs));
-            if (!ObjectResolver.TryResolve(target, out var obj, out var error))
-                throw new ArgumentException(error, nameof(target));
-
-            if (!string.IsNullOrEmpty(component))
-            {
-                if (!(obj is GameObject gameObject))
-                    throw new ArgumentException("component requires a GameObject target.", nameof(component));
-                var matches = gameObject.GetComponents<Component>()
-                    .Where(c => c != null && (c.GetType().Name == component || c.GetType().FullName == component)).ToArray();
-                if (matches.Length != 1)
-                    throw new ArgumentException("component must resolve to exactly one component.", nameof(component));
-                obj = matches[0];
-            }
-
-            var member = obj.GetType().GetField(field, BindingFlags.Public | BindingFlags.Instance);
-            if (member == null || !IsScalar(member.FieldType))
-                throw new ArgumentException("field must name a public scalar instance field.", nameof(field));
-            var expected = value as JValue ?? (value == null ? JValue.CreateNull() : null);
-            if (expected == null)
+            var hasTarget = target != null && !target.IsEmpty;
+            var hasType = !string.IsNullOrWhiteSpace(findType);
+            if (hasTarget == hasType || (hasType && !string.IsNullOrEmpty(component)))
+                throw new ArgumentException("Choose either target (with optional component) or find_type.");
+            var segments = field?.Split('.');
+            if (segments == null || segments.Any(segment => string.IsNullOrWhiteSpace(segment)))
+                throw new ArgumentException("field must be a dotted member path with no empty segments.", nameof(field));
+            var expected = value as JValue;
+            if (comparison == "changed" ? expected != null && expected.Type != JTokenType.Null : expected == null)
+                throw new ArgumentException(comparison == "changed" ? "Omit value for changed." : "value must be a scalar.", nameof(value));
+            if (value != null && expected == null)
                 throw new ArgumentException("value must be a scalar.", nameof(value));
-            ValidateComparison(member.FieldType, expected, comparison);
+            ValidateOperator(comparison);
 
             if (capturePath != null)
             {
-                capturePath = ProjectPaths.Resolve(capturePath, out error);
+                capturePath = ProjectPaths.Resolve(capturePath, out var error);
                 if (capturePath == null || !string.Equals(Path.GetExtension(capturePath), ".png", StringComparison.OrdinalIgnoreCase))
                     throw new ArgumentException(error ?? "capture_path must end in .png.", nameof(capturePath));
                 if (captureSource != "camera" && captureSource != "screen")
@@ -228,11 +231,16 @@ namespace Unity.Pipeline.Editor.Commands
             var id = Guid.NewGuid().ToString("N");
             var pending = new Pending
             {
-                Target = obj, Field = member, Comparison = comparison, Expected = expected,
+                Target = hasTarget ? target : null, FindType = hasType ? ResolveComponentType(findType) : null,
+                Component = component, Path = segments, Comparison = comparison, Expected = expected,
+                TolerateMissing = tolerateMissing || hasType, Pause = pause,
                 CapturePath = capturePath, CaptureSource = captureSource, Width = width, Height = height,
                 TimeoutMs = timeoutMs,
                 Result = new JObject { ["waitId"] = id, ["status"] = "waiting", ["field"] = field }
             };
+            if (pending.FindType != null)
+                BindMembers(pending, pending.FindType);
+            BindTarget(pending);
             if (s_Pending.Count == 0)
                 EditorApplication.update += Tick;
             s_Pending.Add(id, pending);
@@ -272,14 +280,24 @@ namespace Unity.Pipeline.Editor.Commands
                         continue;
                     }
 
-                    if (pending.Target == null)
-                        throw new InvalidOperationException("Wait target was destroyed.");
-
-                    var value = new JValue(pending.Field.GetValue(pending.Target));
+                    if (!BindTarget(pending) || !ReadMemberValue(pending, out var value))
+                        continue;
                     pending.Result["value"] = value;
-                    if (!Matches(value, pending.Expected, pending.Comparison))
+                    if (pending.Initial == null)
+                    {
+                        pending.Initial = (JValue)value.DeepClone();
+                        if (pending.Comparison == "changed")
+                        {
+                            pending.Result["initialValue"] = pending.Initial.DeepClone();
+                            continue;
+                        }
+                    }
+                    var expected = pending.Comparison == "changed" ? pending.Initial : pending.Expected;
+                    if (!Matches(value, expected, pending.Comparison, pending.LeafType))
                         continue;
 
+                    if (pending.Pause && !EditorApplication.isPlaying)
+                        throw new InvalidOperationException("Pause on match requires Play Mode.");
                     pending.Result["matchedFrame"] = Time.frameCount;
                     if (pending.CapturePath != null)
                     {
@@ -290,6 +308,12 @@ namespace Unity.Pipeline.Editor.Commands
                         pending.Result["capture"] = JObject.FromObject(capture);
                         pending.Result["captureFrame"] = Time.frameCount;
                     }
+                    if (pending.Pause)
+                    {
+                        EditorApplication.isPaused = true;
+                        pending.Result["paused"] = EditorApplication.isPaused;
+                        pending.Result["pausedFrame"] = Time.frameCount;
+                    }
                     Finish(id, pending, "matched");
                 }
                 catch (Exception ex)
@@ -298,6 +322,112 @@ namespace Unity.Pipeline.Editor.Commands
                     Finish(id, pending, "failed");
                 }
             }
+        }
+
+        static Type ResolveComponentType(string name)
+        {
+            var types = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetType(name, false)).Where(type => type != null).ToArray();
+            if (types.Length != 1 || !typeof(Component).IsAssignableFrom(types[0]))
+                throw new ArgumentException("find_type must name a unique, fully qualified Unity Component type.", nameof(name));
+            return types[0];
+        }
+
+        static bool BindTarget(Pending pending)
+        {
+            if (pending.Bound != null)
+                return true;
+            if (!ReferenceEquals(pending.Bound, null) && !pending.TolerateMissing)
+                throw new InvalidOperationException("Wait target was destroyed.");
+            UnityEngine.Object obj;
+            if (pending.FindType != null)
+            {
+                var matches = UnityEngine.Object.FindObjectsByType(pending.FindType, FindObjectsInactive.Include, FindObjectsSortMode.None)
+                    .OfType<Component>().Where(IsLiveSceneComponent).Take(2).ToArray();
+                if (matches.Length > 1)
+                    throw new InvalidOperationException("find_type matched multiple scene objects. Pass an explicit target.");
+                if (matches.Length == 0)
+                    return false;
+                obj = matches[0];
+            }
+            else if (!ObjectResolver.TryResolve(pending.Target, out obj, out var error))
+            {
+                if (pending.TolerateMissing)
+                    return false;
+                throw new ArgumentException(error, nameof(pending.Target));
+            }
+
+            if (!string.IsNullOrEmpty(pending.Component))
+            {
+                if (!(obj is GameObject gameObject))
+                    throw new ArgumentException("component requires a GameObject target.");
+                var matches = gameObject.GetComponents<Component>()
+                    .Where(c => c != null && (c.GetType().Name == pending.Component || c.GetType().FullName == pending.Component))
+                    .Take(2).ToArray();
+                if (matches.Length == 0 && pending.TolerateMissing)
+                    return false;
+                if (matches.Length != 1)
+                    throw new ArgumentException("component must resolve to exactly one component.");
+                obj = matches[0];
+            }
+            BindMembers(pending, obj.GetType());
+            pending.Bound = obj;
+            return true;
+        }
+
+        static bool IsLiveSceneComponent(Component component)
+        {
+            var sceneObject = component.gameObject;
+            return !EditorUtility.IsPersistent(component) && sceneObject.scene.IsValid() && sceneObject.scene.isLoaded &&
+                !UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(sceneObject.scene) &&
+                component.hideFlags == HideFlags.None && sceneObject.hideFlags == HideFlags.None;
+        }
+
+        static void BindMembers(Pending pending, Type type)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance;
+            var members = new MemberInfo[pending.Path.Length];
+            for (var i = 0; i < pending.Path.Length; i++)
+            {
+                var name = pending.Path[i];
+                var field = type.GetField(name, flags);
+                if (field != null)
+                {
+                    members[i] = field;
+                    type = field.FieldType;
+                    continue;
+                }
+                var property = type.GetProperty(name, flags);
+                if (property == null || property.GetGetMethod(false) == null || property.GetSetMethod(false) != null ||
+                    property.GetIndexParameters().Length != 0)
+                    throw new ArgumentException($"'{name}' on {type.Name} is not a public instance field or readable property without a public setter.");
+                members[i] = property;
+                type = property.PropertyType;
+            }
+            type = Nullable.GetUnderlyingType(type) ?? type;
+            if (!IsScalar(type))
+                throw new ArgumentException("The last member must be a scalar.");
+            ValidateComparison(type, pending.Expected, pending.Comparison);
+            pending.Members = members;
+            pending.LeafType = type;
+        }
+
+        static bool ReadMemberValue(Pending pending, out JValue value)
+        {
+            object current = pending.Bound;
+            foreach (var member in pending.Members)
+            {
+                if (current == null || (current is UnityEngine.Object unityObject && unityObject == null))
+                {
+                    if (!pending.TolerateMissing)
+                        throw new InvalidOperationException($"An intermediate member was null before '{member.Name}'.");
+                    value = null;
+                    return false;
+                }
+                current = member is FieldInfo field ? field.GetValue(current) : ((PropertyInfo)member).GetValue(current);
+            }
+            value = new JValue(pending.LeafType.IsEnum ? current?.ToString() : current);
+            return true;
         }
 
         static void Finish(string id, Pending pending, string status)
@@ -331,11 +461,11 @@ namespace Unity.Pipeline.Editor.Commands
         static bool IsNumber(JTokenType type) => type == JTokenType.Integer || type == JTokenType.Float;
 
         static bool IsScalar(Type type) =>
-            type == typeof(string) || type == typeof(bool) ||
+            type == typeof(string) || type == typeof(bool) || type.IsEnum ||
             (type.IsPrimitive && type != typeof(char) && type != typeof(IntPtr) && type != typeof(UIntPtr)) ||
             type == typeof(decimal);
 
-        static void ValidateComparison(Type type, JValue expected, string op)
+        static void ValidateOperator(string op)
         {
             switch (op)
             {
@@ -345,17 +475,23 @@ namespace Unity.Pipeline.Editor.Commands
                 case "ge":
                 case "lt":
                 case "le":
+                case "changed":
                     break;
                 default:
-                    throw new ArgumentException("Unknown comparison. Use eq, ne, gt, ge, lt or le.", nameof(op));
+                    throw new ArgumentException("Unknown comparison. Use eq, ne, gt, ge, lt, le or changed.", nameof(op));
             }
+        }
 
-            if (type == typeof(bool) || type == typeof(string))
+        static void ValidateComparison(Type type, JValue expected, string op)
+        {
+            if (op == "changed")
+                return;
+            if (type == typeof(bool) || type == typeof(string) || type.IsEnum)
             {
                 if (op != "eq" && op != "ne")
-                    throw new ArgumentException("Boolean and string fields support eq and ne.");
+                    throw new ArgumentException("Boolean, string and enum members support eq, ne and changed.");
                 if (type == typeof(bool) && expected.Type != JTokenType.Boolean ||
-                    type == typeof(string) && expected.Type != JTokenType.String && expected.Type != JTokenType.Null)
+                    (type == typeof(string) || type.IsEnum) && expected.Type != JTokenType.String && expected.Type != JTokenType.Null)
                     throw new ArgumentException("value type does not match the field.");
             }
             else if (!IsNumber(expected.Type))
@@ -364,18 +500,26 @@ namespace Unity.Pipeline.Editor.Commands
             }
         }
 
-        static bool Matches(JValue current, JValue expected, string op)
+        static bool Matches(JValue current, JValue expected, string op, Type type)
         {
             var numeric = IsNumber(current.Type) && IsNumber(expected.Type);
-            var comparison = numeric
-                ? (current.Value is float || current.Value is double || expected.Value is float || expected.Value is double
-                    ? current.Value<double>().CompareTo(expected.Value<double>())
-                    : current.Value<decimal>().CompareTo(expected.Value<decimal>()))
-                : (JToken.DeepEquals(current, expected) ? 0 : 1);
+            if (!numeric && op != "eq" && op != "ne" && op != "changed")
+                return false;
+            var comparison = JToken.DeepEquals(current, expected) ? 0 : 1;
+            if (numeric)
+            {
+                if (type == typeof(float))
+                    comparison = current.Value<float>().CompareTo(expected.Value<float>());
+                else if (type == typeof(double))
+                    comparison = current.Value<double>().CompareTo(expected.Value<double>());
+                else
+                    comparison = current.Value<decimal>().CompareTo(expected.Value<decimal>());
+            }
             switch (op)
             {
                 case "eq": return comparison == 0;
                 case "ne": return comparison != 0;
+                case "changed": return comparison != 0;
                 case "gt": return comparison > 0;
                 case "ge": return comparison >= 0;
                 case "lt": return comparison < 0;

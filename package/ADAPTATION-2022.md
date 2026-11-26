@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本为 **0.6.0-2022.6**，适配 Unity 2022.3.23f1。回移功能取自官方 1.0.1，基线仍是 0.6.0-exp.1。
+本仓库 vendored 版本为 **0.6.0-2022.7**，适配 Unity 2022.3.23f1。回移功能取自官方 1.0.1，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
@@ -18,6 +18,7 @@
 | 异步等待与描述文件权限 | `patches/0009-async-wait-and-descriptor-permissions.patch` | 条件等待、同帧截图、命令副作用和 Editor 描述文件权限门 | 复测 Unity 2022 的截图、域重载与权限失败 |
 | 性能诊断 | `patches/0010-profiler-diagnostics.patch` | 慢帧排序、帧内标记链、GC 分配调用栈和 Player 内存快照 | 复测 Unity 2022 的 IL2CPP 开发 Player 数据 |
 | 两阶段测试与复杂字段 | `patches/0011-combined-tests-and-fields.patch` | 跨域重载合并测试结果，兼容复杂字段输入 | 复测 Unity 2022 Test Framework 1.1.33 和 Prefab 保存重载 |
+| 等待与 Editor 退出 | `patches/0012-waits-and-editor-quit.patch` | 延迟目标、嵌套成员、值变化、截图与暂停，以及退出前的场景和 Prefab 保存选择 | 复测 Unity 2022 同帧证据、域重载和退出回读 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

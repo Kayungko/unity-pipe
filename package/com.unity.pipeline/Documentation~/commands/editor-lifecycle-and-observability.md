@@ -46,13 +46,23 @@ A match returns `status=matched`. A condition timeout exits 21. Use `--job` to s
 
 ### `wait_start`, `wait_status`, and `wait_cancel`
 
-`wait_start` returns a `waitId` immediately and releases the command queue. Pass an existing object or component as `target`, a public scalar instance `field`, a comparison `value`, and optionally `component` to select one component on a GameObject. Use `op=eq|ne|gt|ge|lt|le` and `timeout_ms` to set the comparison and budget. Boolean and text fields support `eq` and `ne`. Field reads do not invoke property getters or methods.
+`wait_start` returns a `waitId` immediately and releases the command queue. Pass an object as `target` and optionally select a component with `component`. To wait for a future hierarchy path or a missing intermediate object, pass `tolerate_missing=true`. Alternatively, pass `find_type` with a fully qualified Unity Component type. It waits for a live scene component and reports an error if there are multiple candidates at binding time.
+
+`field` accepts a dotted path such as `State.Score` through public instance fields and public getters without public setters. The path must end in a scalar. Methods and indexers are rejected. Use `op` and `timeout_ms` to set the comparison and budget. For `changed`, omit `value`. The first available value becomes `initialValue`, and a later different value matches. Boolean, text and enum members support `eq`, `ne` and `changed`. Use an enum name as the comparison value.
 
 Pass `capture_path` ending in `.png` to save Game View pixels during the same Editor update as the match. The path resolves under the authoring root and can overwrite an existing PNG. `capture_source=camera` renders a camera. `capture_source=screen` requires Play Mode and a verified fresh Game View frame. Optional `capture_width` and `capture_height` control the output dimensions. The result includes `matchedFrame`, `captureFrame`, `value` and the capture metadata.
+
+Use `pause=true` to pause Play Mode on the matching frame. When both capture and pause are requested, the Editor captures first and then pauses in the same update. The result includes `paused` and `pausedFrame`.
 
 Poll with `wait_status` and pass the ID as `wait_id`. The CLI returns the terminal result under `error.data` for `timed_out` (21), `cancelled` (22), `failed` or `interrupted` (20). Use `wait_cancel` to stop a pending wait. A domain reload interrupts pending waits and retains their terminal results in the current Editor session. The limit is 32 pending waits and 128 retained results.
 
 The command catalog advertises `effect` as `read_only`, `stateful`, `destructive`, or `unknown`. Unknown is the default for commands without an explicit declaration.
+
+### `editor_quit`
+
+Close the Editor after returning a structured reply. The default refusal lists dirty loaded scenes and the dirty open Prefab stage. Use `save=true` to save them to their existing paths, or `discard=true` to close without saving. A dirty untitled scene must be given a path before using save. In Play Mode, stop play before saving and quitting. A combined save and discard request is rejected.
+
+On success the result includes `quitting`, `exitCode`, `saved` and `discarded`. The process exits shortly afterward. With no explicit discard, newly dirty contents or a Play Mode transition cancel the pending exit. This command is unavailable inside batches.
 
 ### `editor_focus`
 Bring the Unity Editor window to the foreground.

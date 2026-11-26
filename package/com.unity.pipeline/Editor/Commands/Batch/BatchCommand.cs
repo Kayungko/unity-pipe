@@ -97,7 +97,7 @@ namespace Unity.Pipeline.Editor.Commands.Batch
         private static readonly HashSet<string> m_ExcludedCommands = new HashSet<string>(StringComparer.Ordinal)
         {
             "build", "switch_build_target",
-            "editor_play", "editor_stop", "editor_pause",
+            "editor_play", "editor_stop", "editor_pause", "editor_quit",
             "recompile", "eval", "eval_file", "run_script", "menu", "batch"
         };
 
