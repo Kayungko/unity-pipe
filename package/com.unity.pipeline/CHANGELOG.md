@@ -5,6 +5,10 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-2022.9] - Local candidate
+
+- Stop an active Profiler recording early and save the captured frames with `profiler_record_stop`. Repeat the command to retrieve the same save result.
+
 ## [0.6.0-2022.8] - Local candidate
 
 - Reuse a saved Profiler capture across frame ranking, sample paths and GC call stacks with an Editor-local session ID.

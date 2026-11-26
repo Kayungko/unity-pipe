@@ -207,12 +207,16 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 ```bash
 upipe exec profiler_record --set file=perf.data --set player_id=PLAYER_ID --set gc_callstacks=true --set confirm=true
 upipe exec profiler_record_status --json
+# 如需提前保存，在录制期间调用
+upipe exec profiler_record_stop --json
 upipe exec profiler_session --set file=perf.data --set confirm=true --json
 upipe exec profiler_summary --set session_id=SESSION_ID --set frame_budget_ms=16.67 --json
 upipe exec profiler_rank_frames --set session_id=SESSION_ID --set top=10 --json
 upipe exec profiler_frame_paths --set session_id=SESSION_ID --set frame=FRAME --json
 upipe exec profiler_gc_callstacks --set session_id=SESSION_ID --set frame=FRAME --json
 ```
+
+已有帧时，`profiler_record_stop` 保存到开始录制时指定的文件。重复调用返回同一份保存结果。首帧还未到达时，录制继续运行，可稍后再停止。`profiler_cancel` 结束录制并放弃保存。域重载会结束正在进行的录制。
 
 用 `profiler_session` 返回的 `sessionId` 替换示例中的 `SESSION_ID`，用 `slowFrames` 或排序结果中的 `frame` 查看热点。会话复用当前已加载的历史。切换捕获或外部替换历史后，覆盖已有历史需显式传入 `confirm=true`。域重载或重启后要重新打开会话。`profiler_close --set session_id=SESSION_ID` 可注销会话，Profiler 窗口保留当前历史。排序、热点和 GC 栈仍支持原有的 `file` 参数。
 
@@ -231,7 +235,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.8`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.9`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

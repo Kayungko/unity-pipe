@@ -139,7 +139,7 @@ namespace Unity.Pipeline.Editor.Commands.Batch
             "create_asset", "import_asset", "move_asset", "copy_asset", "rename_asset", "delete_asset",
             "create_folder", "set_import_settings", "write_text_file", "create_script",
             "capture_editor_window", "capture_editor_element", "capture_asset_preview", "wait_start", "wait_cancel",
-            "profiler_record", "profiler_cancel", "profiler_analyze", "profiler_rank_frames", "profiler_frame_paths", "profiler_gc_callstacks", "memory_snapshot",
+            "profiler_record", "profiler_record_stop", "profiler_cancel", "profiler_analyze", "profiler_rank_frames", "profiler_frame_paths", "profiler_gc_callstacks", "memory_snapshot",
             "profiler_session", "profiler_close", "profiler_summary",
             // Prefab ASSET writes (scene-side prefab ops — instantiate/unpack/revert overrides — are
             // Undo-tracked and stay batchable).

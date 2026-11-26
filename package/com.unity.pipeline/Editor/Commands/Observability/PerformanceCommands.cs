@@ -181,6 +181,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
 
         static Recording s_Recording;
         static object s_RecordResult = new { status = "idle" };
+        static bool s_RecordSaved;
         static bool s_SnapshotRunning;
         static object s_SnapshotResult = new { status = "idle" };
         static readonly Dictionary<string, CaptureSession> Sessions = new Dictionary<string, CaptureSession>(StringComparer.Ordinal);
@@ -199,6 +200,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
         sealed class Recording
         {
             public string Path;
+            public bool AllowOverwrite;
             public int FrameTarget;
             public double Deadline;
             public bool WasEnabled;
@@ -327,6 +329,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             s_Recording = new Recording
             {
                 Path = path,
+                AllowOverwrite = confirm,
                 FrameTarget = frames,
                 Deadline = EditorApplication.timeSinceStartup + 30,
                 WasEnabled = ProfilerDriver.enabled,
@@ -336,6 +339,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 WasMemoryEnabled = ProfilerDriver.IsAreaEnabled(ProfilerArea.Memory),
                 PreviousMemoryMode = gcCallstacks ? ProfilerDriver.memoryRecordMode : (ProfilerMemoryRecordMode?)null
             };
+            s_RecordSaved = false;
             try
             {
                 ProfilerDriver.enabled = false;
@@ -357,8 +361,9 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 s_RecordResult = new { status = "recording", target = playerId.HasValue ? $"player:{playerId.Value}" : "editor", frames };
                 return s_RecordResult;
             }
-            catch
+            catch (Exception ex)
             {
+                s_RecordResult = new { status = "failed", message = ex.Message };
                 RestoreProfiler();
                 throw;
             }
@@ -366,6 +371,23 @@ namespace Unity.Pipeline.Editor.Commands.Observability
 
         [CliCommand("profiler_record_status", "Read the current recording status or completed .data path.", MainThreadRequired = false, Tags = new[] { "observability/profiling" })]
         public static object RecordStatus() => System.Threading.Volatile.Read(ref s_RecordResult);
+
+        [CliCommand("profiler_record_stop", "Stop an active Pipeline recording and save the frames captured so far.", Effect = CommandEffect.Stateful, Tags = new[] { "observability/profiling" })]
+        public static object StopRecord()
+        {
+            var recording = s_Recording;
+            if (recording == null)
+            {
+                if (s_RecordSaved)
+                    return s_RecordResult;
+                throw new InvalidOperationException("No Pipeline Profiler recording is active.");
+            }
+
+            if (RecordedFrameCount() == 0)
+                throw new InvalidOperationException("No frames have arrived yet. The Profiler is still recording.");
+
+            return SaveRecording(recording);
+        }
 
         [CliCommand("profiler_cancel", "Cancel a Pipeline recording and restore the previous Profiler settings.", Tags = new[] { "observability/profiling" })]
         public static object CancelRecord()
@@ -378,20 +400,50 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             return s_RecordResult;
         }
 
+        static int RecordedFrameCount()
+        {
+            var first = ProfilerDriver.firstFrameIndex;
+            var last = ProfilerDriver.lastFrameIndex;
+            return first >= 0 && last >= first ? last - first + 1 : 0;
+        }
+
         static void UpdateRecording()
         {
             var recording = s_Recording;
-            var first = ProfilerDriver.firstFrameIndex;
-            var last = ProfilerDriver.lastFrameIndex;
-            var count = first >= 0 && last >= first ? last - first + 1 : 0;
-            if (count < recording.FrameTarget && EditorApplication.timeSinceStartup < recording.Deadline)
+            // Unity may have copied its update delegates before a stop command removed ours.
+            if (recording == null)
                 return;
+            var count = RecordedFrameCount();
+            if (count < recording.FrameTarget)
+            {
+                if (EditorApplication.timeSinceStartup >= recording.Deadline)
+                {
+                    s_RecordResult = new { status = "failed", message = $"Only {count} frames arrived within 30 seconds." };
+                    RestoreProfiler();
+                }
+                return;
+            }
 
             try
             {
-                if (count < recording.FrameTarget)
-                    throw new InvalidOperationException($"Only {count} frames arrived within 30 seconds.");
+                SaveRecording(recording);
+            }
+            catch
+            {
+                // SaveRecording publishes the failure for profiler_record_status.
+            }
+        }
+
+        static object SaveRecording(Recording recording)
+        {
+            try
+            {
                 ProfilerDriver.enabled = false;
+                var first = ProfilerDriver.firstFrameIndex;
+                var last = ProfilerDriver.lastFrameIndex;
+                if (first < 0 || last < first)
+                    throw new InvalidOperationException("The Profiler has no captured frames to save.");
+
                 Directory.CreateDirectory(Path.GetDirectoryName(recording.Path));
                 var staging = Path.Combine(Path.GetDirectoryName(recording.Path), $".{Guid.NewGuid():N}.data");
                 try
@@ -399,7 +451,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                     ProfilerDriver.SaveProfile(staging);
                     if (!File.Exists(staging) || new FileInfo(staging).Length == 0)
                         throw new IOException("Unity did not write the Profiler capture.");
-                    if (File.Exists(recording.Path))
+                    if (recording.AllowOverwrite && File.Exists(recording.Path))
                         File.Replace(staging, recording.Path, null);
                     else
                         File.Move(staging, recording.Path);
@@ -409,11 +461,14 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                     if (File.Exists(staging))
                         File.Delete(staging);
                 }
-                s_RecordResult = new { status = "completed", path = recording.Path, frames = count, firstFrame = first, lastFrame = last };
+                s_RecordResult = new { status = "completed", path = recording.Path, frames = last - first + 1, firstFrame = first, lastFrame = last };
+                s_RecordSaved = true;
+                return s_RecordResult;
             }
             catch (Exception ex)
             {
                 s_RecordResult = new { status = "failed", message = ex.Message };
+                throw;
             }
             finally
             {
