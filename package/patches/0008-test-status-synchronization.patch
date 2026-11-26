@@ -1,0 +1,68 @@
+diff --git a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+index e1ca70a..3995f17 100644
+--- a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
++++ b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using System.IO;
+@@ -25,6 +26,7 @@ namespace Unity.Pipeline.Editor.Testing
+     {
+         private const string TestRequestFile = "Temp/pipeline_test_request.json";
+         private const string TestStatusFile = "Temp/pipeline_test_status.json";
++        private static readonly object s_TestStatusLock = new object();
+
+         private static TestRunnerApi m_ActiveApi;
+         private static TestResultCollector m_ActiveCollector;
+@@ -511,7 +513,7 @@ namespace Unity.Pipeline.Editor.Testing
+                 try
+                 {
+                     var existing = JsonConvert.DeserializeObject<Dictionary<string, object>>(
+-                        File.ReadAllText(TestStatusFile));
++                        ReadStatusFile());
+                     object stObj = null;
+                     var hasStatus = existing != null && existing.TryGetValue("status", out stObj);
+                     if (!hasStatus ||
+@@ -792,7 +794,9 @@ namespace Unity.Pipeline.Editor.Testing
+         {
+             try
+             {
+-                File.WriteAllText(TestStatusFile, JsonConvert.SerializeObject(data, Formatting.Indented));
++                var json = JsonConvert.SerializeObject(data, Formatting.Indented);
++                lock (s_TestStatusLock)
++                    File.WriteAllText(TestStatusFile, json);
+             }
+             catch (Exception ex)
+             {
+@@ -800,6 +804,12 @@ namespace Unity.Pipeline.Editor.Testing
+             }
+         }
+
++        private static string ReadStatusFile()
++        {
++            lock (s_TestStatusLock)
++                return File.Exists(TestStatusFile) ? File.ReadAllText(TestStatusFile) : null;
++        }
++
+         private static void CleanupRequestFile()
+         {
+             try { if (File.Exists(TestRequestFile)) File.Delete(TestRequestFile); } catch { }
+@@ -811,8 +821,9 @@ namespace Unity.Pipeline.Editor.Testing
+         /// <returns>The status file's JSON contents, "running" if a request is pending, or null if there's no run.</returns>
+         public static string GetTestStatus()
+         {
+-            if (File.Exists(TestStatusFile))
+-                return File.ReadAllText(TestStatusFile);
++            var status = ReadStatusFile();
++            if (status != null)
++                return status;
+             if (File.Exists(TestRequestFile))
+                 return JsonConvert.SerializeObject(new { status = "running" });
+             return null;
+@@ -865,4 +876,4 @@ namespace Unity.Pipeline.Editor.Testing
+         }
+     }
+ }
+-
++#endif
