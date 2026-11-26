@@ -81,6 +81,16 @@ func Main(argv []string) int {
 	rest := reorderForFlags(preFS, global.Args()[1:])
 	_ = preFS.Parse(rest)
 
+	if subOpts.PlayerPath != "" {
+		if subOpts.ProjectPath != "" {
+			return render(&protocol.UpipeError{Code: protocol.ExitUsage, Kind: "Usage", Message: "choose either --player-path or --project-path"}, &subOpts)
+		}
+		switch sub.Name {
+		case "status", "commands", "exec":
+		default:
+			return render(&protocol.UpipeError{Code: protocol.ExitUsage, Kind: "Usage", Message: "--player-path is supported with status, commands, and exec"}, &subOpts)
+		}
+	}
 	if !sub.NoRuntime {
 		r, err := newRuntime(&subOpts)
 		if err != nil {
@@ -157,6 +167,15 @@ func lookup(name string) (commands.SubCommand, bool) {
 
 // newRuntime resolves the project, builds the transport and client stack.
 func newRuntime(opts *options.Options) (*commands.Runtime, error) {
+	if opts.PlayerPath != "" {
+		source, err := commands.PlayerPortFileSource(opts.PlayerPath)
+		if err != nil {
+			return nil, err
+		}
+		tr := transport.New()
+		client := &protocol.PipelineClient{Transport: tr, Source: source}
+		return &commands.Runtime{Opts: opts, Transport: tr, Client: client}, nil
+	}
 	project, err := commands.ResolveProjectPath(opts.ProjectPath)
 	if err != nil {
 		return nil, err

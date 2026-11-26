@@ -100,6 +100,29 @@ func portOf(url string) string {
 	return url[strings.LastIndex(url, ":")+1:]
 }
 
+func TestExplicitPlayerDescriptor(t *testing.T) {
+	m := newMockEditor(t)
+	player := t.TempDir()
+	file := filepath.Join(player, ".unity-pipeline-runtime-port")
+	body := "\xef\xbb\xbf" + `{"pid":42,"port":` + portOf(m.srv.URL) + `,"evalToken":"` + m.token + `"}`
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, env := runCLI(t, "--json", "status", "--player-path", player)
+	if code != 0 {
+		t.Fatalf("exit=%d env=%v", code, env)
+	}
+	data := env["data"].(map[string]any)
+	instance := data["instance"].(map[string]any)
+	if instance["mode"] != "player" || instance["pid"] != float64(42) || instance["evalToken"] != nil || data["editor"] != nil {
+		t.Fatalf("unexpected Player status: %v", data)
+	}
+	code, _ = runCLI(t, "--json", "--player-path", player, "--project-path", m.project, "status")
+	if code != protocol.ExitUsage {
+		t.Fatalf("ambiguous instance options returned %d", code)
+	}
+}
+
 // runCLI invokes cli.Main capturing stdout; returns exit code + decoded envelope.
 func runCLI(t *testing.T, args ...string) (int, map[string]any) {
 	t.Helper()

@@ -31,7 +31,7 @@ func StatusCommand() SubCommand {
 				return nil, err
 			}
 			var editor *protocol.ExecResponse
-			if protocol.ExtractStatus(server) != "blocked_by_dialog" {
+			if desc.Mode != "player" && protocol.ExtractStatus(server) != "blocked_by_dialog" {
 				editor, err = rt.Client.EditorStatus()
 				if err != nil {
 					return nil, err

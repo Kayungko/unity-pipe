@@ -194,6 +194,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             public int PreviousTarget;
             public bool WasCpuEnabled;
             public bool WasMemoryEnabled;
+            public ProfilerMemoryRecordMode? PreviousMemoryMode;
         }
 
         static ProfilerCaptureCommands()
@@ -205,11 +206,14 @@ namespace Unity.Pipeline.Editor.Commands.Observability
         [CliCommand("profiler_targets", "List local Editor and discovered Unity Profiler targets.", Tags = new[] { "observability/profiling" })]
         public static object Targets()
         {
+            var current = ProfilerDriver.connectedProfiler;
+            var players = ProfilerDriver.GetAvailableProfilers().Where(id => id != EditorTargetId && ProfilerDriver.IsIdentifierConnectable(id));
+            if (!ProfilerDriver.profileEditor && current != EditorTargetId)
+                players = players.Append(current).Distinct();
             return new
             {
                 editor = new { current = ProfilerDriver.profileEditor },
-                players = ProfilerDriver.GetAvailableProfilers().Where(id => id != EditorTargetId && ProfilerDriver.IsIdentifierConnectable(id))
-                    .Select(id => new { id, name = ProfilerDriver.GetConnectionIdentifier(id), current = !ProfilerDriver.profileEditor && id == ProfilerDriver.connectedProfiler }).ToArray()
+                players = players.Select(id => new { id, name = ProfilerDriver.GetConnectionIdentifier(id), current = !ProfilerDriver.profileEditor && id == current }).ToArray()
             };
         }
 
@@ -218,7 +222,8 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             [CliArg("file", "File name ending in .data under Library/Pipeline/Profiles.", Required = true)] string file,
             [CliArg("frames", "Number of frames to record, 3 through 200.")] int frames = 30,
             [CliArg("player_id", "Target ID from profiler_targets. Omit for the Editor.")] int? playerId = null,
-            [CliArg("confirm", "Allow replacing the Editor Profiler's current recording/history and existing output.")] bool confirm = false)
+            [CliArg("confirm", "Allow replacing the Editor Profiler's current recording/history and existing output.")] bool confirm = false,
+            [CliArg("gc_callstacks", "Record call stacks for GC.Alloc samples. Adds profiling overhead.")] bool gcCallstacks = false)
         {
             RequireIdle();
             if (frames < 3 || frames > 200)
@@ -226,8 +231,9 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             var path = ProfilePath(file, ".data");
             if (!confirm && (ProfilerDriver.enabled || ProfilerDriver.lastFrameIndex >= 0 || File.Exists(path)))
                 throw new InvalidOperationException("Pass confirm=true to replace Profiler history or an existing capture.");
-            if (playerId.HasValue && (playerId.Value == EditorTargetId || !ProfilerDriver.GetAvailableProfilers().Contains(playerId.Value) ||
-                !ProfilerDriver.IsIdentifierConnectable(playerId.Value)))
+            var alreadyAttached = playerId.HasValue && !ProfilerDriver.profileEditor && playerId.Value == ProfilerDriver.connectedProfiler;
+            if (playerId.HasValue && (playerId.Value == EditorTargetId || (!alreadyAttached &&
+                (!ProfilerDriver.GetAvailableProfilers().Contains(playerId.Value) || !ProfilerDriver.IsIdentifierConnectable(playerId.Value)))))
                 throw new ArgumentException("The selected Player is no longer available. Refresh profiler_targets.");
 
             s_Recording = new Recording
@@ -239,13 +245,15 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 WasProfilingEditor = ProfilerDriver.profileEditor,
                 PreviousTarget = ProfilerDriver.connectedProfiler,
                 WasCpuEnabled = ProfilerDriver.IsAreaEnabled(ProfilerArea.CPU),
-                WasMemoryEnabled = ProfilerDriver.IsAreaEnabled(ProfilerArea.Memory)
+                WasMemoryEnabled = ProfilerDriver.IsAreaEnabled(ProfilerArea.Memory),
+                PreviousMemoryMode = gcCallstacks ? ProfilerDriver.memoryRecordMode : (ProfilerMemoryRecordMode?)null
             };
             try
             {
                 ProfilerDriver.enabled = false;
-                ProfilerDriver.profileEditor = !playerId.HasValue;
-                if (playerId.HasValue)
+                if (ProfilerDriver.profileEditor == playerId.HasValue)
+                    ProfilerDriver.profileEditor = !playerId.HasValue;
+                if (playerId.HasValue && !alreadyAttached)
                 {
                     ProfilerDriver.connectedProfiler = playerId.Value;
                     if (ProfilerDriver.connectedProfiler != playerId.Value)
@@ -253,6 +261,8 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 }
                 ProfilerDriver.SetAreaEnabled(ProfilerArea.CPU, true);
                 ProfilerDriver.SetAreaEnabled(ProfilerArea.Memory, true);
+                if (gcCallstacks)
+                    ProfilerDriver.memoryRecordMode |= ProfilerMemoryRecordMode.GCAlloc;
                 ProfilerDriver.ClearAllFrames();
                 ProfilerDriver.enabled = true;
                 EditorApplication.update += UpdateRecording;
@@ -333,9 +343,12 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             ProfilerDriver.enabled = false;
             if (recording.PreviousTarget != ProfilerDriver.connectedProfiler)
                 ProfilerDriver.connectedProfiler = recording.PreviousTarget;
-            ProfilerDriver.profileEditor = recording.WasProfilingEditor;
+            if (ProfilerDriver.profileEditor != recording.WasProfilingEditor)
+                ProfilerDriver.profileEditor = recording.WasProfilingEditor;
             ProfilerDriver.SetAreaEnabled(ProfilerArea.CPU, recording.WasCpuEnabled);
             ProfilerDriver.SetAreaEnabled(ProfilerArea.Memory, recording.WasMemoryEnabled);
+            if (recording.PreviousMemoryMode.HasValue)
+                ProfilerDriver.memoryRecordMode = recording.PreviousMemoryMode.Value;
             ProfilerDriver.enabled = recording.WasEnabled;
         }
 
@@ -348,16 +361,9 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             [CliArg("top", "Maximum number of markers to return, 1 through 50.")] int top = 15,
             [CliArg("confirm", "Allow replacing existing Profiler history with the file.")] bool confirm = false)
         {
-            RequireIdle();
-            if (ProfilerDriver.enabled)
-                throw new InvalidOperationException("Stop the active Profiler recording before loading a capture.");
-            if (ProfilerDriver.lastFrameIndex >= 0 && !confirm)
-                throw new InvalidOperationException("Pass confirm=true to replace existing Profiler history.");
             if (maxFrames < 1 || maxFrames > 300 || top < 1 || top > 50 || thread < 0)
                 throw new ArgumentException("Use 1–300 frames, 1–50 markers and a non-negative thread index.");
-            var path = ProfilePath(file, ".data");
-            if (!File.Exists(path) || !ProfilerDriver.LoadProfile(path, false))
-                throw new IOException($"Unity could not open '{file}' as a Profiler capture.");
+            LoadCapture(file, confirm);
 
             var markers = new Dictionary<string, MarkerTotals>(StringComparer.Ordinal);
             var frames = new List<object>();
@@ -376,8 +382,7 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 {
                     if (!data.valid)
                         continue;
-                    var gcMarker = data.GetMarkerId("GC Allocated In Frame");
-                    long? gcBytes = gcMarker >= 0 ? Math.Max(0, data.GetCounterValueAsLong(gcMarker)) : (long?)null;
+                    var gcBytes = ReadGcBytes(data, requireCounterSample: false);
                     if (gcBytes.HasValue)
                     {
                         gcFrames++;
@@ -394,17 +399,9 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                         if (!markers.TryGetValue(name, out var sum))
                             markers.Add(name, sum = new MarkerTotals());
                         var inclusive = data.GetSampleTimeMs(sample);
-                        var self = inclusive;
-                        var child = sample + 1;
-                        var children = data.GetSampleChildrenCount(sample);
-                        for (var n = 0; n < children && child < data.sampleCount; n++)
-                        {
-                            self -= data.GetSampleTimeMs(child);
-                            child += 1 + data.GetSampleChildrenCountRecursive(child);
-                        }
                         sum.Calls++;
                         sum.TotalMs += inclusive;
-                        sum.SelfMs += Math.Max(0, self);
+                        sum.SelfMs += SampleSelfTime(data, sample);
                     }
                 }
             }
@@ -419,6 +416,219 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 hotspots = markers.OrderByDescending(pair => pair.Value.SelfMs).ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(top).Select(pair =>
                     new { marker = pair.Key, calls = pair.Value.Calls, selfMs = pair.Value.SelfMs, totalMs = pair.Value.TotalMs }).ToArray()
             };
+        }
+
+        [CliCommand("profiler_rank_frames", "Rank frames in an offline capture by frame duration or GC allocation.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object RankFrames(
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.", Required = true)] string file,
+            [CliArg("metric", "duration_ms or gc_bytes (recorded GC.Alloc samples across threads).")] string metric = "duration_ms",
+            [CliArg("first_frame", "First frame to scan.")] int? firstFrame = null,
+            [CliArg("max_frames", "Number of frames to scan (1–300).")] int maxFrames = 120,
+            [CliArg("top", "Number of ranked frames to return (1–50).")] int top = 10,
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+        {
+            if (metric != "duration_ms" && metric != "gc_bytes")
+                throw new ArgumentException("Use duration_ms or gc_bytes.", nameof(metric));
+            if (maxFrames < 1 || maxFrames > 300 || top < 1 || top > 50)
+                throw new ArgumentException("Use 1–300 frames and 1–50 ranked results.");
+            LoadCapture(file, confirm);
+            var first = firstFrame ?? ProfilerDriver.firstFrameIndex;
+            ValidateFrame(first);
+            var last = ProfilerDriver.lastFrameIndex;
+            var end = first + Math.Min(last - first, maxFrames - 1);
+            var rows = new List<(int frame, double ms, long? gcBytes)>();
+            var validFrames = 0;
+            for (var frame = first; frame <= end; frame++)
+            {
+                using (var data = ProfilerDriver.GetRawFrameDataView(frame, 0))
+                {
+                    if (!data.valid)
+                        continue;
+                    validFrames++;
+                    var gcBytes = metric == "gc_bytes" ? SumGcSampleBytes(frame, data) : ReadGcBytes(data);
+                    if (metric == "duration_ms" || gcBytes.HasValue)
+                        rows.Add((frame, data.frameTimeMs, gcBytes));
+                }
+            }
+
+            var ordered = metric == "gc_bytes"
+                ? rows.OrderByDescending(row => row.gcBytes)
+                : rows.OrderByDescending(row => row.ms);
+            return new
+            {
+                metric, gcSource = metric == "gc_bytes" ? "allocation_samples_or_frame_counter" : "frame_counter",
+                firstFrame = first, lastFrame = end, validFrames, eligibleFrames = rows.Count,
+                truncated = end < last,
+                frames = ordered.ThenBy(row => row.frame).Take(top)
+                    .Select(row => new { row.frame, row.ms, row.gcBytes }).ToArray()
+            };
+        }
+
+        [CliCommand("profiler_frame_paths", "Rank sample instances by self time and return their recorded parent chains for one frame.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object FramePaths(
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.", Required = true)] string file,
+            [CliArg("frame", "Profiler frame index.", Required = true)] int frame,
+            [CliArg("thread", "Profiler thread index.")] int thread = 0,
+            [CliArg("top", "Maximum samples to return (1–50).")] int top = 10,
+            [CliArg("marker", "Optional exact sample marker name.")] string marker = null,
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+        {
+            if (top < 1 || top > 50 || thread < 0)
+                throw new ArgumentException("Use 1–50 samples and a non-negative thread index.");
+            LoadCapture(file, confirm);
+            ValidateFrame(frame);
+            using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
+            {
+                if (!data.valid)
+                    throw new ArgumentException("The requested thread is not present in this frame.", nameof(thread));
+                var samples = new List<(int index, string name, float inclusive, float self)>();
+                var parents = new int[data.sampleCount];
+                var ancestors = new Stack<(int index, int end)>();
+                for (var index = 0; index < data.sampleCount; index++)
+                {
+                    while (ancestors.Count > 0 && index >= ancestors.Peek().end)
+                        ancestors.Pop();
+                    parents[index] = ancestors.Count == 0 ? -1 : ancestors.Peek().index;
+                    var children = data.GetSampleChildrenCountRecursive(index);
+                    if (children > 0)
+                        ancestors.Push((index, index + children + 1));
+                    var name = data.GetSampleName(index);
+                    if (string.IsNullOrEmpty(marker) || name == marker)
+                        samples.Add((index, name, data.GetSampleTimeMs(index), SampleSelfTime(data, index)));
+                }
+                return new
+                {
+                    frame, threadIndex = thread, thread = data.threadName, ms = data.frameTimeMs,
+                    samples = samples.OrderByDescending(sample => sample.self).ThenBy(sample => sample.index).Take(top)
+                        .Select(sample => new
+                        {
+                            sampleIndex = sample.index, marker = sample.name, totalMs = sample.inclusive,
+                            selfMs = sample.self, path = SamplePath(data, parents, sample.index)
+                        }).ToArray()
+                };
+            }
+        }
+
+        static string[] SamplePath(UnityEditor.Profiling.RawFrameDataView data, int[] parents, int index)
+        {
+            var path = new Stack<string>();
+            for (var sample = index; sample >= 0; sample = parents[sample])
+                path.Push(data.GetSampleName(sample));
+            return path.ToArray();
+        }
+
+        [CliCommand("profiler_gc_callstacks", "Read recorded GC.Alloc call stacks for one frame and thread.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object GcCallstacks(
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.", Required = true)] string file,
+            [CliArg("frame", "Profiler frame index.", Required = true)] int frame,
+            [CliArg("thread", "Profiler thread index.")] int thread = 0,
+            [CliArg("limit", "Maximum allocation stacks to return (1–50).")] int limit = 20,
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+        {
+            if (thread < 0 || limit < 1 || limit > 50)
+                throw new ArgumentException("Use 1–50 stacks and a non-negative thread index.");
+            LoadCapture(file, confirm);
+            ValidateFrame(frame);
+            using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
+            {
+                if (!data.valid)
+                    throw new ArgumentException("The requested thread is not present in this frame.", nameof(thread));
+                var samples = new List<object>();
+                var addresses = new List<ulong>();
+                var allocations = 0;
+                var withCallstacks = 0;
+                for (var sample = 0; sample < data.sampleCount; sample++)
+                {
+                    if (data.GetSampleName(sample) != "GC.Alloc")
+                        continue;
+                    allocations++;
+                    addresses.Clear();
+                    data.GetSampleCallstack(sample, addresses);
+                    if (addresses.Count == 0)
+                        continue;
+                    withCallstacks++;
+                    if (samples.Count < limit)
+                    {
+                        var stack = addresses.Select(address =>
+                        {
+                            var info = data.ResolveMethodInfo(address);
+                            return new { address = $"0x{address:x}", method = string.IsNullOrEmpty(info.methodName) ? null : info.methodName };
+                        }).ToArray();
+                        samples.Add(new { sampleIndex = sample, bytes = GcSampleBytes(data, sample), stack });
+                    }
+                }
+                return new { frame, threadIndex = thread, thread = data.threadName, allocations, withCallstacks,
+                    truncated = withCallstacks > limit, samples };
+            }
+        }
+
+        static float SampleSelfTime(UnityEditor.Profiling.RawFrameDataView data, int sample)
+        {
+            var self = data.GetSampleTimeMs(sample);
+            var child = sample + 1;
+            var children = data.GetSampleChildrenCount(sample);
+            for (var n = 0; n < children && child < data.sampleCount; n++)
+            {
+                self -= data.GetSampleTimeMs(child);
+                child += 1 + data.GetSampleChildrenCountRecursive(child);
+            }
+            return Math.Max(0, self);
+        }
+
+        static long? ReadGcBytes(UnityEditor.Profiling.RawFrameDataView data, bool requireCounterSample = true)
+        {
+            var marker = data.GetMarkerId("GC Allocated In Frame");
+            return marker >= 0 && (!requireCounterSample || data.HasCounterValue(marker))
+                ? Math.Max(0, data.GetCounterValueAsLong(marker)) : (long?)null;
+        }
+
+        static long? GcSampleBytes(UnityEditor.Profiling.RawFrameDataView data, int sample)
+        {
+            return data.GetSampleMetadataCount(sample) > 0 ? data.GetSampleMetadataAsLong(sample, 0) : (long?)null;
+        }
+
+        static long? SumGcSampleBytes(int frame, UnityEditor.Profiling.RawFrameDataView mainThread)
+        {
+            var marker = mainThread.GetMarkerId("GC.Alloc");
+            if (marker < 0)
+                return ReadGcBytes(mainThread);
+            long total = 0;
+            for (var thread = 0; ; thread++)
+            {
+                using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
+                {
+                    if (!data.valid)
+                        break;
+                    for (var sample = 0; sample < data.sampleCount; sample++)
+                    {
+                        if (data.GetSampleMarkerId(sample) != marker)
+                            continue;
+                        var bytes = GcSampleBytes(data, sample);
+                        if (!bytes.HasValue)
+                            return null;
+                        total += bytes.Value;
+                    }
+                }
+            }
+            return total;
+        }
+
+        static void LoadCapture(string file, bool confirm)
+        {
+            RequireIdle();
+            if (ProfilerDriver.enabled)
+                throw new InvalidOperationException("Stop the active Profiler recording before loading a capture.");
+            if (ProfilerDriver.lastFrameIndex >= 0 && !confirm)
+                throw new InvalidOperationException("Pass confirm=true to replace existing Profiler history.");
+            var path = ProfilePath(file, ".data");
+            if (!File.Exists(path) || !ProfilerDriver.LoadProfile(path, false))
+                throw new IOException($"Unity could not open '{file}' as a Profiler capture.");
+        }
+
+        static void ValidateFrame(int frame)
+        {
+            if (frame < ProfilerDriver.firstFrameIndex || frame > ProfilerDriver.lastFrameIndex)
+                throw new ArgumentException("The requested frame is outside the capture.", nameof(frame));
         }
 
         sealed class MarkerTotals

@@ -1,13 +1,82 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
 using Unity.Pipeline;
 using Unity.Pipeline.Commands;
 using Unity.Pipeline.Runtime.Telemetry;
 using UnityEngine;
 using UnityEngine.Profiling;
+using Unity.Profiling.Memory;
 
 namespace Unity.Pipeline.Runtime.Commands
 {
+    static class PlayerMemorySnapshotCommands
+    {
+        static object s_Result = new { status = "idle" };
+        static bool s_Running;
+
+        [CliCommand("player_memory_snapshot", "Capture a .snap of this local development Player. Poll player_memory_snapshot_status.", RuntimeOnly = true, Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object Snapshot(
+            [CliArg("file", "File name ending in .snap in the Player's persistent Pipeline/Profiles folder.", Required = true)] string file,
+            [CliArg("confirm", "Allow capturing this Player's object and memory data.")] bool confirm = false)
+        {
+            if (!Debug.isDebugBuild || Application.isEditor || !confirm)
+                throw new InvalidOperationException("This command requires a development Player and confirm=true.");
+            if (s_Running)
+                throw new InvalidOperationException("A Player memory snapshot is already running.");
+            if (string.IsNullOrWhiteSpace(file) || file != Path.GetFileName(file) ||
+                file.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                !string.Equals(Path.GetExtension(file), ".snap", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Provide a file name ending in '.snap' without a directory.", nameof(file));
+
+            var folder = Path.Combine(Application.persistentDataPath, "Pipeline", "Profiles");
+            var path = Path.Combine(folder, file);
+            if (File.Exists(path))
+                throw new IOException("The snapshot file already exists. Choose a new file name.");
+            Directory.CreateDirectory(folder);
+            var staging = Path.Combine(folder, $".{Guid.NewGuid():N}.snap");
+            var buildGuid = Application.buildGUID;
+            s_Running = true;
+            s_Result = new { status = "capturing", path, target = "player", buildGuid };
+            try
+            {
+                MemoryProfiler.TakeSnapshot(staging, (_, success) =>
+                {
+                    try
+                    {
+                        var bytes = success && File.Exists(staging) ? new FileInfo(staging).Length : 0;
+                        if (bytes == 0)
+                            throw new IOException("Unity did not write the Player memory snapshot.");
+                        File.Move(staging, path);
+                        s_Result = new { status = "completed", path, bytes, target = "player", buildGuid };
+                    }
+                    catch (Exception ex)
+                    {
+                        s_Result = new { status = "failed", path, message = ex.Message, target = "player", buildGuid };
+                    }
+                    finally
+                    {
+                        s_Running = false;
+                        try { File.Delete(staging); }
+                        catch (IOException) { }
+                        catch (UnauthorizedAccessException) { }
+                    }
+                }, CaptureFlags.ManagedObjects | CaptureFlags.NativeObjects);
+            }
+            catch
+            {
+                s_Running = false;
+                s_Result = new { status = "failed", path, target = "player", buildGuid };
+                throw;
+            }
+            return s_Result;
+        }
+
+        [CliCommand("player_memory_snapshot_status", "Read the latest Player memory snapshot status.", MainThreadRequired = false, RuntimeOnly = true, Effect = CommandEffect.ReadOnly, Tags = new[] { "observability/profiling" })]
+        public static object Status() => Volatile.Read(ref s_Result);
+    }
+
     /// <summary>
     /// Runtime status information for Unity Player builds.
     /// Provides Player-appropriate status without Editor-specific APIs.

@@ -200,9 +200,32 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 
 未封装的服务端命令一律走 `exec` 直通——这正是薄客户端契约：**子命令只封装等待策略，其余零改动跟进**（完整退出码表与信封格式见 [架构设计](docs/ARCHITECTURE.md)）。
 
+### Profiler 排查
+
+在运行同版本 Editor 的工程根目录录制或读取 `Library/Pipeline/Profiles/` 下的 `.data`。用 `profiler_targets` 找到开发 Player 的 `player_id`，省略该参数时录制 Editor。也可以在 Unity Profiler 中先直接连接，再选用 `profiler_targets` 标记为 `current` 的 Player。
+
+```bash
+upipe exec profiler_record --set file=perf.data --set player_id=PLAYER_ID --set gc_callstacks=true --set confirm=true
+upipe exec profiler_record_status --json
+upipe exec profiler_rank_frames --set file=perf.data --set top=10 --set confirm=true --json
+upipe exec profiler_frame_paths --set file=perf.data --set frame=FRAME --set confirm=true --json
+upipe exec profiler_gc_callstacks --set file=perf.data --set frame=FRAME --set confirm=true --json
+```
+
+用排序返回的 `frame` 查看热点。用 `metric=gc_bytes` 按录到的分配字节排序。帧内标记链来自 Profiler 样本树，GC 调用栈来自录制时保存的堆栈，未解析的符号仍带有地址。加载录制文件会替换 Editor Profiler 历史。GC 调用栈需在录制时开启，会增加采样开销。
+
+本机内存快照要求构建 Development Player 时启用 Pipeline Runtime。启动后，`--player-path` 指向 Player 的工作目录。
+
+```bash
+upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot --set file=player.snap --set confirm=true --json
+upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
+```
+
+快照写入 Player 持久数据目录下的 `Pipeline/Profiles/`，完成回包包含完整路径及构建 GUID。
+
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.4`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.5`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

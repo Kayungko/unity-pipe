@@ -21,7 +21,7 @@ type InstanceDescriptor struct {
 	ProjectPath   string    `json:"projectPath"`
 	ProjectName   string    `json:"projectName"`
 	UnityVersion  string    `json:"unityVersion"`
-	Mode          string    `json:"mode"` // "editor" | "batchmode"
+	Mode          string    `json:"mode"` // "editor" | "batchmode" | "player"
 	StartedAt     time.Time `json:"startedAt"`
 	LastHeartbeat time.Time `json:"lastHeartbeat"`
 	EvalToken     string    `json:"evalToken"`

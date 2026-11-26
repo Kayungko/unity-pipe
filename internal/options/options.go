@@ -11,6 +11,7 @@ import (
 // Options is the shared runtime configuration of one invocation.
 type Options struct {
 	ProjectPath string        // explicit --project-path; empty = auto-detect from cwd
+	PlayerPath  string        // explicit --player-path; Player working directory
 	JSONOut     bool          // --json: single-envelope machine output on stdout
 	Timeout     time.Duration // --timeout: per-command budget (0 = default)
 }
@@ -28,6 +29,8 @@ const DefaultTimeout = 10 * time.Minute
 func Attach(fs *flag.FlagSet, o *Options) {
 	fs.StringVar(&o.ProjectPath, "project-path", o.ProjectPath,
 		"Unity project root (default: auto-detect by walking up from the current directory)")
+	fs.StringVar(&o.PlayerPath, "player-path", o.PlayerPath,
+		"working directory of a local development Player (with status, commands, or exec)")
 	fs.BoolVar(&o.JSONOut, "json", o.JSONOut, "machine-readable single-envelope JSON on stdout")
 	fs.DurationVar(&o.Timeout, "timeout", o.Timeout, "per-command budget (e.g. 30s, 2m)")
 }

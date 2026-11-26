@@ -5,6 +5,7 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,6 +42,31 @@ func PortFileSource(projectPath string) protocol.DescriptorSource {
 		}
 		return protocol.ParseDescriptor(data)
 	}
+}
+
+// PlayerPortFileSource reads the descriptor from the explicitly selected working
+// directory. A Player sometimes writes a UTF-8 BOM via Unity's runtime IO.
+func PlayerPortFileSource(workingDirectory string) (protocol.DescriptorSource, error) {
+	directory, err := filepath.Abs(workingDirectory)
+	if err != nil {
+		return nil, protocol.ErrNoInstance(fmt.Sprintf("invalid --player-path: %v", err))
+	}
+	path := filepath.Join(directory, ".unity-pipeline-runtime-port")
+	return func() (*protocol.InstanceDescriptor, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("no running Pipeline Player in %s (descriptor unreadable)", directory)
+		}
+		descriptor, err := protocol.ParseDescriptor(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}))
+		if err != nil {
+			return nil, err
+		}
+		if descriptor.Pid <= 0 || descriptor.EvalToken == "" {
+			return nil, fmt.Errorf("Player descriptor is missing its process or authentication details")
+		}
+		descriptor.Mode = "player"
+		return descriptor, nil
+	}, nil
 }
 
 // ResolveProjectPath picks the project root: an explicit --project-path wins;
