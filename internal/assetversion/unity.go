@@ -15,12 +15,13 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-var documentHeader = regexp.MustCompile(`(?m)^---[ \t]+!u!([0-9]+)[ \t]+&(-?[0-9]+)(?:[ \t]+stripped)?[ \t]*\r?$`)
+var documentHeader = regexp.MustCompile(`(?m)^---[ \t]+!u!([0-9]+)[ \t]+&(-?[0-9]+)([ \t]+stripped)?[ \t]*\r?$`)
 var pointerEscapes = strings.NewReplacer("~", "~0", "/", "~1")
 
 type document struct {
 	id, kind string
 	body     *yaml.Node
+	stripped bool
 }
 
 func parseUnity(data []byte) ([]document, error) {
@@ -47,7 +48,7 @@ func parseUnity(data []byte) ([]document, error) {
 		}
 		ids[id] = true
 		object := root.Content[0].Content
-		result = append(result, document{id, object[0].Value, object[1]})
+		result = append(result, document{id: id, kind: object[0].Value, body: object[1], stripped: header[6] != -1})
 	}
 	return result, nil
 }
@@ -335,13 +336,14 @@ type NodeChange struct {
 }
 
 type DiffResult struct {
-	From       Identity     `json:"from"`
-	To         Identity     `json:"to"`
-	FromPath   string       `json:"fromPath"`
-	ToPath     string       `json:"toPath"`
-	FromExists bool         `json:"fromExists"`
-	ToExists   bool         `json:"toExists"`
-	Nodes      []NodeChange `json:"nodes"`
+	From       Identity       `json:"from"`
+	To         Identity       `json:"to"`
+	FromPath   string         `json:"fromPath"`
+	ToPath     string         `json:"toPath"`
+	FromExists bool           `json:"fromExists"`
+	ToExists   bool           `json:"toExists"`
+	Nodes      []NodeChange   `json:"nodes"`
+	Inherited  *InheritedDiff `json:"inherited,omitempty"`
 }
 
 func ValidUnityPath(name string) bool {
@@ -350,6 +352,14 @@ func ValidUnityPath(name string) bool {
 }
 
 func Diff(ctx context.Context, before, after *Version, oldPath, newPath string) (DiffResult, error) {
+	return diff(ctx, before, after, oldPath, newPath, false)
+}
+
+func DiffWithInheritance(ctx context.Context, before, after *Version, oldPath, newPath string) (DiffResult, error) {
+	return diff(ctx, before, after, oldPath, newPath, true)
+}
+
+func diff(ctx context.Context, before, after *Version, oldPath, newPath string, includeInherited bool) (DiffResult, error) {
 	result := DiffResult{From: before.Identity, To: after.Identity, FromPath: oldPath, ToPath: newPath, Nodes: []NodeChange{}}
 	oldData, oldExists, err := before.readFile(ctx, oldPath)
 	if err != nil {
@@ -371,21 +381,25 @@ func Diff(ctx context.Context, before, after *Version, oldPath, newPath string) 
 	if err != nil {
 		return result, err
 	}
-	load := func(data []byte, exists bool, index GuidIndex) ([]*nodeGroup, error) {
+	load := func(data []byte, exists bool) ([]document, error) {
 		if !exists {
 			return nil, nil
 		}
-		docs, err := parseUnity(data)
-		if err != nil {
-			return nil, err
-		}
-		return groupUnity(docs, index)
+		return parseUnity(data)
 	}
-	oldGroups, err := load(oldData, oldExists, oldIndex)
+	oldDocs, err := load(oldData, oldExists)
 	if err != nil {
 		return result, fmt.Errorf("%s: %w", oldPath, err)
 	}
-	newGroups, err := load(newData, newExists, newIndex)
+	newDocs, err := load(newData, newExists)
+	if err != nil {
+		return result, fmt.Errorf("%s: %w", newPath, err)
+	}
+	oldGroups, err := groupUnity(oldDocs, oldIndex)
+	if err != nil {
+		return result, fmt.Errorf("%s: %w", oldPath, err)
+	}
+	newGroups, err := groupUnity(newDocs, newIndex)
 	if err != nil {
 		return result, fmt.Errorf("%s: %w", newPath, err)
 	}
@@ -413,6 +427,20 @@ func Diff(ctx context.Context, before, after *Version, oldPath, newPath string) 
 		if diff.Change != "modified" || len(diff.Components) != 0 || old.Path != new.Path {
 			result.Nodes = append(result.Nodes, diff)
 		}
+	}
+	if includeInherited {
+		oldSources, err := inheritedSources(ctx, before, oldIndex, oldDocs)
+		if err != nil {
+			return result, fmt.Errorf("%s: %w", oldPath, err)
+		}
+		newSources, err := inheritedSources(ctx, after, newIndex, newDocs)
+		if err != nil {
+			return result, fmt.Errorf("%s: %w", newPath, err)
+		}
+		result.Inherited = compareInherited(oldSources, newSources)
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
 	return result, nil
 }
@@ -465,6 +493,12 @@ func diffComponent(before, after document, a, b GuidIndex) (ComponentChange, err
 			return result, err
 		}
 	}
+	result.Fields = compareFields(oldFields, newFields)
+	return result, nil
+}
+
+func compareFields(oldFields, newFields map[string]any) []FieldChange {
+	result := []FieldChange{}
 	keys := make([]string, 0, len(oldFields)+len(newFields))
 	for field := range oldFields {
 		keys = append(keys, field)
@@ -486,7 +520,7 @@ func diffComponent(before, after document, a, b GuidIndex) (ComponentChange, err
 		if right {
 			change.After = &FieldValue{new}
 		}
-		result.Fields = append(result.Fields, change)
+		result = append(result, change)
 	}
-	return result, nil
+	return result
 }

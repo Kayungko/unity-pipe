@@ -25,26 +25,11 @@ MeshRenderer:
   - {fileID: 2100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 2}
   - {fileID: 2100000, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 2}
 `
-	version := func(revision string, contents map[string]string) *Version {
-		paths := make(map[string]file)
-		for name := range contents {
-			paths[name] = file{name: name}
-		}
-		return &Version{Identity: Identity{"git", revision}, files: paths,
-			read: func(_ context.Context, files []file, consume func(file, []byte) error) error {
-				for _, file := range files {
-					if err := consume(file, []byte(contents[file.name])); err != nil {
-						return err
-					}
-				}
-				return nil
-			}}
-	}
-	before := version("old", map[string]string{
+	before := fixtureVersion("old", map[string]string{
 		prefab: yamlText, "Assets/Keep.mat": "", "Assets/Keep.mat.meta": "guid: " + keep,
 		"Assets/Lost.mat": "", "Assets/Lost.mat.meta": "guid: " + lost,
 	})
-	after := version("new", map[string]string{
+	after := fixtureVersion("new", map[string]string{
 		prefab: yamlText, "Assets/Moved/Keep.mat": "", "Assets/Moved/Keep.mat.meta": "guid: " + keep,
 	})
 	diff, err := Diff(context.Background(), before, after, prefab, prefab)
@@ -64,4 +49,20 @@ MeshRenderer:
 		dropped.Asset.GUID != lost || dropped.Asset.Status != "unresolved" {
 		t.Fatalf("moved = %+v; dropped = %+v", moved.Asset, dropped.Asset)
 	}
+}
+
+func fixtureVersion(revision string, contents map[string]string) *Version {
+	paths := make(map[string]file)
+	for name := range contents {
+		paths[name] = file{name: name}
+	}
+	return &Version{Identity: Identity{"git", revision}, files: paths,
+		read: func(_ context.Context, files []file, consume func(file, []byte) error) error {
+			for _, file := range files {
+				if err := consume(file, []byte(contents[file.name])); err != nil {
+					return err
+				}
+			}
+			return nil
+		}}
 }

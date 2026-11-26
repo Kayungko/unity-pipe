@@ -136,6 +136,7 @@ func AssetDiffCommand() SubCommand {
 			from := fs.String("from", "", "older Git revision or submitted P4 changelist")
 			to := fs.String("to", "", "newer Git revision or submitted P4 changelist")
 			toPath := fs.String("to-path", "", "path in the newer snapshot if the asset itself moved")
+			includeInherited := fs.Bool("include-inherited", false, "compare effective fields inherited from nested Prefab sources")
 			source := attachAssetSource(fs)
 			attachShared(fs, rt.Opts)
 			paths, err := parseArgs(fs, args)
@@ -164,7 +165,11 @@ func AssetDiffCommand() SubCommand {
 			if err != nil {
 				return nil, assetError(ctx, err)
 			}
-			diff, err := assetversion.Diff(ctx, before, after, paths[0], *toPath)
+			compare := assetversion.Diff
+			if *includeInherited {
+				compare = assetversion.DiffWithInheritance
+			}
+			diff, err := compare(ctx, before, after, paths[0], *toPath)
 			if err != nil {
 				return nil, assetError(ctx, err)
 			}

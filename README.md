@@ -165,6 +165,7 @@ upipe commands                                      # 浏览当前编辑器支�
 ```powershell
 upipe asset-guid --at REV GUID --json
 upipe asset-diff --from OLD --to NEW Assets/UI/Screen.prefab --json
+upipe asset-diff --include-inherited --from OLD --to NEW Assets/UI/Screen.prefab --json
 ```
 
 P4 用已提交的数字 changelist 作为 `--at`、`--from` 或 `--to`。两个命令都支持以下读取参数。P4 Suite 负责认证和路径编码。
@@ -176,6 +177,8 @@ upipe asset-guid --at CL GUID --p4-root //depot/Project --p4-ops PATH_TO_P4_OPS_
 GUID 解析范围为选定版本中纳管的 `Assets/` 和 `Packages/`。报告区分已解析、未解析、重复 GUID、只有元数据的资源以及 Unity 内建引用。未纳管的注册表包引用可能无法解析。
 
 差异支持 Unity 文本序列化的 `.prefab` 和 `.unity`，以类型和本地 File ID 配对节点及组件。同名兄弟节点按层级顺序标记，字段使用 JSON Pointer。嵌套 Prefab 实例以源资产名标识，实例的序列化覆盖和引用在实例下显示。资源移动会展示两边不同的路径，引用无法解析时保留原 GUID 和 File ID。资产本身改名可用 `--to-path` 指定新路径。
+
+`--include-inherited` 递归读取两侧版本各自的源 Prefab，先应用内层覆盖，再应用外层覆盖。在额外的 `data.inherited.sources` 中，每条记录列出实例 File ID 链、源资产在两侧的状态和生效后的节点、组件、字段差异。源缺失时保留 GUID，无法重建的覆盖（例如数组扩容）会列入 `issues`。
 
 输入错误返回 `2`，版本读取或格式失败返回 `20`，读取超时返回 `21`。差异和未解析 GUID 是正常的查询结果，退出码为 `0`。
 
