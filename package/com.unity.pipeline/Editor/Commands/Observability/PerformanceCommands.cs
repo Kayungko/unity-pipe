@@ -6,6 +6,8 @@ using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using Unity.Pipeline.Commands;
+using Unity.Profiling;
+using Unity.Profiling.LowLevel;
 using UnityEditor;
 using UnityEditor.Profiling;
 using UnityEditorInternal;
@@ -964,6 +966,168 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                 budget = new { frameBudgetMs, framesOverBudget = overBudget, percentOverBudget = 100.0 * overBudget / rows.Count },
                 slowFrames = ranked.Take(top).Select(row => new { row.frame, row.ms, row.gcBytes, overBudget = row.ms > frameBudgetMs }).ToArray()
             };
+        }
+
+        sealed class CounterSeries
+        {
+            public readonly Dictionary<int, IComparable> Samples = new Dictionary<int, IComparable>();
+
+            public object Statistics()
+            {
+                var sorted = Samples.Values.OrderBy(value => value).ToArray();
+                if (sorted.Length == 0)
+                    return null;
+
+                return new
+                {
+                    min = sorted[0], p25 = Percentile(sorted, 0.25), median = Percentile(sorted, 0.5),
+                    p75 = Percentile(sorted, 0.75), p95 = Percentile(sorted, 0.95), max = sorted[sorted.Length - 1],
+                    mean = sorted.Sum(value => Convert.ToDouble(value, CultureInfo.InvariantCulture) / sorted.Length)
+                };
+            }
+        }
+
+        [CliCommand("profiler_counters", "List recorded non-GPU counters or read their statistics and optional frame values.",
+            Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object ReadCounters(
+            [CliArg("session_id", "Analysis session ID.", Required = true)] string sessionId,
+            [CliArg("counters", "Exact counter names or Category/Name selectors. Omit to list the recorded counters.")] string[] counters = null,
+            [CliArg("first_frame", "First frame in the range. Defaults to the first captured frame.")] int? firstFrame = null,
+            [CliArg("last_frame", "Last frame in the range. Defaults to the last captured frame.")] int? lastFrame = null,
+            [CliArg("per_frame", "Include the raw value and availability on each selected frame.")] bool perFrame = false,
+            [CliArg("confirm", "Allow switching captures and replacing existing Profiler history.")] bool confirm = false)
+        {
+            var selectors = (counters ?? Array.Empty<string>()).Distinct(StringComparer.Ordinal).ToArray();
+            if (selectors.Any(string.IsNullOrWhiteSpace))
+                throw new ArgumentException("Use non-empty counter names or Category/Name selectors.", nameof(counters));
+
+            EnsureResident(GetSession(sessionId), confirm);
+            var first = firstFrame ?? ProfilerDriver.firstFrameIndex;
+            var last = lastFrame ?? ProfilerDriver.lastFrameIndex;
+            ValidateFrame(first);
+            ValidateFrame(last);
+            if (last < first || last - first >= 300)
+                throw new ArgumentException("Select an inclusive range of 1–300 frames.");
+
+            var requested = new HashSet<string>(selectors, StringComparer.Ordinal);
+            var matched = new HashSet<string>(StringComparer.Ordinal);
+            var series = new Dictionary<(string category, string name, ProfilerMarkerDataType type, ProfilerMarkerDataUnit unit), CounterSeries>();
+            var markers = new List<FrameDataView.MarkerInfo>();
+            for (var frame = first; frame <= last; frame++)
+            {
+                using (var data = ProfilerDriver.GetRawFrameDataView(frame, 0))
+                {
+                    if (!data.valid)
+                        continue;
+
+                    markers.Clear();
+                    data.GetMarkers(markers);
+                    foreach (var marker in markers)
+                    {
+                        if ((marker.flags & MarkerFlags.Counter) == 0)
+                            continue;
+
+                        var category = data.GetCategoryInfo(marker.category).name;
+                        if ((marker.flags & MarkerFlags.SampleGPU) != 0 ||
+                            category?.IndexOf("GPU", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            marker.name.IndexOf("GPU", StringComparison.OrdinalIgnoreCase) >= 0)
+                            continue;
+
+                        var qualified = $"{category}/{marker.name}";
+                        var nameSelected = requested.Contains(marker.name);
+                        var categorySelected = requested.Contains(qualified);
+                        if (selectors.Length != 0 && !nameSelected && !categorySelected)
+                            continue;
+
+                        var metadata = marker.metadataInfo;
+                        if (metadata == null || metadata.Length != 1)
+                            continue;
+
+                        var hasSample = data.HasCounterValue(marker.id);
+                        if (selectors.Length == 0 && !hasSample)
+                            continue;
+                        if (nameSelected)
+                            matched.Add(marker.name);
+                        if (categorySelected)
+                            matched.Add(qualified);
+
+                        var key = (category, name: marker.name, type: metadata[0].type, unit: metadata[0].unit);
+                        if (!series.TryGetValue(key, out var counter))
+                            series.Add(key, counter = new CounterSeries());
+                        var value = hasSample ? ReadCounterValue(data, marker.id, key.type) : null;
+                        if (value != null)
+                            counter.Samples[frame] = value;
+                    }
+                }
+            }
+
+            var rows = series.OrderBy(entry => entry.Key.category, StringComparer.Ordinal)
+                .ThenBy(entry => entry.Key.name, StringComparer.Ordinal).ThenBy(entry => entry.Key.type)
+                .ThenBy(entry => entry.Key.unit).Select(entry => new
+                {
+                    entry.Key.name, entry.Key.category, dataType = entry.Key.type.ToString(),
+                    unit = entry.Key.unit.ToString(), availableFrames = entry.Value.Samples.Count,
+                    stats = selectors.Length == 0 ? null : entry.Value.Statistics(),
+                    values = perFrame ? Enumerable.Range(first, last - first + 1).Select(frame =>
+                    {
+                        var available = entry.Value.Samples.TryGetValue(frame, out var value);
+                        return new { frame, available, value };
+                    }).ToArray() : null
+                }).ToArray();
+            return new { sessionId, firstFrame = first, lastFrame = last, counters = rows, unknown = selectors.Where(name => !matched.Contains(name)).ToArray() };
+        }
+
+        static IComparable ReadCounterValue(RawFrameDataView data, int marker, ProfilerMarkerDataType type)
+        {
+            switch (type)
+            {
+                case ProfilerMarkerDataType.Int32:
+                    return data.GetCounterValueAsInt(marker);
+                case ProfilerMarkerDataType.UInt32:
+                    return (uint)data.GetCounterValueAsLong(marker);
+                case ProfilerMarkerDataType.Int64:
+                    return data.GetCounterValueAsLong(marker);
+                case ProfilerMarkerDataType.UInt64:
+                    return unchecked((ulong)data.GetCounterValueAsLong(marker));
+                case ProfilerMarkerDataType.Float:
+                    var single = data.GetCounterValueAsFloat(marker);
+                    return float.IsNaN(single) || float.IsInfinity(single) ? null : (IComparable)single;
+                case ProfilerMarkerDataType.Double:
+                    var number = data.GetCounterValueAsDouble(marker);
+                    return double.IsNaN(number) || double.IsInfinity(number) ? null : (IComparable)number;
+                default:
+                    return null;
+            }
+        }
+
+        [CliCommand("profiler_marker_info", "Read the native category, flags and payload schema of an offline capture marker.",
+            Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object ReadMarkerInfo(
+            [CliArg("session_id", "Analysis session ID.", Required = true)] string sessionId,
+            [CliArg("marker", "Exact marker name.", Required = true)] string marker,
+            [CliArg("frame", "Captured frame. Defaults to the first frame.")] int? frame = null,
+            [CliArg("confirm", "Allow switching captures and replacing existing Profiler history.")] bool confirm = false)
+        {
+            if (string.IsNullOrWhiteSpace(marker))
+                throw new ArgumentException("Use an exact marker name.", nameof(marker));
+            EnsureResident(GetSession(sessionId), confirm);
+            var frameIndex = frame ?? ProfilerDriver.firstFrameIndex;
+            ValidateFrame(frameIndex);
+            using (var data = ProfilerDriver.GetRawFrameDataView(frameIndex, 0))
+            {
+                var markers = new List<FrameDataView.MarkerInfo>();
+                if (data.valid)
+                    data.GetMarkers(markers);
+
+                var definitions = markers.Where(item => item.name == marker).Select(item => new
+                {
+                    id = item.id, category = data.GetCategoryInfo(item.category).name,
+                    flags = (uint)item.flags, isCounter = (item.flags & MarkerFlags.Counter) != 0,
+                    metadata = (item.metadataInfo ?? Array.Empty<FrameDataView.MarkerMetadataInfo>()).Select(field =>
+                        new { field.name, dataType = field.type.ToString(), unit = field.unit.ToString() }).ToArray()
+                }).OrderBy(item => item.category, StringComparer.Ordinal).ThenBy(item => item.id).ToArray();
+                return new { sessionId, frame = frameIndex, marker, available = definitions.Length != 0, definitions };
+            }
         }
 
         static T Percentile<T>(T[] ordered, double fraction) => ordered[(int)Math.Floor((ordered.Length - 1) * fraction)];
