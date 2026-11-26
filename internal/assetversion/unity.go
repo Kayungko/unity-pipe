@@ -239,9 +239,10 @@ func groupUnity(docs []document, index GuidIndex) ([]*nodeGroup, error) {
 }
 
 type Reference struct {
-	FileID string      `json:"fileId"`
-	Type   string      `json:"type,omitempty"`
-	Asset  *Resolution `json:"asset,omitempty"`
+	FileID      string      `json:"fileId"`
+	Type        string      `json:"type,omitempty"`
+	Asset       *Resolution `json:"asset,omitempty"`
+	InstanceIDs []string    `json:"instanceIds,omitempty"`
 }
 
 func scalar(value *yaml.Node) any {
@@ -259,6 +260,10 @@ func scalar(value *yaml.Node) any {
 }
 
 func flatten(node *yaml.Node, prefix string, index GuidIndex, out map[string]any) error {
+	return flattenWithArrays(node, prefix, index, out, nil)
+}
+
+func flattenWithArrays(node *yaml.Node, prefix string, index GuidIndex, out map[string]any, lengths map[string]int) error {
 	if _, exists := out[prefix]; exists {
 		return fmt.Errorf("duplicate Unity field %s", prefix)
 	}
@@ -284,11 +289,14 @@ func flatten(node *yaml.Node, prefix string, index GuidIndex, out map[string]any
 			if key.Kind != yaml.ScalarNode {
 				return fmt.Errorf("unsupported Unity field key at %s", prefix)
 			}
-			if err := flatten(node.Content[i+1], prefix+"/"+pointer(key.Value), index, out); err != nil {
+			if err := flattenWithArrays(node.Content[i+1], prefix+"/"+pointer(key.Value), index, out, lengths); err != nil {
 				return err
 			}
 		}
 	case yaml.SequenceNode:
+		if lengths != nil {
+			lengths[prefix] = len(node.Content)
+		}
 		if len(node.Content) == 0 {
 			out[prefix] = []any{}
 		}
@@ -300,7 +308,7 @@ func flatten(node *yaml.Node, prefix string, index GuidIndex, out map[string]any
 					key = text(target, "guid") + ":" + text(target, "fileID") + ":" + property
 				}
 			}
-			if err := flatten(item, prefix+"/"+pointer(key), index, out); err != nil {
+			if err := flattenWithArrays(item, prefix+"/"+pointer(key), index, out, lengths); err != nil {
 				return err
 			}
 		}

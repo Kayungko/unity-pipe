@@ -26,21 +26,24 @@ type PrefabSourceChange struct {
 }
 
 type InheritedDiff struct {
-	Sources []PrefabSourceChange `json:"sources"`
+	Sources    []PrefabSourceChange `json:"sources"`
+	LocalNodes []NodeChange         `json:"localNodes,omitempty"`
 }
 
 type inheritedNode struct {
 	Node
-	name       string
-	ordinal    int
-	parent     *inheritedNode
-	components []*inheritedRecord
+	name        string
+	instanceIDs []string
+	ordinal     int
+	parent      *inheritedNode
+	components  []*inheritedRecord
 }
 
 type inheritedRecord struct {
 	Component
 	node    *inheritedNode
 	fields  map[string]any
+	arrays  map[string]*prefabArray
 	unknown []string
 	removed bool
 }
@@ -49,6 +52,11 @@ type prefabExpansion struct {
 	objects map[string]*inheritedRecord
 	nodes   []*inheritedNode
 	root    *inheritedNode
+}
+
+type inheritedSnapshot struct {
+	sources    []*prefabOccurrence
+	localNodes []*inheritedNode
 }
 
 type prefabOccurrence struct {
@@ -85,7 +93,7 @@ func (r *prefabReader) expand(docs []document, ids []string) (*prefabExpansion, 
 			continue
 		}
 		if doc.kind == "GameObject" {
-			node := &inheritedNode{Node: Node{FileID: doc.id, Kind: doc.kind}, name: text(doc.body, "m_Name")}
+			node := &inheritedNode{Node: Node{FileID: doc.id, Kind: doc.kind}, name: text(doc.body, "m_Name"), instanceIDs: ids}
 			expansion.nodes = append(expansion.nodes, node)
 			expansion.objects[doc.id] = &inheritedRecord{node: node}
 		}
@@ -123,7 +131,6 @@ func (r *prefabReader) expand(docs []document, ids []string) (*prefabExpansion, 
 			return nil, err
 		}
 		occurrence.expansion = child
-		occurrence.apply(modifications, r.index)
 		for id, record := range child.objects {
 			projected, err := projectFileID(instance.id, id)
 			if err != nil {
@@ -148,6 +155,7 @@ func (r *prefabReader) expand(docs []document, ids []string) (*prefabExpansion, 
 			expansion.objects[doc.id] = record
 		}
 	}
+	var localRecords []*inheritedRecord
 	for _, doc := range docs {
 		if doc.stripped || doc.kind == "PrefabInstance" {
 			continue
@@ -161,7 +169,8 @@ func (r *prefabReader) expand(docs []document, ids []string) (*prefabExpansion, 
 			continue
 		}
 		fields := make(map[string]any)
-		if err := flatten(doc.body, "", r.index, fields); err != nil {
+		lengths := make(map[string]int)
+		if err := flattenWithArrays(doc.body, "", r.index, fields, lengths); err != nil {
 			return nil, err
 		}
 		for _, key := range []string{"/m_CorrespondingSourceObject", "/m_PrefabInstance", "/m_PrefabAsset", "/m_GameObject", "/m_Father"} {
@@ -172,12 +181,22 @@ func (r *prefabReader) expand(docs []document, ids []string) (*prefabExpansion, 
 				delete(fields, key)
 			}
 		}
-		record := &inheritedRecord{Component: Component{FileID: doc.id, Type: doc.kind}, node: node.node, fields: fields}
+		delete(lengths, "/m_Children")
+		delete(lengths, "/m_Component")
+		record := &inheritedRecord{Component: Component{FileID: doc.id, Type: doc.kind}, node: node.node, fields: fields, arrays: captureArrays(lengths, fields)}
 		if expansion.objects[doc.id] != nil && doc.kind != "GameObject" {
 			return nil, fmt.Errorf("ambiguous Prefab component ID %s", doc.id)
 		}
 		expansion.objects[doc.id] = record
 		node.node.components = append(node.node.components, record)
+		localRecords = append(localRecords, record)
+	}
+	for _, record := range localRecords {
+		for key, value := range record.fields {
+			if ref, ok := value.(Reference); ok {
+				record.fields[key] = resolvedLocalReference(ref, expansion.objects)
+			}
+		}
 	}
 	for _, doc := range docs {
 		if doc.stripped || (doc.kind != "Transform" && doc.kind != "RectTransform") {
@@ -189,13 +208,15 @@ func (r *prefabReader) expand(docs []document, ids []string) (*prefabExpansion, 
 	}
 	for _, instance := range instances {
 		occurrence := children[instance.id]
-		parent := expansion.objects[localID(field(instance.body, "m_Modification"), "m_TransformParent")]
+		modifications := field(instance.body, "m_Modification")
+		parent := expansion.objects[localID(modifications, "m_TransformParent")]
 		if parent != nil {
 			occurrence.parent = parent.node
 		}
 		if occurrence.expansion == nil || occurrence.expansion.root == nil {
 			continue
 		}
+		occurrence.apply(modifications, r.index, expansion.objects)
 		root := occurrence.expansion.root
 		root.parent = occurrence.parent
 		if root.parent == nil && expansion.root == nil {
@@ -261,7 +282,7 @@ func unresolvedInstanceName(modifications *yaml.Node, guid string) string {
 	return name
 }
 
-func (p *prefabOccurrence) apply(modifications *yaml.Node, index GuidIndex) {
+func (p *prefabOccurrence) apply(modifications *yaml.Node, index GuidIndex, local map[string]*inheritedRecord) {
 	lookup := func(target *yaml.Node) *inheritedRecord {
 		if guid := text(target, "guid"); guid != "" && guid != p.Asset.GUID {
 			return nil
@@ -272,9 +293,23 @@ func (p *prefabOccurrence) apply(modifications *yaml.Node, index GuidIndex) {
 		for _, target := range items(field(modifications, key)) {
 			if record := lookup(target); record != nil {
 				record.removed = true
+			} else {
+				p.Issues = append(p.Issues, fmt.Sprintf("unresolved %s target %s:%s", key, text(target, "guid"), text(target, "fileID")))
 			}
 		}
 	}
+	type resize struct {
+		record *inheritedRecord
+		path   string
+	}
+	type fieldOverride struct {
+		record   *inheritedRecord
+		property string
+		key      string
+		override *yaml.Node
+	}
+	var resized []resize
+	var fields []fieldOverride
 	for _, override := range items(field(modifications, "m_Modifications")) {
 		target := field(override, "target")
 		record := lookup(target)
@@ -283,15 +318,52 @@ func (p *prefabOccurrence) apply(modifications *yaml.Node, index GuidIndex) {
 			p.Issues = append(p.Issues, fmt.Sprintf("unresolved override target %s:%s (%s)", text(target, "guid"), text(target, "fileID"), property))
 			continue
 		}
-		key := propertyPointer(property)
-		if !record.apply(key, override, index) {
-			if strings.HasSuffix(property, ".Array.size") {
-				key = propertyPointer(strings.TrimSuffix(property, ".Array.size"))
+		if array, ok := strings.CutSuffix(property, ".Array.size"); ok {
+			key := propertyPointer(array)
+			size, err := strconv.Atoi(text(override, "value"))
+			if err == nil && record.resizeArray(key, size) {
+				resized = append(resized, resize{record, key})
+			} else {
+				p.unknownField(record, key, property)
 			}
-			record.unknown = append(record.unknown, key)
-			p.Issues = append(p.Issues, fmt.Sprintf("unsupported override %s (%s)", property, record.FileID))
+			continue
+		}
+		key := propertyPointer(property)
+		fields = append(fields, fieldOverride{record, property, key, override})
+	}
+	for _, entry := range fields {
+		// An empty sequence has no element type in YAML, but a non-null
+		// reference override establishes that all its entries are references.
+		if id := text(field(entry.override, "objectReference"), "fileID"); id != "" && id != "0" {
+			if array := entry.record.arrayForElement(entry.key); array != nil && array.zero == nil {
+				array.zero = Reference{FileID: "0"}
+			}
 		}
 	}
+	for _, entry := range fields {
+		// Unity can keep entries above the effective Array.size after a shrink.
+		if strings.Contains(entry.property, ".Array.data[") && entry.record.outsideArray(entry.key) {
+			continue
+		}
+		if !entry.record.apply(entry.key, entry.override, index, local) {
+			p.unknownField(entry.record, entry.key, entry.property)
+		}
+	}
+	for _, entry := range resized {
+		if !entry.record.fillArray(entry.path) {
+			p.unknownField(entry.record, entry.path, entry.path+" (missing element values)")
+		}
+	}
+}
+
+func (p *prefabOccurrence) unknownField(record *inheritedRecord, key, property string) {
+	if slices.ContainsFunc(record.unknown, func(path string) bool {
+		return key == path || strings.HasPrefix(key, path+"/")
+	}) {
+		return
+	}
+	record.unknown = append(record.unknown, key)
+	p.Issues = append(p.Issues, fmt.Sprintf("unsupported override %s (%s)", property, record.FileID))
 }
 
 func propertyPointer(property string) string {
@@ -299,8 +371,7 @@ func propertyPointer(property string) string {
 		return ""
 	}
 	// Unity uses dotted paths for fields and Array.data[n] for element overrides.
-	p := strings.ReplaceAll(property, ".Array.data[", ".")
-	p = strings.ReplaceAll(p, "]", "")
+	p := arrayPropertyIndex.ReplaceAllString(property, ".${1}")
 	parts := strings.Split(p, ".")
 	for i := range parts {
 		parts[i] = pointer(parts[i])
@@ -308,12 +379,20 @@ func propertyPointer(property string) string {
 	return "/" + strings.Join(parts, "/")
 }
 
-func (r *inheritedRecord) apply(key string, override *yaml.Node, index GuidIndex) bool {
+func (r *inheritedRecord) apply(key string, override *yaml.Node, index GuidIndex, local map[string]*inheritedRecord) bool {
 	old, exists := r.fields[key]
 	object := field(override, "objectReference")
 	value := field(override, "value")
+	if value == nil {
+		return false
+	}
+	if !exists {
+		if array := r.arrayForElement(key); array != nil {
+			old, exists = array.zero, array.zero != nil
+		}
+	}
 	_, isReference := old.(Reference)
-	if value == nil || !exists {
+	if !exists {
 		return false
 	}
 	if object != nil && (text(object, "fileID") != "0" || isReference) {
@@ -321,7 +400,11 @@ func (r *inheritedRecord) apply(key string, override *yaml.Node, index GuidIndex
 		if err := flatten(object, key, index, updated); err != nil {
 			return false
 		}
-		r.fields[key] = updated[key]
+		ref, ok := updated[key].(Reference)
+		if !ok {
+			return false
+		}
+		r.fields[key] = resolvedLocalReference(ref, local)
 		return true
 	}
 	switch old.(type) {
@@ -339,6 +422,14 @@ func (r *inheritedRecord) apply(key string, override *yaml.Node, index GuidIndex
 		r.node.name = value.Value
 	}
 	return true
+}
+
+func resolvedLocalReference(ref Reference, objects map[string]*inheritedRecord) Reference {
+	if target := objects[ref.FileID]; ref.Asset == nil && ref.FileID != "0" && target != nil {
+		ref.FileID = target.FileID
+		ref.InstanceIDs = target.node.instanceIDs
+	}
+	return ref
 }
 
 func (n *inheritedNode) visiblePath() (string, bool) {
@@ -364,11 +455,11 @@ func (n *inheritedNode) visiblePath() (string, bool) {
 	return "/" + strings.Join(segments, "/"), true
 }
 
-func inheritedSources(ctx context.Context, version *Version, index GuidIndex, docs []document) ([]*prefabOccurrence, error) {
+func inheritedSources(ctx context.Context, version *Version, index GuidIndex, docs []document) (inheritedSnapshot, error) {
 	r := prefabReader{ctx: ctx, version: version, index: index, docs: make(map[string][]document), stack: make(map[string]bool)}
 	expansion, err := r.expand(docs, nil)
 	if err != nil {
-		return nil, err
+		return inheritedSnapshot{}, err
 	}
 	siblings := make(map[*inheritedNode]map[string][]*inheritedNode)
 	collect := func(nodes []*inheritedNode) {
@@ -406,12 +497,24 @@ func inheritedSources(ctx context.Context, version *Version, index GuidIndex, do
 			source.InstancePath = parent + "/" + pointer(source.name)
 		}
 	}
-	return r.sources, nil
+	snapshot := inheritedSnapshot{sources: r.sources}
+	for _, node := range expansion.nodes {
+		for parent, depth := node.parent, 0; parent != nil && depth < 1024; parent, depth = parent.parent, depth+1 {
+			if len(parent.instanceIDs) != 0 {
+				snapshot.localNodes = append(snapshot.localNodes, node)
+				break
+			}
+		}
+	}
+	return snapshot, nil
 }
 
-func compareInherited(before, after []*prefabOccurrence) *InheritedDiff {
-	out := &InheritedDiff{Sources: []PrefabSourceChange{}}
-	for _, pair := range pairing(before, after, func(p *prefabOccurrence) string { return strings.Join(p.ids, "/") }) {
+func compareInherited(before, after inheritedSnapshot) *InheritedDiff {
+	out := &InheritedDiff{
+		Sources:    []PrefabSourceChange{},
+		LocalNodes: compareInheritedNodes(before.localNodes, after.localNodes),
+	}
+	for _, pair := range pairing(before.sources, after.sources, func(p *prefabOccurrence) string { return strings.Join(p.ids, "/") }) {
 		left, right := pair.before, pair.after
 		change := PrefabSourceChange{Nodes: []NodeChange{}}
 		if left != nil {
