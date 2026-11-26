@@ -1,253 +1,183 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+#if UNITY_EDITOR || (UNITY_STANDALONE && DEBUG)
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+#endif
 using Unity.Pipeline.Models;
 using UnityEngine;
 
 namespace Unity.Pipeline.Compilation
 {
-    /// <summary>
-    /// C# code evaluation service using shared Roslyn compilation infrastructure.
-    /// Wraps user code in Execute() method, compiles, and executes with result serialization.
-    /// Supports both Editor and Runtime compilation for desktop development builds.
-    /// </summary>
     static class EvalCodeCompiler
     {
+        // Synchronous compiler fixtures use this entry point. Never block on an async snippet
+        // from Unity's main thread.
+        public static EvalResponse CompileAndExecuteOnMainThread(string code, int timeoutMs, Stopwatch stopwatch)
+        {
+            var result = CompileAndExecuteAsync(code, timeoutMs, false, stopwatch ?? Stopwatch.StartNew());
+            if (!result.IsCompleted)
+                throw new InvalidOperationException("Use asynchronous evaluation for code with await.");
+            return result.GetAwaiter().GetResult();
+        }
+
+        public static async Task<EvalResponse> CompileAndExecuteAsync(string code, int timeoutMs, bool dryRun,
+            Stopwatch stopwatch)
+        {
 #if UNITY_EDITOR || (UNITY_STANDALONE && DEBUG)
-
-        // Fixed lines in the generated source before user code begins
-        private const int BaseCodeLineOffset = 11;
-
-        /// <summary>
-        /// Compile and execute code on Unity's main thread using Roslyn.
-        /// Eval is a MainThreadRequired command, so the server marshals the caller to the main
-        /// thread before invoking this; compilation + execution run synchronously here.
-        /// </summary>
-        /// <param name="code">The C# expression/statement(s) to evaluate.</param>
-        /// <param name="timeoutMs">Timeout for compilation, in milliseconds.</param>
-        /// <param name="stopwatch">Running stopwatch used to report execution time in the response.</param>
-        /// <returns>The evaluation result.</returns>
-        public static EvalResponse CompileAndExecuteOnMainThread(string code, int timeoutMs, System.Diagnostics.Stopwatch stopwatch)
-        {
-            if (stopwatch == null)
-            {
-                stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            }
-
+            // CurrentServer is thread-local during reflection dispatch. Capture this job before
+            // yielding so the continuation can never observe a different job.
+            var job = BasePipelineServer.CurrentServer?.JobRegistry.CurrentRunning;
+            var id = "PipelineEval_" + Guid.NewGuid().ToString("N");
+            var isAsync = false;
+            using var compileBudget = new CancellationTokenSource(timeoutMs);
             try
             {
-                // Compile on current thread
-                var compilationResult = CompileCodeToAssembly(code, timeoutMs, stopwatch);
+                var token = compileBudget.Token;
+                var editor = Application.isEditor;
+                var asyncHeader = Header(id, editor, true);
+                isAsync = code.IndexOf("await", StringComparison.Ordinal) >= 0 && HasAwait(asyncHeader + code + Footer, token);
+                var header = isAsync ? asyncHeader : Header(id, editor, false);
 
-                if (!compilationResult.Success)
+                var compilation = Compile(header, code, id, dryRun, token);
+                // "await" was a legal identifier in the old synchronous wrapper.
+                // Keep compilable legacy snippets even when async parsing sees a keyword.
+                if (isAsync && !compilation.Success && compilation.Diagnostics.Any(d => d.Id == "CS4003"))
                 {
-                    stopwatch.Stop();
-                    return EvalResponse.EvalFailure(
-                        "Compilation Failed",
-                        "Code compilation failed",
-                        stopwatch.ElapsedMilliseconds,
-                        compilationResult.Diagnostics);
-                }
-
-                // Execute on current thread
-                var executionResult = ExecuteCompiledAssembly(compilationResult.Assembly);
-
-                stopwatch.Stop();
-
-                if (executionResult.Success)
-                {
-                    return EvalResponse.EvalSuccess(
-                        executionResult.ReturnValue,
-                        executionResult.Output,
-                        stopwatch.ElapsedMilliseconds);
-                }
-                else
-                {
-                    return EvalResponse.EvalFailure(
-                        executionResult.Error,
-                        executionResult.ErrorDetails,
-                        stopwatch.ElapsedMilliseconds);
-                }
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                return EvalResponse.EvalFailure(
-                    "Execution Failed",
-                    ex.ToString(),
-                    stopwatch.ElapsedMilliseconds);
-            }
-        }
-
-        /// <summary>
-        /// Compile C# code to assembly using shared RoslynCompilationService.
-        /// Thread-safe and can run on background thread.
-        /// </summary>
-        private static CompilationResult CompileCodeToAssembly(string userCode, int timeoutMs, System.Diagnostics.Stopwatch stopwatch)
-        {
-            var id = Guid.NewGuid().ToString("N").Substring(0, 8);
-
-            // Generate wrapper code
-            var sourceCode = BuildSourceCode(id, userCode, Application.isEditor);
-
-            // Use shared compilation service
-            var request = new CompilationRequest
-            {
-                SourceCode = sourceCode,
-                AssemblyName = $"PipelineEval_{id}",
-                LineNumberOffset = BaseCodeLineOffset // Adjust diagnostics for wrapper code
-            };
-
-            var result = RoslynCompilationService.Compile(request);
-
-            if (result.Success)
-            {
-                // Add execution context for eval-specific needs
-                return new CompilationResult
-                {
-                    Success = true,
-                    Assembly = result.Assembly,
-                    ExecutionContext = new ExecutionContext
+                    var legacy = Compile(Header(id, editor, false), code, id, dryRun, token);
+                    if (legacy.Success)
                     {
-                        AssemblyId = id,
-                        TypeName = $"PipelineEvaluation.PipelineEval_{id}",
-                        MethodName = "Execute"
-                    },
-                    Diagnostics = result.Diagnostics
-                };
-            }
-            else
-            {
-                return new CompilationResult
-                {
-                    Success = false,
-                    Diagnostics = result.Diagnostics
-                };
-            }
-        }
-
-        /// <summary>
-        /// Generate C# source code wrapper for user code with conditional editor support.
-        /// </summary>
-        private static string BuildSourceCode(string id, string userCode, bool isEditorContext)
-        {
-            var editorUsing = isEditorContext ? "using UnityEditor;" : "";
-
-            return $@"using System;
-using System.Collections.Generic;
-using System.Linq;
-using UnityEngine;
-{editorUsing}
-
-namespace PipelineEvaluation
-{{
-    public static class PipelineEval_{id}
-    {{
-        public static object Execute()
-        {{
-            {userCode}
-            return null;
-        }}
-    }}
-}}";
-        }
-
-
-        /// <summary>
-        /// Execute compiled assembly and return result.
-        /// Must run on Unity's main thread for safe Unity API access.
-        /// </summary>
-        private static ExecutionResult ExecuteCompiledAssembly(Assembly assembly)
-        {
-            try
-            {
-                var executionContext = GetExecutionContextFromAssembly(assembly);
-
-                var type = assembly.GetType(executionContext.TypeName);
-                var method = type?.GetMethod(executionContext.MethodName, BindingFlags.Public | BindingFlags.Static);
-
-                if (type == null)
-                {
-                    return new ExecutionResult
-                    {
-                        Success = false,
-                        Error = "Assembly Load Error",
-                        ErrorDetails = $"Could not find type {executionContext.TypeName} in compiled assembly"
-                    };
+                        isAsync = false;
+                        compilation = legacy;
+                    }
                 }
 
+                if (job?.CancellationRequested == true)
+                    throw new OperationCanceledException();
+                if (token.IsCancellationRequested || stopwatch.ElapsedMilliseconds >= timeoutMs)
+                    return TimedOut(stopwatch, timeoutMs);
+                if (!compilation.Success)
+                    return Failure("Compilation Failed", "Code compilation failed", stopwatch, dryRun || isAsync,
+                        compilation.Diagnostics);
+                if (dryRun)
+                    return EvalResponse.EvalSuccess(null, executionTimeMs: stopwatch.ElapsedMilliseconds,
+                        diagnostics: compilation.Diagnostics);
+
+                var method = compilation.Assembly.GetType("PipelineEvaluation." + id)?.GetMethod("Execute");
                 if (method == null)
+                    return Failure("Method Not Found", "The compiled evaluation entry point could not be found.",
+                        stopwatch, isAsync);
+                if (!isAsync)
+                    return EvalResponse.EvalSuccess(SerializeResult(method.Invoke(null, null)),
+                        executionTimeMs: stopwatch.ElapsedMilliseconds);
+
+                using var execution = new CancellationTokenSource();
+                var task = (Task<object>)method.Invoke(null, new object[] { execution.Token });
+                while (!task.IsCompleted && job?.CancellationRequested != true &&
+                    stopwatch.ElapsedMilliseconds < timeoutMs)
                 {
-                    return new ExecutionResult
-                    {
-                        Success = false,
-                        Error = "Method Not Found",
-                        ErrorDetails = $"Could not find method {executionContext.MethodName} in compiled type"
-                    };
+                    var remaining = timeoutMs - stopwatch.ElapsedMilliseconds;
+                    await Task.Delay((int)Math.Max(1, Math.Min(25, remaining)));
                 }
-
-                var result = method.Invoke(null, null);
-
-                return new ExecutionResult
+                if (job?.CancellationRequested == true || !task.IsCompleted)
                 {
-                    Success = true,
-                    ReturnValue = SerializeResult(result)
-                };
+                    try { execution.Cancel(); }
+                    catch (AggregateException ex) { UnityEngine.Debug.LogWarning(ex.Message); }
+                    // Give cooperative code an opportunity to unwind on Unity's main thread.
+                    if (await Task.WhenAny(task, Task.Delay(200)) != task || task.IsFaulted)
+                        _ = task.ContinueWith(fault => { _ = fault.Exception; }, CancellationToken.None,
+                            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                            TaskScheduler.Default);
+                    if (job?.CancellationRequested == true)
+                        throw new OperationCanceledException();
+                    return TimedOut(stopwatch, timeoutMs);
+                }
+                return EvalResponse.EvalSuccess(SerializeResult(await task), executionTimeMs: stopwatch.ElapsedMilliseconds);
             }
-            catch (TargetInvocationException tie) when (tie.InnerException != null)
+            catch (OperationCanceledException) when (job?.CancellationRequested == true)
             {
-                return new ExecutionResult
-                {
-                    Success = false,
-                    Error = "Runtime Error",
-                    ErrorDetails = tie.InnerException.Message,
-                    StackTrace = tie.InnerException.StackTrace
-                };
+                throw;
+            }
+            catch (OperationCanceledException) when (compileBudget.IsCancellationRequested)
+            {
+                return TimedOut(stopwatch, timeoutMs);
             }
             catch (Exception ex)
             {
-                return new ExecutionResult
-                {
-                    Success = false,
-                    Error = "Execution Error",
-                    ErrorDetails = ex.Message,
-                    StackTrace = ex.StackTrace
-                };
+                var inner = (ex as TargetInvocationException)?.InnerException ?? ex;
+                return Failure("Runtime Error", inner.Message, stopwatch, isAsync);
             }
+#else
+            return await Task.FromResult(EvalResponse.EvalFailure("Platform Not Supported",
+                "Runtime code compilation only supported on Desktop development builds"));
+#endif
         }
 
-        /// <summary>
-        /// Get execution context from compiled assembly.
-        /// </summary>
-        private static ExecutionContext GetExecutionContextFromAssembly(Assembly assembly)
-        {
-            // Find PipelineEvaluation types
-            var evalTypes = assembly.GetTypes()
-                .Where(t => t.Namespace == "PipelineEvaluation" && t.Name.StartsWith("PipelineEval_"))
-                .ToList();
-
-            if (evalTypes.Any())
+#if UNITY_EDITOR || (UNITY_STANDALONE && DEBUG)
+        static CompilationResult Compile(string header, string code, string id, bool dryRun, CancellationToken token) =>
+            RoslynCompilationService.Compile(new CompilationRequest
             {
-                var evalType = evalTypes.First();
-                return new ExecutionContext
-                {
-                    TypeName = evalType.FullName,
-                    MethodName = "Execute"
-                };
-            }
+                SourceCode = header + code + Footer,
+                AssemblyName = id,
+                LineNumberOffset = header.Count(ch => ch == '\n'),
+                SkipLoad = dryRun,
+                CancellationToken = token
+            });
 
-            // Fallback
-            return new ExecutionContext
+        static EvalResponse TimedOut(Stopwatch stopwatch, int budget) =>
+            new EvalResponse
             {
-                TypeName = "PipelineEvaluation.PipelineEval_Unknown",
-                MethodName = "Execute"
+                Command = "eval",
+                Error = "Timeout",
+                ErrorDetails = $"Evaluation exceeded its {budget} ms budget.",
+                ExecutionTimeMs = stopwatch.ElapsedMilliseconds,
+                Status = "timed_out",
+                ExecutedAt = DateTime.UtcNow
             };
+
+        static EvalResponse Failure(string error, string details, Stopwatch stopwatch, bool reportExitCode,
+            List<DiagnosticInfo> diagnostics = null)
+        {
+            var result = EvalResponse.EvalFailure(error, details, stopwatch.ElapsedMilliseconds, diagnostics);
+            if (reportExitCode)
+                result.Status = "failed";
+            return result;
         }
 
-        /// <summary>
-        /// Serialize result for JSON response.
-        /// </summary>
+        static bool HasAwait(string source, CancellationToken cancellationToken)
+        {
+            var body = CSharpSyntaxTree.ParseText(source, RoslynCompilationService.ProjectParseOptions(),
+                cancellationToken: cancellationToken).GetRoot(cancellationToken)
+                .DescendantNodes().OfType<MethodDeclarationSyntax>().First().Body;
+            return body.DescendantNodes(node => !(node is LocalFunctionStatementSyntax)
+                    && !(node is AnonymousFunctionExpressionSyntax))
+                .Any(node => node is AwaitExpressionSyntax expression && !expression.Expression.IsMissing ||
+                    node is CommonForEachStatementSyntax each && each.AwaitKeyword.RawKind != 0 ||
+                    node is UsingStatementSyntax statement && statement.AwaitKeyword.RawKind != 0 ||
+                    node is LocalDeclarationStatementSyntax declaration && declaration.AwaitKeyword.RawKind != 0);
+        }
+
+        static string Header(string id, bool editor, bool isAsync)
+        {
+            var editorUsing = editor ? "using UnityEditor;\n" : "";
+            var taskUsing = isAsync ? "using System.Threading.Tasks;\n" : "";
+            var signature = isAsync
+                ? "async global::System.Threading.Tasks.Task<object> Execute(global::System.Threading.CancellationToken cancellationToken)"
+                : "object Execute()";
+            return "using System;\nusing System.Collections.Generic;\nusing System.Linq;\nusing UnityEngine;\n" +
+                editorUsing + taskUsing +
+                $"namespace PipelineEvaluation\n{{\n    public static class {id}\n    {{\n" +
+                $"        public static {signature}\n        {{\n";
+        }
+
+        const string Footer = "\n#pragma warning disable CS0162\n            return null;\n" +
+            "#pragma warning restore CS0162\n        }\n    }\n}\n";
+
         private static object SerializeResult(object value)
         {
             if (value == null) return null;
@@ -279,56 +209,6 @@ namespace PipelineEvaluation
             {
                 return value.ToString();
             }
-        }
-
-        /// <summary>
-        /// Result from compilation process.
-        /// </summary>
-        private class CompilationResult
-        {
-            public bool Success { get; set; }
-            public Assembly Assembly { get; set; }
-            public ExecutionContext ExecutionContext { get; set; }
-            public List<DiagnosticInfo> Diagnostics { get; set; } = new List<DiagnosticInfo>();
-        }
-
-        /// <summary>
-        /// Result from code execution.
-        /// </summary>
-        private class ExecutionResult
-        {
-            public bool Success { get; set; }
-            public object ReturnValue { get; set; }
-            public string Output { get; set; }
-            public string Error { get; set; }
-            public string ErrorDetails { get; set; }
-            public string StackTrace { get; set; }
-        }
-
-        /// <summary>
-        /// Execution context for compiled assembly.
-        /// </summary>
-        private class ExecutionContext
-        {
-            public string AssemblyId { get; set; }
-            public string TypeName { get; set; }
-            public string MethodName { get; set; }
-        }
-
-#else
-        /// <summary>
-        /// Runtime compilation not supported on this platform.
-        /// Desktop development builds only (Windows/Mac/Linux).
-        /// </summary>
-        /// <param name="code">Unused on this build.</param>
-        /// <param name="timeoutMs">Unused on this build.</param>
-        /// <param name="stopwatch">Unused on this build.</param>
-        /// <returns>A failure result explaining runtime compilation isn't supported on this build.</returns>
-        public static EvalResponse CompileAndExecuteOnMainThread(string code, int timeoutMs, System.Diagnostics.Stopwatch stopwatch)
-        {
-            return EvalResponse.EvalFailure(
-                "Platform Not Supported",
-                "Runtime code compilation only supported on Desktop development builds");
         }
 #endif
     }

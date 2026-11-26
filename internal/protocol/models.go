@@ -81,6 +81,25 @@ func (r *ExecResponse) CommandError(command string) error {
 	}
 	var message string
 	switch command {
+	case "eval", "eval_file":
+		var result struct {
+			Status       string `json:"status"`
+			Error        string `json:"error"`
+			ErrorDetails string `json:"errorDetails"`
+		}
+		if json.Unmarshal(r.Result, &result) != nil {
+			return nil
+		}
+		switch result.Status {
+		case "timed_out":
+			failure := ErrTimeout(firstNonEmpty(result.ErrorDetails, "evaluation timed out"))
+			failure.Data = r.Result
+			return failure
+		case "failed":
+			message = firstNonEmpty(result.ErrorDetails, result.Error, "evaluation failed")
+		default:
+			return nil
+		}
 	case "wait_status":
 		var result struct {
 			Status  string `json:"status"`

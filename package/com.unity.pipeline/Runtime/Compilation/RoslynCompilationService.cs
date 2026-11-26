@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -72,7 +73,7 @@ namespace Unity.Pipeline.Compilation
                     options);
 
                 // Get diagnostics
-                var diagnostics = compilation.GetDiagnostics();
+                var diagnostics = compilation.GetDiagnostics(request.CancellationToken);
                 var diagnosticInfos = ConvertDiagnostics(diagnostics, request.LineNumberOffset);
 
                 // Check for compilation errors
@@ -99,7 +100,8 @@ namespace Unity.Pipeline.Compilation
                         // interpreter reads line info only from an embedded PDB.
                         emitResult = compilation.Emit(
                             peStream,
-                            options: new EmitOptions(debugInformationFormat: DebugInformationFormat.Embedded));
+                            options: new EmitOptions(debugInformationFormat: DebugInformationFormat.Embedded),
+                            cancellationToken: request.CancellationToken);
                     }
                     else if (request.EmitDebugInformation)
                     {
@@ -108,7 +110,8 @@ namespace Unity.Pipeline.Compilation
                             emitResult = compilation.Emit(
                                 peStream,
                                 pdbStream,
-                                options: new EmitOptions(debugInformationFormat: DebugInformationFormat.PortablePdb));
+                                options: new EmitOptions(debugInformationFormat: DebugInformationFormat.PortablePdb),
+                                cancellationToken: request.CancellationToken);
 
                             if (emitResult.Success)
                                 pdbBytes = pdbStream.ToArray();
@@ -116,7 +119,7 @@ namespace Unity.Pipeline.Compilation
                     }
                     else
                     {
-                        emitResult = compilation.Emit(peStream);
+                        emitResult = compilation.Emit(peStream, cancellationToken: request.CancellationToken);
                     }
 
                     if (!emitResult.Success)
@@ -151,6 +154,10 @@ namespace Unity.Pipeline.Compilation
                         Diagnostics = diagnosticInfos
                     };
                 }
+            }
+            catch (OperationCanceledException) when (request.CancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -410,6 +417,8 @@ namespace Unity.Pipeline.Compilation
     /// </summary>
     public class CompilationRequest
     {
+        internal CancellationToken CancellationToken { get; set; }
+
         /// <summary>
         /// Source code to compile.
         /// </summary>

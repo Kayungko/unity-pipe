@@ -13,10 +13,11 @@ func EvalCommand() SubCommand {
 	return SubCommand{
 		Name: "eval",
 		Synopsis: "evaluate C# code in the running editor: upipe eval \"return 2 + 2;\" " +
-			"[--eval-timeout <ms>] [--job]",
+			"[--eval-timeout <ms>] [--dry-run] [--job]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe eval")
 			evalTimeout := evalTimeoutFlag(fs)
+			dryRun := fs.Bool("dry-run", false, "compile without loading or executing the snippet")
 			job := fs.Bool("job", false, "submit as a detached job; prints the jobId handle")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
@@ -27,6 +28,9 @@ func EvalCommand() SubCommand {
 				return nil, usageErr("eval: exactly one code argument expected (quote it in the shell)")
 			}
 			params := map[string]any{"code": rest[0]}
+			if *dryRun {
+				params["dry_run"] = true
+			}
 			if err := applyEvalTimeout("eval", params, *evalTimeout); err != nil {
 				return nil, err
 			}
@@ -41,10 +45,11 @@ func EvalFileCommand() SubCommand {
 	return SubCommand{
 		Name:     "eval-file",
 		Aliases:  []string{"eval_file"},
-		Synopsis: "evaluate a C# file in the running editor: upipe eval-file Assets/Scratch.cs [--eval-timeout <ms>] [--job]",
+		Synopsis: "evaluate a C# file in the running editor: upipe eval-file Assets/Scratch.cs [--eval-timeout <ms>] [--dry-run] [--job]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe eval-file")
 			evalTimeout := evalTimeoutFlag(fs)
+			dryRun := fs.Bool("dry-run", false, "compile without loading or executing the snippet")
 			job := fs.Bool("job", false, "submit as a detached job; prints the jobId handle")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
@@ -59,6 +64,9 @@ func EvalFileCommand() SubCommand {
 				return nil, usageErr("eval-file: " + err.Error())
 			}
 			params := map[string]any{"file": path}
+			if *dryRun {
+				params["dry_run"] = true
+			}
 			if err := applyEvalTimeout("eval-file", params, *evalTimeout); err != nil {
 				return nil, err
 			}

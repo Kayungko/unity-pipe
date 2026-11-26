@@ -10,6 +10,9 @@ namespace Unity.Pipeline.Models
     [Serializable]
     class EvalResponse :CommandExecutionResponse
     {
+        [JsonProperty("status", NullValueHandling = NullValueHandling.Ignore)]
+        public string Status { get; set; }
+
         /// <summary>
         /// Console output captured during execution.
         /// </summary>
