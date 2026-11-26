@@ -187,6 +187,7 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 | `status` | 探活：端口文件实例 + 服务健康 + 编辑器状态 |
 | `commands` / `commands --full` | 服务端命令索引 / 含参数 schema |
 | `exec <name> [--set k=v] [--params JSON] [--job]` | 主通道，任意命令直通；`--set` 值自动做 JSON 标量类型推断 |
+| `help <name>` | 精确显示当前 Editor 或开发 Player 中一条命令的参数、默认值以及副作用。支持 `--json` |
 | `eval "<code>"` / `eval-file <path>` | C# 求值（`eval_file` 参数名映射为 `file`；`--job` 分离式长求值） |
 | `recompile [--no-wait]` | 触发编译并轮询 `recompile_status` 至终态 |
 | `test [--mode] [--filter] [--no-wait]` | `run_tests` 异步 + `test_status` 轮询 |
@@ -269,7 +270,7 @@ go test ./...       # 协议单元 + httptest mock 端到端 + 分层 lint
 go build -ldflags "-X github.com/Kayungko/unity-pipe/internal/commands.Version=v0.1.12 -X github.com/Kayungko/unity-pipe/internal/commands.Commit=$(git rev-parse --short HEAD) -X github.com/Kayungko/unity-pipe/internal/commands.BuildDate=$(Get-Date -AsUTC -Format o)" -o dist/upipe.exe ./cmd/upipe
 ```
 
-**正式发版走 CI 自动化，不需要手敲上面的命令**：推 `vX.Y.Z` 形式的 tag 触发 `.github/workflows/release.yml`——先跑一遍 build/vet/test/gofmt 门禁，再交叉编译 windows/linux/darwin(amd64+arm64) 五份二进制（`-ldflags` 自动注入真实 commit/构建时间）、打包适配包 tgz、发布到对应 tag 的 GitHub Release（各产物附 `.sha256`）。本地手敲的命令仅用于开发调试或该 workflow 不可用时的应急发版。
+**正式发版由 `Release` 工作流发布 GitHub 草稿。** 在 `main` 的发布提交上构建并验收 Windows CLI 与 UPM，保留验收原件。准备 Linux amd64、macOS amd64 和 macOS arm64 二进制，将五个产物及其 `.sha256` 和 `SHA256SUMS` 一起上传到以完整提交 SHA 为 target 的 `vX.Y.Z` 草稿。保留标签创建给发布步骤，在 Actions 中选择 `main` 运行 `Release`，填入版本及验收记录里的 Windows CLI 和 UPM SHA256。工作流核对提交的 CI、草稿和附件校验值，发布后回下载逐一比对。
 
 Go 工具链 ≥ 1.23；无 CGO、无第三方依赖、无生成代码。
 

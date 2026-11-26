@@ -49,6 +49,40 @@ func CommandsCommand() SubCommand {
 	}
 }
 
+// CommandHelp shows the exact schema advertised by the running instance.
+func CommandHelp() SubCommand {
+	return SubCommand{
+		Name:     "help",
+		Synopsis: "show parameters for one Editor or Player command: upipe help <name>",
+		Run: func(rt *Runtime, args []string) (any, error) {
+			fs := newFlagSet("upipe help")
+			attachShared(fs, rt.Opts)
+			rest, err := parseArgs(fs, args)
+			if err != nil {
+				return nil, usageErr("help: " + err.Error())
+			}
+			if len(rest) != 1 {
+				return nil, usageErr("help: provide one command name from upipe commands")
+			}
+			raw, err := rt.Client.ListCommandsFull()
+			if err != nil {
+				return nil, err
+			}
+			body, err := decodeFullCommandList(raw)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range body.Commands {
+				var command protocol.CommandSpec
+				if err := json.Unmarshal(entry, &command); err == nil && command.Name == rest[0] {
+					return entry, nil
+				}
+			}
+			return nil, usageErr("help: unknown command " + rest[0])
+		},
+	}
+}
+
 // filterCommandSpecs drops entries not matching q (case-insensitive substring
 // on name, description or tags) in place and rewrites Count to match; Total
 // keeps the server-reported total.
@@ -82,12 +116,9 @@ func specMatchesQuery(c protocol.CommandSpec, q string) bool {
 // filterFullCommands applies the same query to a full (--full) raw response.
 // Entries are handled as raw JSON so unknown schema fields survive untouched.
 func filterFullCommands(raw json.RawMessage, q string) (json.RawMessage, error) {
-	var body struct {
-		Commands []json.RawMessage `json:"commands"`
-		Total    int               `json:"total"`
-	}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, protocol.ErrProtocol("commands: malformed full index: " + err.Error())
+	body, err := decodeFullCommandList(raw)
+	if err != nil {
+		return nil, err
 	}
 	lq := strings.ToLower(q)
 	kept := make([]json.RawMessage, 0, len(body.Commands))
@@ -109,4 +140,17 @@ func filterFullCommands(raw json.RawMessage, q string) (json.RawMessage, error) 
 		return nil, protocol.ErrProtocol("commands: " + err.Error())
 	}
 	return out, nil
+}
+
+type fullCommandList struct {
+	Commands []json.RawMessage `json:"commands"`
+	Total    int               `json:"total"`
+}
+
+func decodeFullCommandList(raw json.RawMessage) (fullCommandList, error) {
+	var body fullCommandList
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return body, protocol.ErrProtocol("commands: malformed full index: " + err.Error())
+	}
+	return body, nil
 }

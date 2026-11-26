@@ -86,9 +86,9 @@ func Main(argv []string) int {
 			return render(&protocol.UpipeError{Code: protocol.ExitUsage, Kind: "Usage", Message: "choose either --player-path or --project-path"}, &subOpts)
 		}
 		switch sub.Name {
-		case "status", "commands", "exec":
+		case "status", "commands", "exec", "help":
 		default:
-			return render(&protocol.UpipeError{Code: protocol.ExitUsage, Kind: "Usage", Message: "--player-path is supported with status, commands, and exec"}, &subOpts)
+			return render(&protocol.UpipeError{Code: protocol.ExitUsage, Kind: "Usage", Message: "--player-path is supported with status, commands, exec, and help"}, &subOpts)
 		}
 	}
 	if !sub.NoRuntime {

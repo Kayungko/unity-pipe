@@ -32,6 +32,7 @@ func All() []SubCommand {
 		InstancesCommand(),
 		StatusCommand(),
 		CommandsCommand(),
+		CommandHelp(),
 		ExecCommand(),
 		EvalCommand(),
 		EvalFileCommand(),

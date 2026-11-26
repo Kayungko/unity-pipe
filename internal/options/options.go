@@ -30,7 +30,7 @@ func Attach(fs *flag.FlagSet, o *Options) {
 	fs.StringVar(&o.ProjectPath, "project-path", o.ProjectPath,
 		"Unity project root (default: auto-detect by walking up from the current directory)")
 	fs.StringVar(&o.PlayerPath, "player-path", o.PlayerPath,
-		"working directory of a local development Player (with status, commands, or exec)")
+		"working directory of a local development Player (with status, commands, exec, or help)")
 	fs.BoolVar(&o.JSONOut, "json", o.JSONOut, "machine-readable single-envelope JSON on stdout")
 	fs.DurationVar(&o.Timeout, "timeout", o.Timeout, "per-command budget (e.g. 30s, 2m)")
 }
