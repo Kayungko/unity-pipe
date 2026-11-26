@@ -1,7 +1,7 @@
 package commands
 
 // Version is the upipe CLI version, injected at build time via
-// -ldflags "-X github.com/Kayungko/unity-pipe/internal/commands.Version=v0.1.26".
+// -ldflags "-X github.com/Kayungko/unity-pipe/internal/commands.Version=v0.1.27".
 // The dev placeholder marks an untagged local build.
 var Version = "dev"
 

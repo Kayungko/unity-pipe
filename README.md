@@ -148,6 +148,8 @@ upipe commands                                      # 浏览当前编辑器支�
 
 自动化验收可加 `--require-match`，让测试筛选零命中时退出 `20`。测试启动前会检查所有打开的场景，有未保存的场景时返回其名称或路径。
 
+`upipe test` 默认返回完整结果。`--detail failures` 只保留失败用例及其诊断，`--detail summary` 只保留汇总和阶段计数。两种精简模式都需要等待测试完成，成功或失败仍由测试结果决定。
+
 `exec run_script` 执行失败、`exec batch` 事务回滚时退出 `20`，原始诊断和逐步结果在 `error.data`。后台任务的最终退出码由 `upipe job <id>` 返回。
 
 `upipe recompile` 等待编译结果，失败时退出 `20`，编译诊断见 `error.data.errors`。`--no-wait` 只提交请求，使用 `recompile_status` 查看编译结果。

@@ -15,12 +15,13 @@ func TestCommand() SubCommand {
 	return SubCommand{
 		Name:     "test",
 		Aliases:  []string{"tests"},
-		Synopsis: "run tests and wait: upipe test [--mode editor|playmode|all] [--filter F] [--require-match] [--no-wait]",
+		Synopsis: "run tests and wait: upipe test [--mode editor|playmode|all] [--filter F] [--detail full|failures|summary] [--require-match] [--no-wait]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe test")
 			mode := fs.String("mode", "all", "all | editor | playmode")
 			filter := fs.String("filter", "", "test name filter (case-insensitive partial match)")
 			filterType := fs.String("filter-type", "testName", "testName | assembly | category")
+			detail := fs.String("detail", "full", "completed test results: full | failures | summary")
 			noWait := fs.Bool("no-wait", false, "submit async and return immediately")
 			requireMatch := fs.Bool("require-match", false, "fail if the completed run matched zero tests")
 			testTimeout := fs.Int("test-timeout", 0, "server-side test budget in seconds for the whole run (0 uses server default)")
@@ -30,6 +31,15 @@ func TestCommand() SubCommand {
 			}
 			if *noWait && *requireMatch {
 				return nil, usageErr("test: --require-match requires waiting for the result")
+			}
+			switch *detail {
+			case "full":
+			case "failures", "summary":
+				if *noWait {
+					return nil, usageErr("test: --detail failures or summary requires waiting for the result")
+				}
+			default:
+				return nil, usageErr("test: --detail must be full, failures, or summary")
 			}
 			if *testTimeout < 0 {
 				return nil, usageErr("test: --test-timeout must be non-negative")
@@ -65,6 +75,9 @@ func TestCommand() SubCommand {
 			statusParams := map[string]any{}
 			if started.RunID != "" {
 				statusParams["run_id"] = started.RunID
+			}
+			if *detail != "full" {
+				statusParams["detail"] = *detail
 			}
 			result, err := rt.pollCommandWithParams("test_status", statusParams, protocol.PollConfig{
 				TerminalOK:   []string{"completed", "no_tests", "timed_out"},
