@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using Unity.Pipeline.Commands;
@@ -21,6 +22,12 @@ namespace Unity.Pipeline.Editor
         private readonly WindowsEditorDialogMirror m_NativeDialogs = new WindowsEditorDialogMirror();
 
         protected override void RefreshDialogState() => m_NativeDialogs.Refresh(Dialogs);
+#endif
+
+#if UNITY_EDITOR_WIN
+        // Legacy Windows Pipeline versions use a wildcard listener in 7800–7849.
+        // Unity's Mono HttpListener can bind loopback over that same port.
+        protected override (int basePort, int maxPort) GetPortRange() => (17800, 17849);
 #endif
 
         private InstanceDescriptor m_InstanceDescriptor;
@@ -376,3 +383,4 @@ namespace Unity.Pipeline.Editor
         }
     }
 }
+#endif

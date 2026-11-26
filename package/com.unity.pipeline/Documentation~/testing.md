@@ -32,7 +32,7 @@ public void SetTransform_ViaClient_ArrayParams_Apply()
 }
 ```
 
-The test server is isolated: it uses the **test editor port range `7850`–`7899`** and **writes no descriptor**, so it never disturbs the live editor server (which uses `7800`–`7849`). `Execute` pumps the server's own dispatcher while the HTTP call is in flight, so `MainThreadRequired` commands complete even from a plain `[Test]` that blocks the main thread — no deadlock.
+The test server is isolated: it uses the **test editor port range `7850`–`7899`** and **writes no descriptor**, so it never disturbs the live editor server. `Execute` pumps the server's own dispatcher while the HTTP call is in flight, so `MainThreadRequired` commands complete even from a plain `[Test]` that blocks the main thread — no deadlock.
 
 ### CommandDirect — call the static method directly
 

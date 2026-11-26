@@ -13,6 +13,7 @@
 | 兼容层 | `patches/0001-adapt-unity-2022.patch` | 纯 Unity 2022 API 兼容（package.json unity 版本、asmdef 去 InputSystem、PhysicsMaterial 别名、rawRenderQueue、GraphicsSettings、4 个 PluginImporter meta） | **须重放**到新树，冲突处审读 API 差异 |
 | 演进层 | `patches/0002-evolution.patch` | 本仓功能演进：token 接缝剥离 + ArbitraryKeys 豁免、prefab/场景命令族 confirm 守门、test_status 陈旧结果修复、BuildOptions U6 API 规避、包内 CHANGELOG/版本号、Tests 演进用例 | **须保留**——新树重放 0001 后应用本层；与本仓新演进冲突时以演进层为准合并 |
 | 回移层 | `patches/0003-editor-lifecycle.patch` 至 `patches/0006-profiler-and-release.patch` | Play Mode、等待、连接、Console、测试状态、截图、Prefab 字段和性能分析 | 按序重放并核对 Unity 2022 API 差异 |
+| Windows 共存 | `patches/0007-windows-editor-ports.patch` | Windows Editor 自动端口与旧版通配监听错开，并串行完成端口分配和绑定 | 重放后复测新旧版本并行启动和域重载 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

@@ -15,7 +15,7 @@ namespace Unity.Pipeline.Editor
     /// </summary>
     class EditorPipelineManager : ScriptableObject
     {
-        [Tooltip("HTTP port for the editor server. 0 = auto-assign from the 7800-7849 range. Applies on next start.")]
+        [Tooltip("HTTP port for the editor server. 0 = automatic (17800-17849 on Windows, 7800-7849 elsewhere). Applies on next start.")]
         [SerializeField] private ushort m_Port = 0;
 
         [Tooltip("Start the server automatically when the editor loads. Applies on next editor load.")]

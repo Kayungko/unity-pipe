@@ -1,4 +1,8 @@
+#if UNITY_EDITOR
 using UnityEditor;
+#if UNITY_EDITOR_WIN
+using System.Threading;
+#endif
 using UnityEngine;
 using Unity.Pipeline.Models;
 using Unity.Pipeline.Commands;
@@ -209,7 +213,7 @@ namespace Unity.Pipeline.Editor
                 // even without a domain reload (the static ctor covers the reload path).
                 ApplyEvalTelemetrySettings(cfg);
 
-                m_Server.Start(cfg?.Port ?? 0); // 0 auto-assigns from the 7800-7849 range.
+                StartListener(m_Server, cfg?.Port ?? 0);
 
                 // Restore whatever auto-tick state the user last set this session (survives the
                 // domain reload that just wiped AutoTickCommand's statics). Only a session with no
@@ -225,6 +229,30 @@ namespace Unity.Pipeline.Editor
             {
                 Debug.LogError($"Failed to start Pipeline Server: {ex.Message}");
             }
+        }
+
+        private static void StartListener(EditorPipelineServer server, int port)
+        {
+#if UNITY_EDITOR_WIN
+            // Keep automatic port selection and bind together across Editor processes.
+            using (var startup = new Mutex(false, @"Local\UnityPipeline.Editor.Listener"))
+            {
+                try
+                {
+                    if (!startup.WaitOne(System.TimeSpan.FromSeconds(5)))
+                        throw new System.TimeoutException("Timed out waiting to start the Pipeline listener.");
+                }
+                catch (AbandonedMutexException)
+                {
+                    // WaitOne acquired the lock after another Editor exited during startup.
+                }
+
+                try { server.Start(port); }
+                finally { startup.ReleaseMutex(); }
+            }
+#else
+            server.Start(port);
+#endif
         }
 
         /// <summary>
@@ -329,3 +357,4 @@ namespace Unity.Pipeline.Editor
         }
     }
 }
+#endif

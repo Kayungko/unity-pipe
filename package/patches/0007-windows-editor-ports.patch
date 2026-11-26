@@ -1,0 +1,131 @@
+diff --git a/com.unity.pipeline/Documentation~/connectivity.md b/com.unity.pipeline/Documentation~/connectivity.md
+index 68587f0..1a4b4ce 100644
+--- a/com.unity.pipeline/Documentation~/connectivity.md
++++ b/com.unity.pipeline/Documentation~/connectivity.md
+@@ -87,11 +87,14 @@ Each server type picks the first free port in its range (or you can pin one expl
+
+ | Server | Production range | Test range |
+ |--------|------------------|------------|
+-| **Editor** | `7800`–`7849` | `7850`–`7899` |
++| **Editor** (Windows) | `17800`–`17849` | `7850`–`7899` |
++| **Editor** (other platforms) | `7800`–`7849` | `7850`–`7899` |
+ | **Runtime** (Player) | `7900`–`7949` | `7950`–`7999` |
+
+ If no port in the range is free, startup throws (`No available ports in range …`).
+
++On Windows, the automatic range keeps the loopback listener separate from legacy Pipeline versions that use wildcard listeners on `7800`–`7849`. A manually configured port takes precedence. During mixed-version use, choose a manually configured port outside the legacy range, or use automatic assignment.
++
+ ## Port Descriptor File
+
+ When a server starts, it writes a small JSON **instance descriptor** so clients can discover it. This is the only discovery channel — there is no broadcast or registry.
+diff --git a/com.unity.pipeline/Documentation~/testing.md b/com.unity.pipeline/Documentation~/testing.md
+index ffabc74..f5333ec 100644
+--- a/com.unity.pipeline/Documentation~/testing.md
++++ b/com.unity.pipeline/Documentation~/testing.md
+@@ -32,7 +32,7 @@ public void SetTransform_ViaClient_ArrayParams_Apply()
+ }
+ ```
+
+-The test server is isolated: it uses the **test editor port range `7850`–`7899`** and **writes no descriptor**, so it never disturbs the live editor server (which uses `7800`–`7849`). `Execute` pumps the server's own dispatcher while the HTTP call is in flight, so `MainThreadRequired` commands complete even from a plain `[Test]` that blocks the main thread — no deadlock.
++The test server is isolated: it uses the **test editor port range `7850`–`7899`** and **writes no descriptor**, so it never disturbs the live editor server. `Execute` pumps the server's own dispatcher while the HTTP call is in flight, so `MainThreadRequired` commands complete even from a plain `[Test]` that blocks the main thread — no deadlock.
+
+ ### CommandDirect — call the static method directly
+
+diff --git a/com.unity.pipeline/Editor/EditorPipelineManager.cs b/com.unity.pipeline/Editor/EditorPipelineManager.cs
+index f970138..ba152ca 100644
+--- a/com.unity.pipeline/Editor/EditorPipelineManager.cs
++++ b/com.unity.pipeline/Editor/EditorPipelineManager.cs
+@@ -15,7 +15,7 @@ namespace Unity.Pipeline.Editor
+     /// </summary>
+     class EditorPipelineManager : ScriptableObject
+     {
+-        [Tooltip("HTTP port for the editor server. 0 = auto-assign from the 7800-7849 range. Applies on next start.")]
++        [Tooltip("HTTP port for the editor server. 0 = automatic (17800-17849 on Windows, 7800-7849 elsewhere). Applies on next start.")]
+         [SerializeField] private ushort m_Port = 0;
+
+         [Tooltip("Start the server automatically when the editor loads. Applies on next editor load.")]
+diff --git a/com.unity.pipeline/Editor/EditorPipelineServer.cs b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+index 9d0b0da..9b76bee 100644
+--- a/com.unity.pipeline/Editor/EditorPipelineServer.cs
++++ b/com.unity.pipeline/Editor/EditorPipelineServer.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using Unity.Pipeline.Commands;
+@@ -23,6 +24,12 @@ namespace Unity.Pipeline.Editor
+         protected override void RefreshDialogState() => m_NativeDialogs.Refresh(Dialogs);
+ #endif
+
++#if UNITY_EDITOR_WIN
++        // Legacy Windows Pipeline versions use a wildcard listener in 7800–7849.
++        // Unity's Mono HttpListener can bind loopback over that same port.
++        protected override (int basePort, int maxPort) GetPortRange() => (17800, 17849);
++#endif
++
+         private InstanceDescriptor m_InstanceDescriptor;
+
+         /// <summary>
+@@ -376,3 +383,4 @@ namespace Unity.Pipeline.Editor
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/EditorPipelineStartup.cs b/com.unity.pipeline/Editor/EditorPipelineStartup.cs
+index b0a3ec6..fd76194 100644
+--- a/com.unity.pipeline/Editor/EditorPipelineStartup.cs
++++ b/com.unity.pipeline/Editor/EditorPipelineStartup.cs
+@@ -1,4 +1,8 @@
++#if UNITY_EDITOR
+ using UnityEditor;
++#if UNITY_EDITOR_WIN
++using System.Threading;
++#endif
+ using UnityEngine;
+ using Unity.Pipeline.Models;
+ using Unity.Pipeline.Commands;
+@@ -209,7 +213,7 @@ namespace Unity.Pipeline.Editor
+                 // even without a domain reload (the static ctor covers the reload path).
+                 ApplyEvalTelemetrySettings(cfg);
+
+-                m_Server.Start(cfg?.Port ?? 0); // 0 auto-assigns from the 7800-7849 range.
++                StartListener(m_Server, cfg?.Port ?? 0);
+
+                 // Restore whatever auto-tick state the user last set this session (survives the
+                 // domain reload that just wiped AutoTickCommand's statics). Only a session with no
+@@ -227,6 +231,30 @@ namespace Unity.Pipeline.Editor
+             }
+         }
+
++        private static void StartListener(EditorPipelineServer server, int port)
++        {
++#if UNITY_EDITOR_WIN
++            // Keep automatic port selection and bind together across Editor processes.
++            using (var startup = new Mutex(false, @"Local\UnityPipeline.Editor.Listener"))
++            {
++                try
++                {
++                    if (!startup.WaitOne(System.TimeSpan.FromSeconds(5)))
++                        throw new System.TimeoutException("Timed out waiting to start the Pipeline listener.");
++                }
++                catch (AbandonedMutexException)
++                {
++                    // WaitOne acquired the lock after another Editor exited during startup.
++                }
++
++                try { server.Start(port); }
++                finally { startup.ReleaseMutex(); }
++            }
++#else
++            server.Start(port);
++#endif
++        }
++
+         /// <summary>
+         /// Stop the Pipeline HTTP server.
+         /// </summary>
+@@ -329,3 +357,4 @@ namespace Unity.Pipeline.Editor
+         }
+     }
+ }
++#endif

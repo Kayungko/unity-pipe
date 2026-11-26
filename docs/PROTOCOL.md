@@ -28,7 +28,7 @@
 
 字段定义见包源码 `Runtime/Models/InstanceDescriptor.cs`。要点：
 
-- **Editor 实例端口 7800-7849**，随编辑器自动启动；**Runtime 服务器 7900-7949**，仅 dev Player 构建有。
+- **Editor** 随编辑器自动启动。Windows 自动使用 `17800-17849`，其他平台自动使用 `7800-7849`。**Runtime** 在开发 Player 中自动使用 `7900-7949`。
 - **每个心跳都会重写此文件；域重载后 port 与 evalToken 可能变化**——客户端绝不缓存，每次请求前重读（upipe 的 `DescriptorSource` 即此契约）。
 - 心跳超过 ~30s 未更新视为 stale（编辑器可能假死）。
 - 服务只绑 `127.0.0.1`。

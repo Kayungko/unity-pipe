@@ -8,7 +8,7 @@ description: Drive a running Unity Editor or development Player from the command
 Invoke commands with `upipe <subcommand>` (thin client over the pipeline
 HTTP API inside the editor; zero third-party deps, single static binary).
 Run `upipe commands` to list what an instance exposes. Two servers exist:
-**Editor** (`7800-7849`, auto-starts with the editor) and **Runtime**
+**Editor** (auto-starts with the editor, `17800-17849` on Windows and `7800-7849` elsewhere) and **Runtime**
 (`7900-7949`, only in a dev Player build).
 
 **Finding the right command**: `upipe commands --query <keyword>` returns a

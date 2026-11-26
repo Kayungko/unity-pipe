@@ -10,6 +10,8 @@
 
 ## [0.1.14] - 本地候选
 
+- Windows Editor 自动分配 `17800`–`17849`，避免与旧版通配监听端口重叠。CLI 按工程描述文件发现实例。
+
 - Play Mode 后台运行、可取消的等待命令和 Editor / 开发 Player 回环监听。
 - Console 分级计数、编译状态、原生日志补录、过期游标恢复和测试结果详情投影。
 - Editor 窗口、Scene View、UI Toolkit 裁图和资产预览。支持按 Prefab 内路径读写字段。

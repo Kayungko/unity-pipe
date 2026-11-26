@@ -87,10 +87,13 @@ Each server type picks the first free port in its range (or you can pin one expl
 
 | Server | Production range | Test range |
 |--------|------------------|------------|
-| **Editor** | `7800`–`7849` | `7850`–`7899` |
+| **Editor** (Windows) | `17800`–`17849` | `7850`–`7899` |
+| **Editor** (other platforms) | `7800`–`7849` | `7850`–`7899` |
 | **Runtime** (Player) | `7900`–`7949` | `7950`–`7999` |
 
 If no port in the range is free, startup throws (`No available ports in range …`).
+
+On Windows, the automatic range keeps the loopback listener separate from legacy Pipeline versions that use wildcard listeners on `7800`–`7849`. A manually configured port takes precedence. During mixed-version use, choose a manually configured port outside the legacy range, or use automatic assignment.
 
 ## Port Descriptor File
 
