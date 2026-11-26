@@ -28,7 +28,7 @@ namespace Unity.Pipeline.Editor.Commands
             [CliArg("filter", "Test name filter pattern (case-insensitive partial match)")] string filter = "",
             [CliArg("filter_type", "Filter type: testName, assembly, category (default: testName)")] string filterType = "testName",
             [CliArg("include_explicit", "Include tests marked with [Explicit] attribute")] bool includeExplicit = false,
-            [CliArg("async_tests", "Run asynchronously - return immediately, poll /test-status for results")] bool asyncTests = false,
+            [CliArg("async_tests", "Return immediately and poll test_status. Mode all always runs asynchronously.")] bool asyncTests = false,
             [CliArg("timeout", "Test execution timeout in seconds (default: 300)")] int timeout = 300)
         {
             // Return the full structured response (including failures and the Error field on a
@@ -101,7 +101,8 @@ namespace Unity.Pipeline.Editor.Commands
         /// </summary>
         [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "tests" })]
         public static string GetTestStatus(
-            [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full")
+            [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full",
+            [CliArg("run_id", "Optional run ID returned by run_tests. Refuses results for a different run.")] string runId = null)
         {
             var projection = (detail ?? "full").Trim().ToLowerInvariant();
             if (projection != "full" && projection != "failures" && projection != "summary")
@@ -109,11 +110,13 @@ namespace Unity.Pipeline.Editor.Commands
 
             var status = PipelineTestRunner.GetTestStatus()
                 ?? "{\"status\":\"no_tests\",\"message\":\"No test run in progress\"}";
-            if (projection == "full")
+            if (projection == "full" && string.IsNullOrEmpty(runId))
                 return status;
 
             var report = JObject.Parse(status);
-            if (report["results"] is JArray results)
+            if (!string.IsNullOrEmpty(runId) && !string.Equals((string)report["runId"], runId, StringComparison.Ordinal))
+                throw new InvalidOperationException("The requested test run is no longer available.");
+            if (projection != "full" && report["results"] is JArray results)
             {
                 report["results"] = projection == "summary"
                     ? new JArray()

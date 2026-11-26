@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -37,7 +38,8 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
             [CliArg("target", "Reference to the component or asset to modify (globalId/path/guid/instanceId/hierarchyPath). May be a GameObject when 'component' is given.", Required = true)] ObjectRef target,
             [CliArg("field", "SerializedProperty path, e.g. 'speed', 'settings.speed', or 'waypoints.Array.data[0]'.", Required = true)] string field,
             [CliArg("value", "JSON value to assign. For object references pass an ObjectRef object (or null to clear). For enums pass the value name.", Required = true, ArbitraryKeys = true)] JToken value,
-            [CliArg("component", "Component type name on the target GameObject (e.g. 'Rigidbody'). Use when 'target' is a GameObject; omit when 'target' is already a component handle.")] string component = null)
+            [CliArg("component", "Component type name on the target GameObject (e.g. 'Rigidbody'). Use when 'target' is a GameObject; omit when 'target' is already a component handle.")] string component = null,
+            [CliArg("enum_mode", "Numeric enum interpretation: index (default) or underlying value. Applies to nested fields.")] string enumMode = "index")
         {
             if (target == null || target.IsEmpty)
                 throw new ArgumentException("set_serialized_field 'target' is required.");
@@ -49,22 +51,21 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
                 && AssetDatabase.GetAssetPath(obj).EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Use set_prefab_serialized_field for a component in a prefab asset.");
 
-            using (new AuthoringUndoScope($"Set {field}"))
+            using (var so = new SerializedObject(obj))
             {
-                // RegisterCompleteObjectUndo captures the pre-change state for revert; the
-                // SerializedObject below then records the change for prefab/asset dirtying.
-                Undo.RegisterCompleteObjectUndo(obj, $"Set {field}");
-
-                var so = new SerializedObject(obj);
                 var prop = so.FindProperty(field);
                 if (prop == null)
                     throw new ArgumentException(
                         $"Field '{field}' was not found on '{obj.GetType().Name}'. " +
                         "Use a SerializedProperty path (e.g. 'speed', 'settings.speed', 'items.Array.data[0]').");
 
-                SerializedPropertyConverter.SetValue(prop, value);
-                so.ApplyModifiedProperties();
-                EditorUtility.SetDirty(obj);
+                SerializedPropertyConverter.SetValue(prop, value, ParseEnumMode(enumMode));
+                using (new AuthoringUndoScope($"Set {field}"))
+                {
+                    Undo.RegisterCompleteObjectUndo(obj, $"Set {field}");
+                    so.ApplyModifiedProperties();
+                    EditorUtility.SetDirty(obj);
+                }
             }
 
             var result = ObjectResolver.Describe(obj) ?? new AuthoringResult { Type = obj.GetType().Name };
@@ -76,8 +77,10 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
             [CliArg("target", "Prefab asset path and child, e.g. Assets/UI.prefab:Root/Child.", Required = true)] string target,
             [CliArg("component", "Component type on the Prefab object.", Required = true)] string component,
             [CliArg("field", "Unity SerializedProperty path.", Required = true)] string field,
-            [CliArg("value", "JSON value to write.", Required = true, ArbitraryKeys = true)] JToken value)
+            [CliArg("value", "JSON value to write.", Required = true, ArbitraryKeys = true)] JToken value,
+            [CliArg("enum_mode", "Numeric enum interpretation: index (default) or underlying value. Applies to nested fields.")] string enumMode = "index")
         {
+            var useEnumValue = ParseEnumMode(enumMode);
             if (!ObjectResolver.TrySplitPrefabPath(target, out var path, out var childPath))
                 throw new ArgumentException("Use a path such as 'Assets/UI.prefab:Root/Child' for target.");
             var assetPath = ProjectPaths.Resolve(path, out var error);
@@ -98,7 +101,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
                     var property = data.FindProperty(field);
                     if (property == null)
                         throw new ArgumentException($"Field '{field}' was not found on '{obj.GetType().Name}'.");
-                    SerializedPropertyConverter.SetValue(property, value);
+                    SerializedPropertyConverter.SetValue(property, value, useEnumValue);
                     data.ApplyModifiedPropertiesWithoutUndo();
                 }
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath, out var saved);
@@ -112,6 +115,13 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
 
             var persistent = ResolveSerializable(new ObjectRef { Path = $"{assetPath}:{childPath}" }, component);
             return ObjectResolver.Describe(persistent);
+        }
+
+        private static bool ParseEnumMode(string mode)
+        {
+            if (mode == "index") return false;
+            if (mode == "value") return true;
+            throw new ArgumentException("enum_mode must be 'index' or 'value'.", nameof(mode));
         }
 
         [CliCommand("get_serialized_fields",
@@ -283,3 +293,4 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
         }
     }
 }
+#endif

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 using Unity.Pipeline.Models;
 
 namespace Unity.Pipeline
@@ -18,6 +19,10 @@ namespace Unity.Pipeline
         public double Duration { get; set; }
         /// <summary>Path to poll for status when the run was started in async mode.</summary>
         public string StatusPath { get; set; } // For async mode
+
+        /// <summary>Identity to pass to test_status when polling an async run.</summary>
+        [JsonProperty("runId", NullValueHandling = NullValueHandling.Ignore)]
+        public string RunId { get; set; }
         /// <summary>Which suite was run: EditMode, PlayMode, or All.</summary>
         public string Mode { get; set; } // EditMode, PlayMode, or All
         /// <summary>The test filter that was applied, if any.</summary>

@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-2022.6] - Local candidate
+
+- Run EditMode and PlayMode under one async test ID, with combined results after domain reload and a shared cancellation and timeout lifecycle.
+- Accept enum constants by underlying value on opt-in, combined flag names and compact vector, color and rect inputs for serialized field writes.
+
 ## [0.6.0-2022.5] - Local candidate
 
 - Rank recorded frames by duration or GC allocation with `profiler_rank_frames`.

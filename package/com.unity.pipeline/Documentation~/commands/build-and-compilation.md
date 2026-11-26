@@ -163,13 +163,15 @@ Execute Unity tests with filtering options.
 | `filter` | no | `–` | Test name filter pattern (case-insensitive partial match) |
 | `filter_type` | no | `testName` | Filter type: testName, assembly, category (default: testName) |
 | `include_explicit` | no | `false` | Include tests marked with [Explicit] attribute |
-| `async_tests` | no | `false` | Run asynchronously - return immediately, poll /test-status for results |
+| `async_tests` | no | `false` | Return immediately and poll `test_status`. Mode `all` always runs asynchronously. |
 | `timeout` | no | `300` | Test execution timeout in seconds (default: 300) |
 
 **Returns:** `TestExecutionResponse`
-**Notes:** `MainThreadRequired = true`. Synchronous by default; with `async_tests=true` it returns immediately — poll `test_status` for results.
+**Notes:** `MainThreadRequired = true`. EditMode can run synchronously. An asynchronous submission returns a `runId`. Pass it as `run_id` to `test_status` to avoid reading a later run's results. In mode `all`, EditMode runs first and PlayMode still runs after an EditMode test failure. The final status combines both test phases after the PlayMode domain reload. The requested timeout is shared across phases. A cancellation or timeout keeps completed phase results.
 
 ### `test_status`
+
+Use `run_id` to select the most recent run by identity. Its status includes the phase, the combined summary, and the phase summaries. The `detail` projection applies to the combined results.
 Get status of running async test execution.
 
 No parameters.

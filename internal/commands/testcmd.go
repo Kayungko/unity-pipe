@@ -23,12 +23,16 @@ func TestCommand() SubCommand {
 			filterType := fs.String("filter-type", "testName", "testName | assembly | category")
 			noWait := fs.Bool("no-wait", false, "submit async and return immediately")
 			requireMatch := fs.Bool("require-match", false, "fail if the completed run matched zero tests")
+			testTimeout := fs.Int("test-timeout", 0, "server-side test budget in seconds for the whole run (0 uses server default)")
 			attachShared(fs, rt.Opts)
 			if _, err := parseArgs(fs, args); err != nil {
 				return nil, usageErr("test: " + err.Error())
 			}
 			if *noWait && *requireMatch {
 				return nil, usageErr("test: --require-match requires waiting for the result")
+			}
+			if *testTimeout < 0 {
+				return nil, usageErr("test: --test-timeout must be non-negative")
 			}
 			if err := rt.requireCleanTestScenes(); err != nil {
 				return nil, err
@@ -42,6 +46,9 @@ func TestCommand() SubCommand {
 				params["filter"] = *filter
 				params["filter_type"] = *filterType
 			}
+			if *testTimeout > 0 {
+				params["timeout"] = *testTimeout
+			}
 
 			trigger, err := rt.execSimple("run_tests", params)
 			if err != nil {
@@ -51,12 +58,25 @@ func TestCommand() SubCommand {
 				return trigger, nil
 			}
 
-			result, err := rt.pollCommand("test_status", protocol.PollConfig{
-				TerminalOK:   []string{"completed", "no_tests"},
+			var started struct {
+				RunID string `json:"runId"`
+			}
+			_ = json.Unmarshal(protocol.UnwrapJSONString(trigger.Result), &started)
+			statusParams := map[string]any{}
+			if started.RunID != "" {
+				statusParams["run_id"] = started.RunID
+			}
+			result, err := rt.pollCommandWithParams("test_status", statusParams, protocol.PollConfig{
+				TerminalOK:   []string{"completed", "no_tests", "timed_out"},
 				TerminalFail: []string{"error", "interrupted"}, TerminalCancel: []string{"cancelled", "canceled"},
 			})
 			if err != nil {
 				return nil, err
+			}
+			if result.Status == "timed_out" {
+				failure := protocol.ErrTimeout("test run timed out")
+				failure.Data = result.Body
+				return nil, failure
 			}
 
 			// Completed async runs report outcomes in the summary counters.

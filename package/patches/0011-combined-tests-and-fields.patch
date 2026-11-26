@@ -1,0 +1,1324 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index 2c8080e..b9b63b3 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,11 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
++## [0.6.0-2022.6] - Local candidate
++
++- Run EditMode and PlayMode under one async test ID, with combined results after domain reload and a shared cancellation and timeout lifecycle.
++- Accept enum constants by underlying value on opt-in, combined flag names and compact vector, color and rect inputs for serialized field writes.
++
+ ## [0.6.0-2022.5] - Local candidate
+
+ - Rank recorded frames by duration or GC allocation with `profiler_rank_frames`.
+diff --git a/com.unity.pipeline/Documentation~/commands/build-and-compilation.md b/com.unity.pipeline/Documentation~/commands/build-and-compilation.md
+index ec49d7f..30119ac 100644
+--- a/com.unity.pipeline/Documentation~/commands/build-and-compilation.md
++++ b/com.unity.pipeline/Documentation~/commands/build-and-compilation.md
+@@ -163,13 +163,15 @@ Execute Unity tests with filtering options.
+ | `filter` | no | `–` | Test name filter pattern (case-insensitive partial match) |
+ | `filter_type` | no | `testName` | Filter type: testName, assembly, category (default: testName) |
+ | `include_explicit` | no | `false` | Include tests marked with [Explicit] attribute |
+-| `async_tests` | no | `false` | Run asynchronously - return immediately, poll /test-status for results |
++| `async_tests` | no | `false` | Return immediately and poll `test_status`. Mode `all` always runs asynchronously. |
+ | `timeout` | no | `300` | Test execution timeout in seconds (default: 300) |
+
+ **Returns:** `TestExecutionResponse`
+-**Notes:** `MainThreadRequired = true`. Synchronous by default; with `async_tests=true` it returns immediately — poll `test_status` for results.
++**Notes:** `MainThreadRequired = true`. EditMode can run synchronously. An asynchronous submission returns a `runId`. Pass it as `run_id` to `test_status` to avoid reading a later run's results. In mode `all`, EditMode runs first and PlayMode still runs after an EditMode test failure. The final status combines both test phases after the PlayMode domain reload. The requested timeout is shared across phases. A cancellation or timeout keeps completed phase results.
+
+ ### `test_status`
++
++Use `run_id` to select the most recent run by identity. Its status includes the phase, the combined summary, and the phase summaries. The `detail` projection applies to the combined results.
+ Get status of running async test execution.
+
+ No parameters.
+diff --git a/com.unity.pipeline/Documentation~/commands/scripts.md b/com.unity.pipeline/Documentation~/commands/scripts.md
+index 2637aa7..8f3af47 100644
+--- a/com.unity.pipeline/Documentation~/commands/scripts.md
++++ b/com.unity.pipeline/Documentation~/commands/scripts.md
+@@ -29,18 +29,23 @@ Add a MonoBehaviour to a GameObject by its (compiled) type name OR by its script
+ **Notes:** Undo-able. Provide exactly one of `type` or `script`. A not-yet-compiled type returns a recoverable error (recompile, poll `recompile_status`, then retry).
+
+ ### `set_serialized_field`
+-Set a serialized field on a component/asset. Supports primitives, enums, Vector/Color/Rect/Bounds, object references (value = an ObjectRef: asset by guid/fileId/path or scene object by instanceId/hierarchyPath), and array elements via 'name.Array.data[i]' (or 'name.Array.size' to resize).
++Set a serialized field on a component or asset. Accepts primitives, enums, vectors, colors, rectangles, bounds, object references and nested serializable data. Pass a JSON object for a struct, a JSON array for a whole list, or a property path such as `name.Array.data[i]` for one element.
+
+ | Parameter | Required | Default | Description |
+ |-----------|----------|---------|-------------|
+ | `target` | yes | – | Reference to the component or asset to modify (globalId/path/guid/instanceId/hierarchyPath). May be a GameObject when 'component' is given. |
+ | `field` | yes | – | SerializedProperty path, e.g. 'speed', 'settings.speed', or 'waypoints.Array.data[0]'. |
+-| `value` | yes | – | JSON value to assign. For object references pass an ObjectRef object (or null to clear). For enums pass the value name. |
++| `value` | yes | – | JSON value to assign. Use an ObjectRef or null for an object reference. Use an enum name or a Flags combination such as `"Display, Input"`. Vectors, colors and rectangles accept named objects, numeric arrays and comma-separated strings. |
+ | `component` | no | `–` | Component type name on the target GameObject (e.g. 'Rigidbody'). Use when 'target' is a GameObject; omit when 'target' is already a component handle. |
++| `enum_mode` | no | `index` | `index` uses the same numeric index as earlier versions. `value` uses the declared enum constant or Flags bit mask. Applies to nested fields. |
+
+ **Returns:** `AuthoringResult`
+ **Notes:** Undo-able.
+
++### `set_prefab_serialized_field`
++
++Edit and save a field on a component inside a source Prefab. Pass `target` as `Assets/My.prefab:Root/Child`, plus `component`, `field`, `value` and optional `enum_mode`. Input rules match `set_serialized_field`. The command saves only after validating the whole input. Reload the Prefab to verify the saved value. This edit writes the Prefab asset and is excluded from transactional batches.
++
+ ### `get_serialized_fields`
+ Read serialized fields of a component/asset. Returns each top-level field's name, type and value (object references are returned as re-usable handles). Pass 'field' to read a single SerializedProperty path.
+
+diff --git a/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs b/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs
+index b5c1b91..a651367 100644
+--- a/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/Scripts/SerializedFieldCommands.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using System.Linq;
+@@ -37,7 +38,8 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+             [CliArg("target", "Reference to the component or asset to modify (globalId/path/guid/instanceId/hierarchyPath). May be a GameObject when 'component' is given.", Required = true)] ObjectRef target,
+             [CliArg("field", "SerializedProperty path, e.g. 'speed', 'settings.speed', or 'waypoints.Array.data[0]'.", Required = true)] string field,
+             [CliArg("value", "JSON value to assign. For object references pass an ObjectRef object (or null to clear). For enums pass the value name.", Required = true, ArbitraryKeys = true)] JToken value,
+-            [CliArg("component", "Component type name on the target GameObject (e.g. 'Rigidbody'). Use when 'target' is a GameObject; omit when 'target' is already a component handle.")] string component = null)
++            [CliArg("component", "Component type name on the target GameObject (e.g. 'Rigidbody'). Use when 'target' is a GameObject; omit when 'target' is already a component handle.")] string component = null,
++            [CliArg("enum_mode", "Numeric enum interpretation: index (default) or underlying value. Applies to nested fields.")] string enumMode = "index")
+         {
+             if (target == null || target.IsEmpty)
+                 throw new ArgumentException("set_serialized_field 'target' is required.");
+@@ -49,22 +51,21 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+                 && AssetDatabase.GetAssetPath(obj).EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+                 throw new ArgumentException("Use set_prefab_serialized_field for a component in a prefab asset.");
+
+-            using (new AuthoringUndoScope($"Set {field}"))
++            using (var so = new SerializedObject(obj))
+             {
+-                // RegisterCompleteObjectUndo captures the pre-change state for revert; the
+-                // SerializedObject below then records the change for prefab/asset dirtying.
+-                Undo.RegisterCompleteObjectUndo(obj, $"Set {field}");
+-
+-                var so = new SerializedObject(obj);
+                 var prop = so.FindProperty(field);
+                 if (prop == null)
+                     throw new ArgumentException(
+                         $"Field '{field}' was not found on '{obj.GetType().Name}'. " +
+                         "Use a SerializedProperty path (e.g. 'speed', 'settings.speed', 'items.Array.data[0]').");
+
+-                SerializedPropertyConverter.SetValue(prop, value);
+-                so.ApplyModifiedProperties();
+-                EditorUtility.SetDirty(obj);
++                SerializedPropertyConverter.SetValue(prop, value, ParseEnumMode(enumMode));
++                using (new AuthoringUndoScope($"Set {field}"))
++                {
++                    Undo.RegisterCompleteObjectUndo(obj, $"Set {field}");
++                    so.ApplyModifiedProperties();
++                    EditorUtility.SetDirty(obj);
++                }
+             }
+
+             var result = ObjectResolver.Describe(obj) ?? new AuthoringResult { Type = obj.GetType().Name };
+@@ -76,8 +77,10 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+             [CliArg("target", "Prefab asset path and child, e.g. Assets/UI.prefab:Root/Child.", Required = true)] string target,
+             [CliArg("component", "Component type on the Prefab object.", Required = true)] string component,
+             [CliArg("field", "Unity SerializedProperty path.", Required = true)] string field,
+-            [CliArg("value", "JSON value to write.", Required = true, ArbitraryKeys = true)] JToken value)
++            [CliArg("value", "JSON value to write.", Required = true, ArbitraryKeys = true)] JToken value,
++            [CliArg("enum_mode", "Numeric enum interpretation: index (default) or underlying value. Applies to nested fields.")] string enumMode = "index")
+         {
++            var useEnumValue = ParseEnumMode(enumMode);
+             if (!ObjectResolver.TrySplitPrefabPath(target, out var path, out var childPath))
+                 throw new ArgumentException("Use a path such as 'Assets/UI.prefab:Root/Child' for target.");
+             var assetPath = ProjectPaths.Resolve(path, out var error);
+@@ -98,7 +101,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+                     var property = data.FindProperty(field);
+                     if (property == null)
+                         throw new ArgumentException($"Field '{field}' was not found on '{obj.GetType().Name}'.");
+-                    SerializedPropertyConverter.SetValue(property, value);
++                    SerializedPropertyConverter.SetValue(property, value, useEnumValue);
+                     data.ApplyModifiedPropertiesWithoutUndo();
+                 }
+                 PrefabUtility.SaveAsPrefabAsset(root, assetPath, out var saved);
+@@ -114,6 +117,13 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+             return ObjectResolver.Describe(persistent);
+         }
+
++        private static bool ParseEnumMode(string mode)
++        {
++            if (mode == "index") return false;
++            if (mode == "value") return true;
++            throw new ArgumentException("enum_mode must be 'index' or 'value'.", nameof(mode));
++        }
++
+         [CliCommand("get_serialized_fields",
+             "Read serialized fields of a component/asset. Returns each top-level field's name, type and value " +
+             "(object references are returned as re-usable handles). Pass 'field' to read a single SerializedProperty path. " +
+@@ -283,3 +293,4 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs b/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs
+index 23bb3b1..ecc0b5c 100644
+--- a/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs
++++ b/com.unity.pipeline/Editor/Commands/Scripts/SerializedPropertyConverter.cs
+@@ -1,5 +1,8 @@
+ #if UNITY_EDITOR
+ using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.Reflection;
+ using Newtonsoft.Json.Linq;
+ using Unity.Pipeline.Editor.Authoring;
+ using Unity.Pipeline.Models;
+@@ -26,7 +29,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+         /// <see cref="ArgumentException"/> with a clear message when the value can't be coerced or the
+         /// property type isn't supported. The caller is responsible for ApplyModifiedProperties.
+         /// </summary>
+-        public static void SetValue(SerializedProperty prop, JToken value)
++        public static void SetValue(SerializedProperty prop, JToken value, bool useEnumValue = false)
+         {
+             // Whole-array assignment: an array/list field (Generic + isArray) set from a JSON array —
+             // resize, then recurse per element (handles primitive and object-reference arrays alike).
+@@ -39,7 +42,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+
+                 prop.arraySize = array.Count;
+                 for (int i = 0; i < array.Count; i++)
+-                    SetValue(prop.GetArrayElementAtIndex(i), array[i]);
++                    SetValue(prop.GetArrayElementAtIndex(i), array[i], useEnumValue);
+                 return;
+             }
+
+@@ -58,7 +61,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+                     prop.stringValue = value.ToObject<string>();
+                     break;
+                 case SerializedPropertyType.Enum:
+-                    SetEnum(prop, value);
++                    SetEnum(prop, value, useEnumValue);
+                     break;
+                 case SerializedPropertyType.Vector2:
+                     prop.vector2Value = ToVector2(value);
+@@ -97,7 +100,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+                         var child = prop.FindPropertyRelative(member.Name);
+                         if (child == null)
+                             throw new ArgumentException($"Field '{prop.propertyPath}' has no member '{member.Name}'.");
+-                        SetValue(child, member.Value);
++                        SetValue(child, member.Value, useEnumValue);
+                     }
+                     break;
+                 default:
+@@ -182,31 +185,124 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+             }
+         }
+
+-        private static void SetEnum(SerializedProperty prop, JToken value)
++        private static void SetEnum(SerializedProperty prop, JToken value, bool useEnumValue)
+         {
+-            // Accept either the enum name (preferred, stable across reordering) or the numeric index.
+             if (value.Type == JTokenType.String)
+             {
+                 var name = value.ToObject<string>();
+-                var idx = Array.IndexOf(prop.enumNames, name);
+-                if (idx < 0)
+-                    idx = Array.IndexOf(prop.enumDisplayNames, name);
+-                if (idx < 0)
+-                    throw new ArgumentException(
+-                        $"Enum '{name}' is not a valid value for '{prop.propertyPath}'. Valid: {string.Join(", ", prop.enumNames)}.");
+-                prop.enumValueIndex = idx;
++                var idx = FindEnumName(prop, name);
++                if (idx >= 0)
++                {
++                    prop.enumValueIndex = idx;
++                    return;
++                }
++                if (name.IndexOfAny(new[] { '|', ',' }) >= 0)
++                {
++                    SetFlags(prop, name);
++                    return;
++                }
++                throw InvalidEnum(prop, name);
+             }
+-            else
++            if (useEnumValue)
+             {
+-                var idx = value.ToObject<int>();
+-                if (idx < 0 || idx >= prop.enumNames.Length)
+-                    throw new ArgumentException(
+-                        $"Enum index {idx} is out of range for '{prop.propertyPath}' (valid 0..{prop.enumNames.Length - 1}). " +
+-                        $"Valid values: {string.Join(", ", prop.enumNames)}.");
+-                prop.enumValueIndex = idx;
++                SetEnumNumber(prop, value);
++                return;
++            }
++            // Keep the original numeric index semantics when enum_mode is omitted.
++            var index = value.ToObject<int>();
++            if (index < 0 || index >= prop.enumNames.Length)
++                throw new ArgumentException(
++                    $"Enum index {index} is out of range for '{prop.propertyPath}' (valid 0..{prop.enumNames.Length - 1}). " +
++                    $"Valid values: {string.Join(", ", prop.enumNames)}.");
++            prop.enumValueIndex = index;
++        }
++
++        private static void SetEnumNumber(SerializedProperty prop, JToken value)
++        {
++            if (value.Type != JTokenType.Integer)
++                throw InvalidEnum(prop, value);
++            try
++            {
++                var type = FindManagedEnum(prop);
++                if (type == null)
++                {
++                    // A built-in property can have no corresponding managed field.
++                    prop.intValue = value.ToObject<int>();
++                    if (prop.enumValueIndex < 0)
++                        throw InvalidEnum(prop, value);
++                    return;
++                }
++
++                var number = value.ToObject<long>();
++                var underlying = Convert.ChangeType(number, Enum.GetUnderlyingType(type), CultureInfo.InvariantCulture);
++                if (type.IsDefined(typeof(FlagsAttribute), false))
++                {
++                    long defined = 0;
++                    foreach (var constant in Enum.GetValues(type))
++                        defined |= Convert.ToInt64(constant, CultureInfo.InvariantCulture);
++                    if ((number & ~defined) != 0)
++                        throw InvalidEnum(prop, value);
++                }
++                else if (!Enum.IsDefined(type, underlying))
++                {
++                    throw InvalidEnum(prop, value);
++                }
++                prop.longValue = number;
++            }
++            catch (OverflowException)
++            {
++                throw InvalidEnum(prop, value);
++            }
++        }
++
++        private static void SetFlags(SerializedProperty prop, string text)
++        {
++            var type = FindManagedEnum(prop);
++            if (type == null || !type.IsDefined(typeof(FlagsAttribute), false))
++                throw InvalidEnum(prop, text);
++            long mask = 0;
++            foreach (var name in text.Split('|', ','))
++            {
++                var index = FindEnumName(prop, name.Trim());
++                if (index < 0)
++                    throw InvalidEnum(prop, text);
++                mask |= Convert.ToInt64(Enum.Parse(type, prop.enumNames[index]), CultureInfo.InvariantCulture);
++            }
++            prop.longValue = mask;
++        }
++
++        private static Type FindManagedEnum(SerializedProperty prop)
++        {
++            var type = prop.serializedObject.targetObject.GetType();
++            var path = prop.propertyPath.Split('.');
++            for (var i = 0; i < path.Length && type != null; i++)
++            {
++                if (path[i] == "Array" && i + 1 < path.Length && path[i + 1].StartsWith("data[", StringComparison.Ordinal))
++                {
++                    if (type.IsArray)
++                        type = type.GetElementType();
++                    else
++                        type = type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>) ? type.GetGenericArguments()[0] : null;
++                    i++;
++                    continue;
++                }
++                FieldInfo field = null;
++                for (var declaring = type; declaring != null && field == null; declaring = declaring.BaseType)
++                    field = declaring.GetField(path[i], BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
++                type = field?.FieldType;
+             }
++            return type?.IsEnum == true ? type : null;
++        }
++
++        private static int FindEnumName(SerializedProperty prop, string name)
++        {
++            var index = Array.IndexOf(prop.enumNames, name);
++            return index >= 0 ? index : Array.IndexOf(prop.enumDisplayNames, name);
+         }
+
++        private static ArgumentException InvalidEnum(SerializedProperty prop, object value) =>
++            new ArgumentException($"Enum '{value}' is invalid for '{prop.propertyPath}'. Valid names: {string.Join(", ", prop.enumNames)}.");
++
+         private static Object ResolveObjectReference(JToken value)
+         {
+             // An explicit null clears the reference; anything else MUST resolve — never silently no-op
+@@ -227,27 +323,78 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
+             return obj;
+         }
+
+-        private static float F(JToken t, string key, float fallback = 0f)
++        private static float[] Components(JToken value, string[] names, bool defaultAlpha = false)
+         {
+-            // Indexing a non-object token (e.g. the agent passed a number or array for a Vector3/Color)
+-            // with a string key throws an opaque InvalidOperationException — validate first so the
+-            // caller gets a clear, actionable ArgumentException instead.
+-            if (!(t is JObject obj))
+-                throw new ArgumentException(
+-                    $"Expected a JSON object with named components (e.g. {{ \"{key}\": 0 }}) " +
+-                    $"but received a '{t?.Type.ToString() ?? "null"}'.");
++            var values = new float[names.Length];
++            if (defaultAlpha)
++                values[3] = 1;
++            if (value is JObject obj)
++            {
++                // Preserve the named-object defaults used by existing callers.
++                for (var i = 0; i < names.Length; i++)
++                {
++                    var member = obj[names[i]];
++                    if (member != null)
++                        values[i] = member.ToObject<float>();
++                }
++                return values;
++            }
++
++            var array = value as JArray;
++            var csv = value?.Type == JTokenType.String ? value.Value<string>().Split(',') : null;
++            var count = array?.Count ?? csv?.Length ?? 0;
++            if (count != names.Length && !(defaultAlpha && count == 3))
++                throw new ArgumentException($"Provide {string.Join(", ", names)} as an object, numeric array, or comma-separated numbers.");
++
++            for (var i = 0; i < count; i++)
++            {
++                float number;
++                if (array != null)
++                {
++                    if (array[i].Type != JTokenType.Integer && array[i].Type != JTokenType.Float)
++                        throw new ArgumentException($"'{names[i]}' must be a finite number.");
++                    number = array[i].Value<float>();
++                }
++                else if (!float.TryParse(csv[i], NumberStyles.Float, CultureInfo.InvariantCulture, out number))
++                {
++                    throw new ArgumentException($"'{names[i]}' must be a finite number.");
++                }
++                if (float.IsNaN(number) || float.IsInfinity(number))
++                    throw new ArgumentException($"'{names[i]}' must be a finite number.");
++                values[i] = number;
++            }
++            return values;
++        }
++
++        private static Vector2 ToVector2(JToken value)
++        {
++            var v = Components(value, new[] { "x", "y" });
++            return new Vector2(v[0], v[1]);
++        }
+
+-            var token = obj[key];
+-            return token != null ? token.ToObject<float>() : fallback;
++        private static Vector3 ToVector3(JToken value)
++        {
++            var v = Components(value, new[] { "x", "y", "z" });
++            return new Vector3(v[0], v[1], v[2]);
+         }
+
+-        private static Vector2 ToVector2(JToken t) => new Vector2(F(t, "x"), F(t, "y"));
+-        private static Vector3 ToVector3(JToken t) => new Vector3(F(t, "x"), F(t, "y"), F(t, "z"));
+-        private static Vector4 ToVector4(JToken t) => new Vector4(F(t, "x"), F(t, "y"), F(t, "z"), F(t, "w"));
++        private static Vector4 ToVector4(JToken value)
++        {
++            var v = Components(value, new[] { "x", "y", "z", "w" });
++            return new Vector4(v[0], v[1], v[2], v[3]);
++        }
+
+-        private static Color ToColor(JToken t) => new Color(F(t, "r"), F(t, "g"), F(t, "b"), F(t, "a", 1f));
++        private static Color ToColor(JToken value)
++        {
++            var v = Components(value, new[] { "r", "g", "b", "a" }, defaultAlpha: true);
++            return new Color(v[0], v[1], v[2], v[3]);
++        }
+
+-        private static Rect ToRect(JToken t) => new Rect(F(t, "x"), F(t, "y"), F(t, "width"), F(t, "height"));
++        private static Rect ToRect(JToken value)
++        {
++            var v = Components(value, new[] { "x", "y", "width", "height" });
++            return new Rect(v[0], v[1], v[2], v[3]);
++        }
+
+         private static Bounds ToBounds(JToken t)
+         {
+diff --git a/com.unity.pipeline/Editor/Commands/TestCommands.cs b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+index a6e09a3..b7f62b0 100644
+--- a/com.unity.pipeline/Editor/Commands/TestCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+@@ -28,7 +28,7 @@ namespace Unity.Pipeline.Editor.Commands
+             [CliArg("filter", "Test name filter pattern (case-insensitive partial match)")] string filter = "",
+             [CliArg("filter_type", "Filter type: testName, assembly, category (default: testName)")] string filterType = "testName",
+             [CliArg("include_explicit", "Include tests marked with [Explicit] attribute")] bool includeExplicit = false,
+-            [CliArg("async_tests", "Run asynchronously - return immediately, poll /test-status for results")] bool asyncTests = false,
++            [CliArg("async_tests", "Return immediately and poll test_status. Mode all always runs asynchronously.")] bool asyncTests = false,
+             [CliArg("timeout", "Test execution timeout in seconds (default: 300)")] int timeout = 300)
+         {
+             // Return the full structured response (including failures and the Error field on a
+@@ -101,7 +101,8 @@ namespace Unity.Pipeline.Editor.Commands
+         /// </summary>
+         [CliCommand("test_status", "Get status of running async test execution", MainThreadRequired = false, Effect = CommandEffect.ReadOnly, Tags = new[] { "tests" })]
+         public static string GetTestStatus(
+-            [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full")
++            [CliArg("detail", "full (default) returns every result, failures returns failed tests, summary returns counts only.")] string detail = "full",
++            [CliArg("run_id", "Optional run ID returned by run_tests. Refuses results for a different run.")] string runId = null)
+         {
+             var projection = (detail ?? "full").Trim().ToLowerInvariant();
+             if (projection != "full" && projection != "failures" && projection != "summary")
+@@ -109,11 +110,13 @@ namespace Unity.Pipeline.Editor.Commands
+
+             var status = PipelineTestRunner.GetTestStatus()
+                 ?? "{\"status\":\"no_tests\",\"message\":\"No test run in progress\"}";
+-            if (projection == "full")
++            if (projection == "full" && string.IsNullOrEmpty(runId))
+                 return status;
+
+             var report = JObject.Parse(status);
+-            if (report["results"] is JArray results)
++            if (!string.IsNullOrEmpty(runId) && !string.Equals((string)report["runId"], runId, StringComparison.Ordinal))
++                throw new InvalidOperationException("The requested test run is no longer available.");
++            if (projection != "full" && report["results"] is JArray results)
+             {
+                 report["results"] = projection == "summary"
+                     ? new JArray()
+diff --git a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+index 3995f17..f962932 100644
+--- a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
++++ b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+@@ -1,8 +1,10 @@
+ #if UNITY_EDITOR
+ using System;
++using System.Collections;
+ using System.Collections.Generic;
+ using System.IO;
+ using System.Linq;
++using System.Reflection;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using UnityEditor;
+@@ -30,6 +32,17 @@ namespace Unity.Pipeline.Editor.Testing
+
+         private static TestRunnerApi m_ActiveApi;
+         private static TestResultCollector m_ActiveCollector;
++        private static TestRequest s_AsyncRun;
++        private static string s_DrainingRunId;
++
++        // Test Framework 1.1.33 has no public cancellation API. Look up only the job
++        // returned by Execute, so stopping a Pipeline run cannot stop someone else's tests.
++        private static readonly MethodInfo CancelNativeRun = typeof(TestRunnerApi).GetMethod(
++            "CancelTestRun", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
++        private static readonly Type LegacyJobHolder = typeof(TestRunnerApi).Assembly.GetType(
++            "UnityEditor.TestTools.TestRunner.TestRun.TestJobDataHolder");
++        private static readonly Type LegacyPlayController = typeof(UnityEngine.TestTools.UnityTestAttribute).Assembly.GetType(
++            "UnityEngine.TestTools.TestRunner.PlaymodeTestsController");
+
+         /// <summary>
+         /// Execute tests with the given parameters
+@@ -65,19 +78,14 @@ namespace Unity.Pipeline.Editor.Testing
+                     return CreateErrorResponse($"Invalid filterType '{filterType}'. Valid options: testName, assembly, category");
+                 }
+
+-                // Cancel any previous run
+-                InvalidatePreviousRun();
++                if (timeoutSeconds <= 0)
++                    return CreateErrorResponse("Test timeout must be greater than zero.");
++                if (s_AsyncRun != null || m_ActiveCollector != null || FindLegacyJob(s_DrainingRunId) != null)
++                    return CreateErrorResponse("A Pipeline test run is still active. Poll test_status or cancel it before starting another.");
+
+-                if (parsedMode.IsAll)
+-                {
+-                    // Handle "all" mode by running both editor and playmode tests
+-                    return await ExecuteAllModesAsync(filter, normalizedFilterType, includeExplicit, asyncMode, timeoutSeconds);
+-                }
+-                else if (asyncMode)
+-                {
+-                    return await ExecuteAsyncMode(parsedMode.TestMode, filter, normalizedFilterType, includeExplicit, timeoutSeconds);
+-                }
+-                else if (parsedMode.TestMode == TestMode.PlayMode)
++                if (parsedMode.IsAll || asyncMode)
++                    return StartAsyncRun(parsedMode, filter, normalizedFilterType, includeExplicit, timeoutSeconds);
++                if (parsedMode.TestMode == TestMode.PlayMode)
+                 {
+                     // PlayMode entry triggers a domain reload that drops the in-flight HTTP request,
+                     // so a synchronous playmode run can never return results over one call. Fail fast
+@@ -99,72 +107,6 @@ namespace Unity.Pipeline.Editor.Testing
+             }
+         }
+
+-        /// <summary>
+-        /// Execute tests in all modes (editor + playmode)
+-        /// </summary>
+-        private static async Task<TestExecutionResponse> ExecuteAllModesAsync(
+-            string filter,
+-            string filterType,
+-            bool includeExplicit,
+-            bool asyncMode,
+-            int timeoutSeconds)
+-        {
+-            if (asyncMode)
+-            {
+-                return CreateErrorResponse("Async mode is not supported for 'all' mode. Use 'editor' or 'playmode' for async execution.");
+-            }
+-
+-            var startTime = DateTime.UtcNow;
+-
+-            try
+-            {
+-                // EditMode runs synchronously over HTTP (no domain reload), so its results are
+-                // returned in this response.
+-                Debug.Log("[PipelineTestRunner] Running editor tests (all mode)...");
+-                var editorResponse = await ExecuteSyncMode(TestMode.EditMode, filter, filterType, includeExplicit, timeoutSeconds);
+-
+-                if (!editorResponse.Success)
+-                {
+-                    return editorResponse; // Return error immediately
+-                }
+-
+-                // PlayMode can't run synchronously over HTTP (entering play mode triggers a domain
+-                // reload that drops the request), so start it asynchronously and hand back a
+-                // StatusPath. The caller polls the test_status command for the playmode results.
+-                Debug.Log("[PipelineTestRunner] Starting playmode tests asynchronously (all mode)...");
+-                var playmodeStart = await ExecuteAsyncMode(TestMode.PlayMode, filter, filterType, includeExplicit, timeoutSeconds);
+-
+-                if (!playmodeStart.Success)
+-                {
+-                    return playmodeStart; // Return error immediately
+-                }
+-
+-                // Build combined response: editor results inline, playmode running async.
+-                var duration = (DateTime.UtcNow - startTime).TotalSeconds;
+-                return new TestExecutionResponse
+-                {
+-                    Success = true,
+-                    Command = "run_tests",
+-                    Duration = Math.Round(duration, 2),
+-                    Mode = "All",
+-                    FilterApplied = string.IsNullOrEmpty(filter) ? null : $"{filterType}: {filter}",
+-                    ExecutionTimeMs = (int)(duration * 1000),
+-                    Summary = editorResponse.Summary,
+-                    Results = editorResponse.Results,
+-                    Result = "playmode_running",
+-                    StatusPath = playmodeStart.StatusPath,
+-                    Message = $"EditMode complete: {editorResponse.Summary.Passed}/{editorResponse.Summary.Total} passed. " +
+-                              "PlayMode tests started asynchronously — poll the test_status command for their results.",
+-                    ExecutedAt = DateTime.UtcNow
+-                };
+-            }
+-            catch (Exception ex)
+-            {
+-                Debug.LogError($"[PipelineTestRunner] All modes execution error: {ex.Message}");
+-                return CreateErrorResponse($"Failed to execute tests in all modes: {ex.Message}");
+-            }
+-        }
+-
+         /// <summary>
+         /// Synchronous execution - blocks until completion
+         /// </summary>
+@@ -256,73 +198,6 @@ namespace Unity.Pipeline.Editor.Testing
+             }
+         }
+
+-        /// <summary>
+-        /// Asynchronous execution - returns immediately
+-        /// </summary>
+-        // Not async: the work here is synchronous (file I/O + a main-thread call that returns
+-        // immediately). Returns a completed Task so callers can still await it.
+-        private static Task<TestExecutionResponse> ExecuteAsyncMode(
+-            TestMode testMode,
+-            string filter,
+-            string filterType,
+-            bool includeExplicit,
+-            int timeoutSeconds)
+-        {
+-            try
+-            {
+-                // Save request to disk (survives domain reloads for PlayMode)
+-                var request = new TestRequest
+-                {
+-                    filter = filter,
+-                    filterType = filterType,
+-                    mode = testMode.ToString(),
+-                    includeExplicit = includeExplicit,
+-                    isSync = false
+-                };
+-                File.WriteAllText(TestRequestFile, JsonConvert.SerializeObject(request));
+-
+-                // Atomically replace any previous completed status with "running" IN THE SAME
+-                // command that starts the run. Before this, the status file was only written at
+-                // completion: if a run failed to start (e.g. the main-thread dispatch timed out),
+-                // a stale COMPLETED file from an earlier run survived on disk and every later
+-                // test_status poll returned it as if it were this run's result — the client saw
+-                // old pass/fail data for filters it never ran. Writing "running" up front means
+-                // a poller can only ever observe THIS run's lifecycle (running → completed), or
+-                // a timeout — never a previous run's results.
+-                WriteStatusFile(new
+-                {
+-                    status = "running",
+-                    mode = testMode.ToString(),
+-                    filter = string.IsNullOrEmpty(filter) ? null : $"{filterType}: {filter}",
+-                    startedAtUtc = DateTime.UtcNow
+-                });
+-
+-                // Start test execution now, on the main thread (run_tests is MainThreadRequired,
+-                // so we are inside the editor update tick that dispatched this command). Must NOT
+-                // run on a background thread: the test runner creates a TestRunnerApi via
+-                // ScriptableObject.CreateInstance, which is main-thread-only. RetrieveTestList
+-                // returns immediately, so the HTTP "running" response below is still sent promptly.
+-                StartAsyncTestExecution(testMode, filter, filterType, includeExplicit);
+-
+-                return Task.FromResult(new TestExecutionResponse
+-                {
+-                    Success = true,
+-                    Command = "run_tests",
+-                    Result = "running",
+-                    StatusPath = TestStatusFile,
+-                    Mode = testMode.ToString(),
+-                    FilterApplied = string.IsNullOrEmpty(filter) ? null : $"{filterType}: {filter}",
+-                    Message = "Tests started in async mode. Poll /test-status for results.",
+-                    ExecutedAt = DateTime.UtcNow
+-                });
+-            }
+-            catch (Exception ex)
+-            {
+-                Debug.LogError($"[PipelineTestRunner] Async setup error: {ex.Message}");
+-                return Task.FromResult(CreateErrorResponse($"Failed to start async test execution: {ex.Message}"));
+-            }
+-        }
+-
+         /// <summary>
+         /// Internal test execution logic
+         /// </summary>
+@@ -375,122 +250,151 @@ namespace Unity.Pipeline.Editor.Testing
+             return await tcs.Task;
+         }
+
+-        /// <summary>
+-        /// Start async test execution on the main thread. Registers callbacks and kicks off the
+-        /// run, then returns; completion is reported by the collector writing the status file.
+-        /// Unlike the sync path, this does NOT reuse ExecuteTestsInternal (which sets its own
+-        /// OnRunFinished to complete a Task, clobbering ours), and does NOT await.
+-        /// </summary>
+-        private static void StartAsyncTestExecution(TestMode testMode, string filter, string filterType, bool includeExplicit)
++        private static TestExecutionResponse StartAsyncRun(ParsedTestMode mode, string filter, string filterType,
++            bool includeExplicit, int timeoutSeconds)
+         {
+-            TestRunnerApi api = null;
+-            TestResultCollector collector = null;
+-            try
++            var now = DateTime.UtcNow;
++            var request = new TestRequest
++            {
++                runId = Guid.NewGuid().ToString("N"),
++                all = mode.IsAll,
++                mode = (mode.IsAll ? TestMode.EditMode : mode.TestMode).ToString(),
++                filter = filter,
++                filterType = filterType,
++                includeExplicit = includeExplicit,
++                startedAtUtc = now,
++                deadlineUtc = now.AddSeconds(timeoutSeconds)
++            };
++            SaveRequest(request);
++            s_AsyncRun = request;
++            WriteRunStatus(request, "running");
++            EditorApplication.update += PumpAsyncRun;
++            return new TestExecutionResponse
+             {
+-                api = ScriptableObject.CreateInstance<TestRunnerApi>();
+-                collector = new TestResultCollector();
+-
+-                m_ActiveApi = api;
+-                m_ActiveCollector = collector;
++                Success = true,
++                Command = "run_tests",
++                Result = "running",
++                RunId = request.runId,
++                StatusPath = TestStatusFile,
++                Mode = request.all ? "All" : request.mode,
++                FilterApplied = string.IsNullOrEmpty(filter) ? null : $"{filterType}: {filter}",
++                Message = "Tests queued. Poll test_status for results.",
++                ExecutedAt = now
++            };
++        }
+
+-                // Async completion: write results for pollers. Set once, never overwritten.
+-                collector.OnRunFinished = () =>
++        private static void PumpAsyncRun()
++        {
++            var request = s_AsyncRun;
++            if (request == null)
++                return;
++            try
++            {
++                if (request.stopStatus != null)
+                 {
+-                    WriteCompletedResults(collector);
+-                    RestoreLiveServerIfDisrupted(); // B2: self-heal if a test broke the live server.
+-                    CleanupRequestFile();
+-                    UnregisterCollector(api, collector);
+-                };
+-
+-                api.RetrieveTestList(testMode, (ITestAdaptor rootTest) =>
++                    DrainStoppedRun(request);
++                    return;
++                }
++                if (DateTime.UtcNow >= request.deadlineUtc)
+                 {
+-                    try
+-                    {
+-                        var testNames = CollectTestNames(rootTest, filter, filterType, includeExplicit);
+-
+-                        if (testNames.Count == 0)
+-                        {
+-                            WriteStatusFile(new
+-                            {
+-                                status = "completed",
+-                                duration = 0.0,
+-                                summary = new { total = 0, passed = 0, failed = 0, skipped = 0, inconclusive = 0 },
+-                                results = new object[0]
+-                            });
+-                            CleanupRequestFile();
+-                            UnregisterCollector(api, collector);
+-                            return;
+-                        }
+-
+-                        api.RegisterCallbacks(collector);
+-                        api.Execute(new ExecutionSettings(new Filter
+-                        {
+-                            testMode = testMode,
+-                            testNames = testNames.ToArray()
+-                        }));
+-                    }
+-                    catch (Exception ex)
+-                    {
+-                        Debug.LogError($"[PipelineTestRunner] Async run setup error: {ex.Message}");
+-                        WriteStatusFile(new { status = "error", message = ex.Message });
+-                        CleanupRequestFile();
+-                        UnregisterCollector(api, collector);
+-                    }
+-                });
++                    StopAsyncRun(request, "timed_out", "Test run timed out.");
++                    return;
++                }
++                if (m_ActiveCollector != null)
++                    return;
++                if (FindLegacyJob(request.previousNativeRunId) != null)
++                    return;
++                StartAsyncPhase(request);
+             }
+             catch (Exception ex)
+             {
+-                Debug.LogError($"[PipelineTestRunner] Async execution error: {ex.Message}");
+-                WriteStatusFile(new { status = "error", message = ex.Message });
+-                CleanupRequestFile();
+-                UnregisterCollector(api, collector);
++                FinishAsyncRun(request, "error", ex.Message);
+             }
+         }
+
+-        /// <summary>
+-        /// Re-register a result collector to capture the completion of a PlayMode run that the
+-        /// Unity Test Framework auto-resumes after a play-mode domain reload (see TestJobDataHolder
+-        /// in the test-framework package). The previous collector did not survive the reload.
+-        /// Deliberately does NOT call RetrieveTestList/api.Execute: the run is already in flight, so
+-        /// starting another one double-executes the task list (running scene tasks during play
+-        /// mode) and trips the runner's "too many instant steps" guard. The collector rebuilds its
+-        /// per-test results from the RootResult tree at RunFinished, since the incremental
+-        /// TestFinished callbacks were delivered to a collector from the previous domain.
+-        /// </summary>
+-        private static void ReattachResultCollector()
++        private static void StartAsyncPhase(TestRequest request)
+         {
+-            TestRunnerApi api = null;
+-            TestResultCollector collector = null;
+-            try
++            var testMode = (TestMode)Enum.Parse(typeof(TestMode), request.mode);
++            var api = ScriptableObject.CreateInstance<TestRunnerApi>();
++            var collector = AttachCollector(request, api);
++            api.RetrieveTestList(testMode, rootTest =>
+             {
+-                api = ScriptableObject.CreateInstance<TestRunnerApi>();
+-                collector = new TestResultCollector();
+-
+-                m_ActiveApi = api;
+-                m_ActiveCollector = collector;
+-
+-                collector.OnRunFinished = () =>
++                if (!ReferenceEquals(s_AsyncRun, request) || !ReferenceEquals(m_ActiveCollector, collector))
++                    return;
++                try
+                 {
+-                    WriteCompletedResults(collector);
+-                    RestoreLiveServerIfDisrupted();
+-                    CleanupRequestFile();
+-                    UnregisterCollector(api, collector);
+-                };
++                    var names = CollectTestNames(rootTest, request.filter, request.filterType, request.includeExplicit);
++                    if (names.Count == 0)
++                    {
++                        CompletePhase(request, new TestPhase(), api, collector);
++                        return;
++                    }
++                    api.RegisterCallbacks(collector);
++                    request.nativeRunId = api.Execute(new ExecutionSettings(new Filter
++                    {
++                        testMode = testMode,
++                        testNames = names.ToArray()
++                    }));
++                    SaveRequest(request);
++                }
++                catch (Exception ex)
++                {
++                    FinishAsyncRun(request, "error", ex.Message);
++                }
++            });
++        }
+
+-                api.RegisterCallbacks(collector);
+-            }
+-            catch (Exception ex)
++        private static TestResultCollector AttachCollector(TestRequest request, TestRunnerApi api)
++        {
++            var collector = new TestResultCollector();
++            m_ActiveApi = api;
++            m_ActiveCollector = collector;
++            collector.OnRunFinished = () =>
+             {
+-                Debug.LogError($"[PipelineTestRunner] Failed to reattach result collector: {ex.Message}");
+-                WriteStatusFile(new { status = "error", message = ex.Message });
+-                CleanupRequestFile();
+-                UnregisterCollector(api, collector);
++                if (!ReferenceEquals(s_AsyncRun, request) || !ReferenceEquals(m_ActiveCollector, collector))
++                    return;
++                try
++                {
++                    var root = collector.RootResult;
++                    CompletePhase(request, new TestPhase
++                    {
++                        duration = root.Duration,
++                        passed = root.PassCount,
++                        failed = root.FailCount,
++                        skipped = root.SkipCount,
++                        inconclusive = root.InconclusiveCount,
++                        results = collector.Results.ToArray()
++                    }, api, collector);
++                }
++                catch (Exception ex)
++                {
++                    FinishAsyncRun(request, "error", ex.Message);
++                }
++            };
++            return collector;
++        }
++
++        private static void CompletePhase(TestRequest request, TestPhase phase, TestRunnerApi api, TestResultCollector collector)
++        {
++            UnregisterCollector(api, collector);
++            if (request.mode == nameof(TestMode.EditMode))
++                request.editMode = phase;
++            else
++                request.playMode = phase;
++
++            if (request.all && request.mode == nameof(TestMode.EditMode))
++            {
++                // Commit the EditMode result before Unity can reload for PlayMode.
++                request.mode = nameof(TestMode.PlayMode);
++                request.previousNativeRunId = request.nativeRunId;
++                request.nativeRunId = null;
++                SaveRequest(request);
++                WriteRunStatus(request, "running");
++                return;
+             }
++            FinishAsyncRun(request, "completed");
+         }
+
+-        /// <summary>
+-        /// Called after domain reload to resume pending tests
+-        /// </summary>
+         [InitializeOnLoad]
+         public static class TestReloader
+         {
+@@ -500,63 +404,158 @@ namespace Unity.Pipeline.Editor.Testing
+             }
+         }
+
+-        /// <summary>Resume any test run that was in flight before a domain reload dropped it.</summary>
+         public static void CheckForPendingTests()
+         {
+-            if (!File.Exists(TestRequestFile)) return;
+-            if (File.Exists(TestStatusFile))
++            if (s_AsyncRun != null || !File.Exists(TestRequestFile))
++                return;
++            try
+             {
+-                // A terminal status (completed/error/cancelled) means the run already finished —
+-                // nothing to resume. A "running" status was written by the async trigger of a run
+-                // whose completion this domain never saw (play-mode reload dropped it) — fall
+-                // through and reattach a collector to capture the resumed run.
+-                try
++                var request = JsonConvert.DeserializeObject<TestRequest>(File.ReadAllText(TestRequestFile));
++                if (request == null || request.isSync || string.IsNullOrEmpty(request.runId))
+                 {
+-                    var existing = JsonConvert.DeserializeObject<Dictionary<string, object>>(
+-                        ReadStatusFile());
+-                    object stObj = null;
+-                    var hasStatus = existing != null && existing.TryGetValue("status", out stObj);
+-                    if (!hasStatus ||
+-                        !string.Equals(Convert.ToString(stObj), "running", StringComparison.OrdinalIgnoreCase))
+-                        return;
++                    CleanupRequestFile();
++                    return;
++                }
++                s_AsyncRun = request;
++                EditorApplication.update += PumpAsyncRun;
++                if (request.stopStatus != null || string.IsNullOrEmpty(request.nativeRunId))
++                    return;
++
++                // The Test Framework resumes its own PlayMode job. Attach to that
++                // job's result callbacks, never call Execute a second time.
++                if (LegacyJobHolder != null && FindLegacyJob(request.nativeRunId) == null &&
++                    !(request.mode == nameof(TestMode.PlayMode) && EditorApplication.isPlayingOrWillChangePlaymode))
++                {
++                    FinishAsyncRun(request, "interrupted", "The Unity test job did not survive the domain reload.");
++                    return;
+                 }
+-                catch (Exception)
++                var api = ScriptableObject.CreateInstance<TestRunnerApi>();
++                api.RegisterCallbacks(AttachCollector(request, api));
++            }
++            catch (Exception ex)
++            {
++                if (s_AsyncRun != null)
++                    FinishAsyncRun(s_AsyncRun, "error", ex.Message);
++                else
+                 {
+-                    return; // Unreadable status — treat as terminal rather than double-starting.
++                    WriteStatusFile(new { status = "error", message = ex.Message });
++                    CleanupRequestFile();
+                 }
+             }
++        }
+
+-            try
++        private static object FindLegacyJob(string nativeRunId)
++        {
++            if (string.IsNullOrEmpty(nativeRunId) || LegacyJobHolder == null)
++                return null;
++            var holder = LegacyJobHolder.BaseType.GetProperty("instance", BindingFlags.Static | BindingFlags.Public)?.GetValue(null);
++            var jobs = LegacyJobHolder.GetField("TestRuns")?.GetValue(holder) as IEnumerable;
++            if (jobs != null)
++            {
++                foreach (var job in jobs)
++                {
++                    if (string.Equals(job?.GetType().GetField("guid")?.GetValue(job) as string, nativeRunId, StringComparison.Ordinal))
++                        return job;
++                }
++            }
++            return null;
++        }
++
++        private static void StopAsyncRun(TestRequest request, string status, string message)
++        {
++            request.stopStatus = status;
++            SaveRequest(request);
++            WriteRunStatus(request, status, message);
++            InvalidatePreviousRun();
++            DrainStoppedRun(request);
++        }
++
++        private static void DrainStoppedRun(TestRequest request)
++        {
++            if (string.IsNullOrEmpty(request.nativeRunId))
+             {
+-                var json = File.ReadAllText(TestRequestFile);
+-                var request = JsonConvert.DeserializeObject<TestRequest>(json);
++                ReleaseAsyncRun(request);
++                return;
++            }
++            if (CancelNativeRun != null)
++            {
++                CancelNativeRun.Invoke(null, new object[] { request.nativeRunId });
++                ReleaseAsyncRun(request);
++                return;
++            }
+
+-                Debug.Log("[PipelineTestRunner] Reattaching result collector after domain reload");
+-                if (request.isSync)
++            var job = FindLegacyJob(request.nativeRunId);
++            if (request.mode == nameof(TestMode.PlayMode) && EditorApplication.isPlaying)
++            {
++                // The legacy job can leave the registry on reload while its
++                // controller is still running tests in the bootstrap scene.
++                var controller = LegacyPlayController?.GetMethod("GetController", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
++                    ?.Invoke(null, null) as MonoBehaviour;
++                if (controller != null)
+                 {
+-                    // For sync mode, we can't really resume after domain reload
+-                    // The command has already timed out or failed
+-                    CleanupRequestFile();
++                    controller.StopAllCoroutines();
++                    EditorApplication.isPlaying = false;
+                     return;
+                 }
+-
+-                // The Unity Test Framework (TestJobDataHolder) auto-resumes the in-flight PlayMode
+-                // run after a play-mode domain reload. We must NOT start a new run here: re-calling
+-                // api.Execute double-starts the job, which re-runs the task list (executing scene
+-                // tasks during play mode) and trips the runner's "too many instant steps" guard.
+-                // We only need to re-register a collector — our previous one did not survive the
+-                // reload — to capture the resumed run's completion. Runs on the main thread because
+-                // CheckForPendingTests is invoked via EditorApplication.delayCall.
+-                ReattachResultCollector();
+             }
+-            catch (Exception ex)
++            if (job == null)
+             {
+-                Debug.LogError($"[PipelineTestRunner] Failed to resume tests: {ex.Message}");
+-                WriteStatusFile(new { status = "error", message = $"Failed to resume tests: {ex.Message}" });
+-                CleanupRequestFile();
++                ReleaseAsyncRun(request);
++                return;
+             }
++            var runner = job.GetType().GetField("editModeRunner")?.GetValue(job) as UnityEngine.Object;
++            if (runner != null && Equals(runner.GetType().GetField("RunFinished")?.GetValue(runner), false))
++                runner.GetType().GetMethod("OnRunCancel")?.Invoke(runner, null);
++        }
++
++        private static void FinishAsyncRun(TestRequest request, string status, string message = null)
++        {
++            WriteRunStatus(request, status, message);
++            InvalidatePreviousRun();
++            ReleaseAsyncRun(request);
++            RestoreLiveServerIfDisrupted();
++        }
++
++        private static void ReleaseAsyncRun(TestRequest request)
++        {
++            s_DrainingRunId = request.nativeRunId ?? request.previousNativeRunId;
++            s_AsyncRun = null;
++            EditorApplication.update -= PumpAsyncRun;
++            CleanupRequestFile();
+         }
+
++        private static void SaveRequest(TestRequest request)
++        {
++            File.WriteAllText(TestRequestFile, JsonConvert.SerializeObject(request));
++        }
++
++        private static void WriteRunStatus(TestRequest request, string status, string message = null)
++        {
++            var phases = new[] { request.editMode, request.playMode }.Where(phase => phase != null).ToArray();
++            WriteStatusFile(new
++            {
++                status,
++                runId = request.runId,
++                mode = request.all ? "All" : request.mode,
++                phase = request.mode,
++                filter = string.IsNullOrEmpty(request.filter) ? null : $"{request.filterType}: {request.filter}",
++                startedAtUtc = request.startedAtUtc,
++                duration = Math.Round(phases.Sum(phase => phase.duration), 2),
++                message,
++                summary = new
++                {
++                    total = phases.Sum(phase => phase.total),
++                    passed = phases.Sum(phase => phase.passed),
++                    failed = phases.Sum(phase => phase.failed),
++                    skipped = phases.Sum(phase => phase.skipped),
++                    inconclusive = phases.Sum(phase => phase.inconclusive)
++                },
++                phases = new { editMode = request.editMode?.Summary, playMode = request.playMode?.Summary },
++                results = phases.SelectMany(phase => phase.results).ToArray()
++            });
++        }
++
++
+         #region Utility Methods
+
+         private struct ParsedTestMode
+@@ -755,41 +754,6 @@ namespace Unity.Pipeline.Editor.Testing
+             }
+         }
+
+-        private static void WriteCompletedResults(TestResultCollector collector)
+-        {
+-            try
+-            {
+-                if (!collector.IsComplete)
+-                {
+-                    WriteStatusFile(new { status = "error", message = "Tests did not complete" });
+-                    return;
+-                }
+-
+-                var root = collector.RootResult;
+-                var result = new
+-                {
+-                    status = "completed",
+-                    duration = Math.Round(root.Duration, 2),
+-                    summary = new
+-                    {
+-                        total = root.PassCount + root.FailCount + root.SkipCount + root.InconclusiveCount,
+-                        passed = root.PassCount,
+-                        failed = root.FailCount,
+-                        skipped = root.SkipCount,
+-                        inconclusive = root.InconclusiveCount
+-                    },
+-                    results = collector.Results.ToArray()
+-                };
+-
+-                WriteStatusFile(result);
+-            }
+-            catch (Exception ex)
+-            {
+-                Debug.LogError($"[PipelineTestRunner] Failed to write results: {ex.Message}");
+-                WriteStatusFile(new { status = "error", message = ex.Message });
+-            }
+-        }
+-
+         private static void WriteStatusFile(object data)
+         {
+             try
+@@ -835,31 +799,20 @@ namespace Unity.Pipeline.Editor.Testing
+         /// <returns>A status payload confirming cancellation (or that there was nothing to cancel).</returns>
+         public static object CancelTests()
+         {
+-            if (m_ActiveCollector == null && !File.Exists(TestRequestFile) && !File.Exists(TestStatusFile))
+-                return new { status = "no_tests", message = "No test run in progress." };
+-
+-            bool wasPlayMode = false;
+-            try
++            if (s_AsyncRun != null)
+             {
+-                if (File.Exists(TestRequestFile))
+-                {
+-                    var json = File.ReadAllText(TestRequestFile);
+-                    wasPlayMode = json.Contains("PlayMode");
+-                }
++                if (s_AsyncRun.stopStatus != null)
++                    return new { status = s_AsyncRun.stopStatus, runId = s_AsyncRun.runId };
++                var request = s_AsyncRun;
++                StopAsyncRun(request, "cancelled", "Test run cancelled.");
++                return new { status = "cancelled", runId = request.runId, message = "Test run cancelled." };
+             }
+-            catch { }
++            if (m_ActiveCollector == null)
++                return new { status = "no_tests", message = "No test run in progress." };
+
+             InvalidatePreviousRun();
+             WriteStatusFile(new { status = "cancelled", message = "Test run cancelled." });
+             CleanupRequestFile();
+-
+-            if (wasPlayMode && EditorApplication.isPlaying)
+-            {
+-                Debug.Log("[PipelineTestRunner] Exiting play mode to cancel PlayMode tests");
+-                EditorApplication.ExitPlaymode();
+-            }
+-
+-            Debug.Log("[PipelineTestRunner] Test run cancelled");
+             return new { status = "cancelled", message = "Test run cancelled." };
+         }
+
+@@ -873,6 +826,29 @@ namespace Unity.Pipeline.Editor.Testing
+             public string mode;
+             public bool includeExplicit;
+             public bool isSync;
++            public string runId;
++            public bool all;
++            public string nativeRunId;
++            public string previousNativeRunId;
++            public string stopStatus;
++            public DateTime startedAtUtc;
++            public DateTime deadlineUtc;
++            public TestPhase editMode;
++            public TestPhase playMode;
++        }
++
++        [Serializable]
++        private class TestPhase
++        {
++            public double duration;
++            public int passed;
++            public int failed;
++            public int skipped;
++            public int inconclusive;
++            public TestResult[] results = Array.Empty<TestResult>();
++
++            [JsonIgnore] public int total => passed + failed + skipped + inconclusive;
++            [JsonIgnore] public object Summary => new { total, passed, failed, skipped, inconclusive };
+         }
+     }
+ }
+diff --git a/com.unity.pipeline/Editor/Testing/TestResultCollector.cs b/com.unity.pipeline/Editor/Testing/TestResultCollector.cs
+index 32114ed..c4ff392 100644
+--- a/com.unity.pipeline/Editor/Testing/TestResultCollector.cs
++++ b/com.unity.pipeline/Editor/Testing/TestResultCollector.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using System.Threading.Tasks;
+@@ -93,14 +94,10 @@ namespace Unity.Pipeline.Editor.Testing
+             RootResult = result;
+             IsComplete = true;
+
+-            // If we attached after the tests already ran (PlayMode re-registers a fresh collector
+-            // after each play-mode domain reload, so the incremental TestFinished callbacks were
+-            // delivered to a collector from a previous domain), rebuild from the authoritative
+-            // result tree. The normal in-domain path leaves Results already populated.
+-            if (Results.Count == 0)
+-            {
+-                CollectLeafResults(result);
+-            }
++            // A collector reattached after a reload may have only the tail of the
++            // incremental callbacks. The final tree covers the entire phase.
++            Results.Clear();
++            CollectLeafResults(result);
+
+             var total = result.PassCount + result.FailCount + result.SkipCount + result.InconclusiveCount;
+             Debug.Log($"[TestResultCollector] Run finished: {total} total, {result.PassCount} passed, {result.FailCount} failed");
+@@ -179,4 +176,5 @@ namespace Unity.Pipeline.Editor.Testing
+             return s.Substring(0, maxLength) + "\n... (truncated)";
+         }
+     }
+-}
+\ No newline at end of file
++}
++#endif
+diff --git a/com.unity.pipeline/Runtime/Models/TestExecutionResponse.cs b/com.unity.pipeline/Runtime/Models/TestExecutionResponse.cs
+index d64991d..c22751b 100644
+--- a/com.unity.pipeline/Runtime/Models/TestExecutionResponse.cs
++++ b/com.unity.pipeline/Runtime/Models/TestExecutionResponse.cs
+@@ -1,5 +1,6 @@
+ using System;
+ using System.Collections.Generic;
++using Newtonsoft.Json;
+ using Unity.Pipeline.Models;
+
+ namespace Unity.Pipeline
+@@ -18,6 +19,10 @@ namespace Unity.Pipeline
+         public double Duration { get; set; }
+         /// <summary>Path to poll for status when the run was started in async mode.</summary>
+         public string StatusPath { get; set; } // For async mode
++
++        /// <summary>Identity to pass to test_status when polling an async run.</summary>
++        [JsonProperty("runId", NullValueHandling = NullValueHandling.Ignore)]
++        public string RunId { get; set; }
+         /// <summary>Which suite was run: EditMode, PlayMode, or All.</summary>
+         public string Mode { get; set; } // EditMode, PlayMode, or All
+         /// <summary>The test filter that was applied, if any.</summary>
+@@ -30,4 +35,4 @@ namespace Unity.Pipeline
+             Summary = new TestSummary();
+         }
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index e6261aa..96af3ee 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.5",
++  "version": "0.6.0-2022.6",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

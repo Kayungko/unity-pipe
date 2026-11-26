@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -93,14 +94,10 @@ namespace Unity.Pipeline.Editor.Testing
             RootResult = result;
             IsComplete = true;
 
-            // If we attached after the tests already ran (PlayMode re-registers a fresh collector
-            // after each play-mode domain reload, so the incremental TestFinished callbacks were
-            // delivered to a collector from a previous domain), rebuild from the authoritative
-            // result tree. The normal in-domain path leaves Results already populated.
-            if (Results.Count == 0)
-            {
-                CollectLeafResults(result);
-            }
+            // A collector reattached after a reload may have only the tail of the
+            // incremental callbacks. The final tree covers the entire phase.
+            Results.Clear();
+            CollectLeafResults(result);
 
             var total = result.PassCount + result.FailCount + result.SkipCount + result.InconclusiveCount;
             Debug.Log($"[TestResultCollector] Run finished: {total} total, {result.PassCount} passed, {result.FailCount} failed");
@@ -180,3 +177,4 @@ namespace Unity.Pipeline.Editor.Testing
         }
     }
 }
+#endif

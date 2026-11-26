@@ -326,6 +326,36 @@ func TestTestCommandPassAndFail(t *testing.T) {
 	}
 }
 
+func TestAllModeTestTimeoutKeepsRunIdentity(t *testing.T) {
+	m := newMockEditor(t)
+	m.execHandler = func(command string, params map[string]any, job bool) (int, string) {
+		switch command {
+		case "list_open_scenes":
+			return 200, `{"success":true,"result":{"scenes":[]}}`
+		case "run_tests":
+			if params["mode"] != "all" || params["async_tests"] != true || params["timeout"] != float64(3) {
+				t.Errorf("unexpected test submission: %v", params)
+			}
+			return 200, `{"success":true,"result":{"result":"running","runId":"test-run"}}`
+		case "test_status":
+			if params["run_id"] != "test-run" {
+				t.Errorf("poll lost the submitted identity: %v", params)
+			}
+			return 200, `{"success":true,"result":{"status":"timed_out","runId":"test-run","summary":{"total":1,"failed":0},"phases":{"editMode":{"passed":1},"playMode":null}}}`
+		default:
+			return 400, `{"error":"unknown"}`
+		}
+	}
+	code, env := runCLI(t, "--project-path", m.project, "--json", "test", "--test-timeout", "3")
+	if code != protocol.ExitTimeout || env["ok"] != false {
+		t.Fatalf("want timeout envelope, got %d %v", code, env)
+	}
+	data := env["error"].(map[string]any)["data"].(map[string]any)
+	if data["runId"] != "test-run" || data["summary"].(map[string]any)["total"] != float64(1) {
+		t.Fatalf("partial results missing from timeout: %v", env)
+	}
+}
+
 // Regression: shared flags AFTER the subcommand (the documented shape
 // `upipe status --project-path X`) must reach the runtime before project
 // resolution — this shape silently failed with NoInstance before v0.1.6.

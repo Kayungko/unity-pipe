@@ -29,17 +29,22 @@ Add a MonoBehaviour to a GameObject by its (compiled) type name OR by its script
 **Notes:** Undo-able. Provide exactly one of `type` or `script`. A not-yet-compiled type returns a recoverable error (recompile, poll `recompile_status`, then retry).
 
 ### `set_serialized_field`
-Set a serialized field on a component/asset. Supports primitives, enums, Vector/Color/Rect/Bounds, object references (value = an ObjectRef: asset by guid/fileId/path or scene object by instanceId/hierarchyPath), and array elements via 'name.Array.data[i]' (or 'name.Array.size' to resize).
+Set a serialized field on a component or asset. Accepts primitives, enums, vectors, colors, rectangles, bounds, object references and nested serializable data. Pass a JSON object for a struct, a JSON array for a whole list, or a property path such as `name.Array.data[i]` for one element.
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `target` | yes | – | Reference to the component or asset to modify (globalId/path/guid/instanceId/hierarchyPath). May be a GameObject when 'component' is given. |
 | `field` | yes | – | SerializedProperty path, e.g. 'speed', 'settings.speed', or 'waypoints.Array.data[0]'. |
-| `value` | yes | – | JSON value to assign. For object references pass an ObjectRef object (or null to clear). For enums pass the value name. |
+| `value` | yes | – | JSON value to assign. Use an ObjectRef or null for an object reference. Use an enum name or a Flags combination such as `"Display, Input"`. Vectors, colors and rectangles accept named objects, numeric arrays and comma-separated strings. |
 | `component` | no | `–` | Component type name on the target GameObject (e.g. 'Rigidbody'). Use when 'target' is a GameObject; omit when 'target' is already a component handle. |
+| `enum_mode` | no | `index` | `index` uses the same numeric index as earlier versions. `value` uses the declared enum constant or Flags bit mask. Applies to nested fields. |
 
 **Returns:** `AuthoringResult`
 **Notes:** Undo-able.
+
+### `set_prefab_serialized_field`
+
+Edit and save a field on a component inside a source Prefab. Pass `target` as `Assets/My.prefab:Root/Child`, plus `component`, `field`, `value` and optional `enum_mode`. Input rules match `set_serialized_field`. The command saves only after validating the whole input. Reload the Prefab to verify the saved value. This edit writes the Prefab asset and is excluded from transactional batches.
 
 ### `get_serialized_fields`
 Read serialized fields of a component/asset. Returns each top-level field's name, type and value (object references are returned as re-usable handles). Pass 'field' to read a single SerializedProperty path.

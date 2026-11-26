@@ -1,5 +1,8 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Reflection;
 using Newtonsoft.Json.Linq;
 using Unity.Pipeline.Editor.Authoring;
 using Unity.Pipeline.Models;
@@ -26,7 +29,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
         /// <see cref="ArgumentException"/> with a clear message when the value can't be coerced or the
         /// property type isn't supported. The caller is responsible for ApplyModifiedProperties.
         /// </summary>
-        public static void SetValue(SerializedProperty prop, JToken value)
+        public static void SetValue(SerializedProperty prop, JToken value, bool useEnumValue = false)
         {
             // Whole-array assignment: an array/list field (Generic + isArray) set from a JSON array —
             // resize, then recurse per element (handles primitive and object-reference arrays alike).
@@ -39,7 +42,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
 
                 prop.arraySize = array.Count;
                 for (int i = 0; i < array.Count; i++)
-                    SetValue(prop.GetArrayElementAtIndex(i), array[i]);
+                    SetValue(prop.GetArrayElementAtIndex(i), array[i], useEnumValue);
                 return;
             }
 
@@ -58,7 +61,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
                     prop.stringValue = value.ToObject<string>();
                     break;
                 case SerializedPropertyType.Enum:
-                    SetEnum(prop, value);
+                    SetEnum(prop, value, useEnumValue);
                     break;
                 case SerializedPropertyType.Vector2:
                     prop.vector2Value = ToVector2(value);
@@ -97,7 +100,7 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
                         var child = prop.FindPropertyRelative(member.Name);
                         if (child == null)
                             throw new ArgumentException($"Field '{prop.propertyPath}' has no member '{member.Name}'.");
-                        SetValue(child, member.Value);
+                        SetValue(child, member.Value, useEnumValue);
                     }
                     break;
                 default:
@@ -182,30 +185,123 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
             }
         }
 
-        private static void SetEnum(SerializedProperty prop, JToken value)
+        private static void SetEnum(SerializedProperty prop, JToken value, bool useEnumValue)
         {
-            // Accept either the enum name (preferred, stable across reordering) or the numeric index.
             if (value.Type == JTokenType.String)
             {
                 var name = value.ToObject<string>();
-                var idx = Array.IndexOf(prop.enumNames, name);
-                if (idx < 0)
-                    idx = Array.IndexOf(prop.enumDisplayNames, name);
-                if (idx < 0)
-                    throw new ArgumentException(
-                        $"Enum '{name}' is not a valid value for '{prop.propertyPath}'. Valid: {string.Join(", ", prop.enumNames)}.");
-                prop.enumValueIndex = idx;
+                var idx = FindEnumName(prop, name);
+                if (idx >= 0)
+                {
+                    prop.enumValueIndex = idx;
+                    return;
+                }
+                if (name.IndexOfAny(new[] { '|', ',' }) >= 0)
+                {
+                    SetFlags(prop, name);
+                    return;
+                }
+                throw InvalidEnum(prop, name);
             }
-            else
+            if (useEnumValue)
             {
-                var idx = value.ToObject<int>();
-                if (idx < 0 || idx >= prop.enumNames.Length)
-                    throw new ArgumentException(
-                        $"Enum index {idx} is out of range for '{prop.propertyPath}' (valid 0..{prop.enumNames.Length - 1}). " +
-                        $"Valid values: {string.Join(", ", prop.enumNames)}.");
-                prop.enumValueIndex = idx;
+                SetEnumNumber(prop, value);
+                return;
+            }
+            // Keep the original numeric index semantics when enum_mode is omitted.
+            var index = value.ToObject<int>();
+            if (index < 0 || index >= prop.enumNames.Length)
+                throw new ArgumentException(
+                    $"Enum index {index} is out of range for '{prop.propertyPath}' (valid 0..{prop.enumNames.Length - 1}). " +
+                    $"Valid values: {string.Join(", ", prop.enumNames)}.");
+            prop.enumValueIndex = index;
+        }
+
+        private static void SetEnumNumber(SerializedProperty prop, JToken value)
+        {
+            if (value.Type != JTokenType.Integer)
+                throw InvalidEnum(prop, value);
+            try
+            {
+                var type = FindManagedEnum(prop);
+                if (type == null)
+                {
+                    // A built-in property can have no corresponding managed field.
+                    prop.intValue = value.ToObject<int>();
+                    if (prop.enumValueIndex < 0)
+                        throw InvalidEnum(prop, value);
+                    return;
+                }
+
+                var number = value.ToObject<long>();
+                var underlying = Convert.ChangeType(number, Enum.GetUnderlyingType(type), CultureInfo.InvariantCulture);
+                if (type.IsDefined(typeof(FlagsAttribute), false))
+                {
+                    long defined = 0;
+                    foreach (var constant in Enum.GetValues(type))
+                        defined |= Convert.ToInt64(constant, CultureInfo.InvariantCulture);
+                    if ((number & ~defined) != 0)
+                        throw InvalidEnum(prop, value);
+                }
+                else if (!Enum.IsDefined(type, underlying))
+                {
+                    throw InvalidEnum(prop, value);
+                }
+                prop.longValue = number;
+            }
+            catch (OverflowException)
+            {
+                throw InvalidEnum(prop, value);
             }
         }
+
+        private static void SetFlags(SerializedProperty prop, string text)
+        {
+            var type = FindManagedEnum(prop);
+            if (type == null || !type.IsDefined(typeof(FlagsAttribute), false))
+                throw InvalidEnum(prop, text);
+            long mask = 0;
+            foreach (var name in text.Split('|', ','))
+            {
+                var index = FindEnumName(prop, name.Trim());
+                if (index < 0)
+                    throw InvalidEnum(prop, text);
+                mask |= Convert.ToInt64(Enum.Parse(type, prop.enumNames[index]), CultureInfo.InvariantCulture);
+            }
+            prop.longValue = mask;
+        }
+
+        private static Type FindManagedEnum(SerializedProperty prop)
+        {
+            var type = prop.serializedObject.targetObject.GetType();
+            var path = prop.propertyPath.Split('.');
+            for (var i = 0; i < path.Length && type != null; i++)
+            {
+                if (path[i] == "Array" && i + 1 < path.Length && path[i + 1].StartsWith("data[", StringComparison.Ordinal))
+                {
+                    if (type.IsArray)
+                        type = type.GetElementType();
+                    else
+                        type = type.IsGenericType && type.GetGenericTypeDefinition() == typeof(List<>) ? type.GetGenericArguments()[0] : null;
+                    i++;
+                    continue;
+                }
+                FieldInfo field = null;
+                for (var declaring = type; declaring != null && field == null; declaring = declaring.BaseType)
+                    field = declaring.GetField(path[i], BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                type = field?.FieldType;
+            }
+            return type?.IsEnum == true ? type : null;
+        }
+
+        private static int FindEnumName(SerializedProperty prop, string name)
+        {
+            var index = Array.IndexOf(prop.enumNames, name);
+            return index >= 0 ? index : Array.IndexOf(prop.enumDisplayNames, name);
+        }
+
+        private static ArgumentException InvalidEnum(SerializedProperty prop, object value) =>
+            new ArgumentException($"Enum '{value}' is invalid for '{prop.propertyPath}'. Valid names: {string.Join(", ", prop.enumNames)}.");
 
         private static Object ResolveObjectReference(JToken value)
         {
@@ -227,27 +323,78 @@ namespace Unity.Pipeline.Editor.Commands.Scripts
             return obj;
         }
 
-        private static float F(JToken t, string key, float fallback = 0f)
+        private static float[] Components(JToken value, string[] names, bool defaultAlpha = false)
         {
-            // Indexing a non-object token (e.g. the agent passed a number or array for a Vector3/Color)
-            // with a string key throws an opaque InvalidOperationException — validate first so the
-            // caller gets a clear, actionable ArgumentException instead.
-            if (!(t is JObject obj))
-                throw new ArgumentException(
-                    $"Expected a JSON object with named components (e.g. {{ \"{key}\": 0 }}) " +
-                    $"but received a '{t?.Type.ToString() ?? "null"}'.");
+            var values = new float[names.Length];
+            if (defaultAlpha)
+                values[3] = 1;
+            if (value is JObject obj)
+            {
+                // Preserve the named-object defaults used by existing callers.
+                for (var i = 0; i < names.Length; i++)
+                {
+                    var member = obj[names[i]];
+                    if (member != null)
+                        values[i] = member.ToObject<float>();
+                }
+                return values;
+            }
 
-            var token = obj[key];
-            return token != null ? token.ToObject<float>() : fallback;
+            var array = value as JArray;
+            var csv = value?.Type == JTokenType.String ? value.Value<string>().Split(',') : null;
+            var count = array?.Count ?? csv?.Length ?? 0;
+            if (count != names.Length && !(defaultAlpha && count == 3))
+                throw new ArgumentException($"Provide {string.Join(", ", names)} as an object, numeric array, or comma-separated numbers.");
+
+            for (var i = 0; i < count; i++)
+            {
+                float number;
+                if (array != null)
+                {
+                    if (array[i].Type != JTokenType.Integer && array[i].Type != JTokenType.Float)
+                        throw new ArgumentException($"'{names[i]}' must be a finite number.");
+                    number = array[i].Value<float>();
+                }
+                else if (!float.TryParse(csv[i], NumberStyles.Float, CultureInfo.InvariantCulture, out number))
+                {
+                    throw new ArgumentException($"'{names[i]}' must be a finite number.");
+                }
+                if (float.IsNaN(number) || float.IsInfinity(number))
+                    throw new ArgumentException($"'{names[i]}' must be a finite number.");
+                values[i] = number;
+            }
+            return values;
         }
 
-        private static Vector2 ToVector2(JToken t) => new Vector2(F(t, "x"), F(t, "y"));
-        private static Vector3 ToVector3(JToken t) => new Vector3(F(t, "x"), F(t, "y"), F(t, "z"));
-        private static Vector4 ToVector4(JToken t) => new Vector4(F(t, "x"), F(t, "y"), F(t, "z"), F(t, "w"));
+        private static Vector2 ToVector2(JToken value)
+        {
+            var v = Components(value, new[] { "x", "y" });
+            return new Vector2(v[0], v[1]);
+        }
 
-        private static Color ToColor(JToken t) => new Color(F(t, "r"), F(t, "g"), F(t, "b"), F(t, "a", 1f));
+        private static Vector3 ToVector3(JToken value)
+        {
+            var v = Components(value, new[] { "x", "y", "z" });
+            return new Vector3(v[0], v[1], v[2]);
+        }
 
-        private static Rect ToRect(JToken t) => new Rect(F(t, "x"), F(t, "y"), F(t, "width"), F(t, "height"));
+        private static Vector4 ToVector4(JToken value)
+        {
+            var v = Components(value, new[] { "x", "y", "z", "w" });
+            return new Vector4(v[0], v[1], v[2], v[3]);
+        }
+
+        private static Color ToColor(JToken value)
+        {
+            var v = Components(value, new[] { "r", "g", "b", "a" }, defaultAlpha: true);
+            return new Color(v[0], v[1], v[2], v[3]);
+        }
+
+        private static Rect ToRect(JToken value)
+        {
+            var v = Components(value, new[] { "x", "y", "width", "height" });
+            return new Rect(v[0], v[1], v[2], v[3]);
+        }
 
         private static Bounds ToBounds(JToken t)
         {

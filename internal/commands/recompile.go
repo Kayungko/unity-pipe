@@ -61,13 +61,17 @@ func RecompileCommand() SubCommand {
 
 // pollCommand polls a server command's JSON status body until terminal.
 func (rt *Runtime) pollCommand(command string, cfg protocol.PollConfig) (*protocol.PollResult, error) {
+	return rt.pollCommandWithParams(command, map[string]any{}, cfg)
+}
+
+func (rt *Runtime) pollCommandWithParams(command string, params map[string]any, cfg protocol.PollConfig) (*protocol.PollResult, error) {
 	deadline := cfg.Deadline
 	if rt.Opts.Timeout > 0 {
 		deadline = rt.Opts.Timeout
 	}
 	cfg.Deadline = deadline
 	return protocol.Poll(func() (protocol.PollStep, error) {
-		resp, err := rt.execSimple(command, map[string]any{})
+		resp, err := rt.execSimple(command, params)
 		if err != nil {
 			return protocol.PollStep{}, err
 		}
