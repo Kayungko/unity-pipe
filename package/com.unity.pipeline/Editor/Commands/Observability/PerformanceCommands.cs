@@ -183,6 +183,18 @@ namespace Unity.Pipeline.Editor.Commands.Observability
         static object s_RecordResult = new { status = "idle" };
         static bool s_SnapshotRunning;
         static object s_SnapshotResult = new { status = "idle" };
+        static readonly Dictionary<string, CaptureSession> Sessions = new Dictionary<string, CaptureSession>(StringComparer.Ordinal);
+        static CaptureSession s_Resident;
+        static long s_HistoryRevision;
+
+        sealed class CaptureSession
+        {
+            public string Id;
+            public string File;
+            public long Bytes;
+            public DateTime ModifiedUtc;
+            public long LoadedRevision;
+        }
 
         sealed class Recording
         {
@@ -201,6 +213,82 @@ namespace Unity.Pipeline.Editor.Commands.Observability
         {
             AssemblyReloadEvents.beforeAssemblyReload += RestoreProfiler;
             EditorApplication.quitting += RestoreProfiler;
+            ProfilerDriver.profileLoaded += HistoryChanged;
+            ProfilerDriver.profileCleared += HistoryChanged;
+            ProfilerDriver.NewProfilerFrameRecorded += FrameRecorded;
+        }
+
+        static void HistoryChanged() => System.Threading.Interlocked.Increment(ref s_HistoryRevision);
+        static void FrameRecorded(int _, int __) => HistoryChanged();
+        static long HistoryRevision => System.Threading.Interlocked.Read(ref s_HistoryRevision);
+
+        static bool IsResident(CaptureSession session) =>
+            ReferenceEquals(s_Resident, session) && session.LoadedRevision == HistoryRevision;
+
+        [CliCommand("profiler_session", "Open a saved .data capture as an Editor-local analysis session, or list sessions.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object OpenSession(
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles. Omit to list sessions.")] string file = null,
+            [CliArg("confirm", "Allow replacing current Profiler history.")] bool confirm = false)
+        {
+            if (file == null)
+                return new { sessions = Sessions.Values.Select(session =>
+                    new { sessionId = session.Id, file = session.File, resident = IsResident(session) }).ToArray() };
+
+            var info = new FileInfo(ProfilePath(file, ".data"));
+            if (!info.Exists)
+                throw new IOException($"Unity could not open '{file}' as a Profiler capture.");
+            var sessionForFile = Sessions.Values.FirstOrDefault(session =>
+                session.File == file && session.Bytes == info.Length && session.ModifiedUtc == info.LastWriteTimeUtc);
+            var candidate = sessionForFile ?? new CaptureSession
+            {
+                Id = Guid.NewGuid().ToString("N"), File = file, Bytes = info.Length, ModifiedUtc = info.LastWriteTimeUtc
+            };
+            var loaded = EnsureResident(candidate, confirm);
+            if (sessionForFile == null)
+                Sessions.Add(candidate.Id, candidate);
+            return new { sessionId = candidate.Id, file, loaded, firstFrame = ProfilerDriver.firstFrameIndex, lastFrame = ProfilerDriver.lastFrameIndex };
+        }
+
+        [CliCommand("profiler_close", "Close an analysis session. Leaves the current Profiler history visible.", Effect = CommandEffect.Stateful, Tags = new[] { "observability/profiling" })]
+        public static object CloseSession(
+            [CliArg("session_id", "ID returned by profiler_session.", Required = true)] string sessionId)
+        {
+            var session = GetSession(sessionId);
+            Sessions.Remove(sessionId);
+            if (ReferenceEquals(s_Resident, session))
+                s_Resident = null;
+            return new { sessionId, closed = true };
+        }
+
+        static CaptureSession GetSession(string id)
+        {
+            if (string.IsNullOrEmpty(id) || !Sessions.TryGetValue(id, out var session))
+                throw new ArgumentException("Unknown or expired Profiler session. Open the capture again after a domain reload or Editor restart.", nameof(id));
+            return session;
+        }
+
+        static bool EnsureResident(CaptureSession session, bool confirm)
+        {
+            RequireProfilerIdle();
+            var file = new FileInfo(ProfilePath(session.File, ".data"));
+            if (!file.Exists || file.Length != session.Bytes || file.LastWriteTimeUtc != session.ModifiedUtc)
+                throw new IOException("The session's capture changed or was removed. Open the file again.");
+            if (IsResident(session))
+                return false;
+            LoadCapture(session.File, confirm);
+            session.LoadedRevision = HistoryRevision;
+            s_Resident = session;
+            return true;
+        }
+
+        static void SelectCapture(string file, string sessionId, bool confirm)
+        {
+            if (string.IsNullOrEmpty(file) == string.IsNullOrEmpty(sessionId))
+                throw new ArgumentException("Provide exactly one of file or session_id.");
+            if (string.IsNullOrEmpty(sessionId))
+                LoadCapture(file, confirm);
+            else
+                EnsureResident(GetSession(sessionId), confirm);
         }
 
         [CliCommand("profiler_targets", "List local Editor and discovered Unity Profiler targets.", Tags = new[] { "observability/profiling" })]
@@ -420,18 +508,19 @@ namespace Unity.Pipeline.Editor.Commands.Observability
 
         [CliCommand("profiler_rank_frames", "Rank frames in an offline capture by frame duration or GC allocation.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
         public static object RankFrames(
-            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.", Required = true)] string file,
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.")] string file = null,
             [CliArg("metric", "duration_ms or gc_bytes (recorded GC.Alloc samples across threads).")] string metric = "duration_ms",
             [CliArg("first_frame", "First frame to scan.")] int? firstFrame = null,
             [CliArg("max_frames", "Number of frames to scan (1–300).")] int maxFrames = 120,
             [CliArg("top", "Number of ranked frames to return (1–50).")] int top = 10,
-            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false,
+            [CliArg("session_id", "Analysis session ID instead of a file.")] string sessionId = null)
         {
             if (metric != "duration_ms" && metric != "gc_bytes")
                 throw new ArgumentException("Use duration_ms or gc_bytes.", nameof(metric));
             if (maxFrames < 1 || maxFrames > 300 || top < 1 || top > 50)
                 throw new ArgumentException("Use 1–300 frames and 1–50 ranked results.");
-            LoadCapture(file, confirm);
+            SelectCapture(file, sessionId, confirm);
             var first = firstFrame ?? ProfilerDriver.firstFrameIndex;
             ValidateFrame(first);
             var last = ProfilerDriver.lastFrameIndex;
@@ -466,16 +555,18 @@ namespace Unity.Pipeline.Editor.Commands.Observability
 
         [CliCommand("profiler_frame_paths", "Rank sample instances by self time and return their recorded parent chains for one frame.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
         public static object FramePaths(
-            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.", Required = true)] string file,
-            [CliArg("frame", "Profiler frame index.", Required = true)] int frame,
+            [CliArg("frame", "Profiler frame index.", Required = true)] int? frameIndex,
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.")] string file = null,
             [CliArg("thread", "Profiler thread index.")] int thread = 0,
             [CliArg("top", "Maximum samples to return (1–50).")] int top = 10,
             [CliArg("marker", "Optional exact sample marker name.")] string marker = null,
-            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false,
+            [CliArg("session_id", "Analysis session ID instead of a file.")] string sessionId = null)
         {
             if (top < 1 || top > 50 || thread < 0)
                 throw new ArgumentException("Use 1–50 samples and a non-negative thread index.");
-            LoadCapture(file, confirm);
+            var frame = frameIndex ?? throw new ArgumentException("Provide a frame index.");
+            SelectCapture(file, sessionId, confirm);
             ValidateFrame(frame);
             using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
             {
@@ -519,15 +610,17 @@ namespace Unity.Pipeline.Editor.Commands.Observability
 
         [CliCommand("profiler_gc_callstacks", "Read recorded GC.Alloc call stacks for one frame and thread.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
         public static object GcCallstacks(
-            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.", Required = true)] string file,
-            [CliArg("frame", "Profiler frame index.", Required = true)] int frame,
+            [CliArg("frame", "Profiler frame index.", Required = true)] int? frameIndex,
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.")] string file = null,
             [CliArg("thread", "Profiler thread index.")] int thread = 0,
             [CliArg("limit", "Maximum allocation stacks to return (1–50).")] int limit = 20,
-            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false,
+            [CliArg("session_id", "Analysis session ID instead of a file.")] string sessionId = null)
         {
             if (thread < 0 || limit < 1 || limit > 50)
                 throw new ArgumentException("Use 1–50 stacks and a non-negative thread index.");
-            LoadCapture(file, confirm);
+            var frame = frameIndex ?? throw new ArgumentException("Provide a frame index.");
+            SelectCapture(file, sessionId, confirm);
             ValidateFrame(frame);
             using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
             {
@@ -613,15 +706,73 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             return total;
         }
 
-        static void LoadCapture(string file, bool confirm)
+        [CliCommand("profiler_summary", "Summarize CPU frame durations, GC allocations and frame budget over an inclusive frame range.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object Summarize(
+            [CliArg("session_id", "Analysis session ID.", Required = true)] string sessionId,
+            [CliArg("first_frame", "First frame in the range. Defaults to the first captured frame.")] int? firstFrame = null,
+            [CliArg("last_frame", "Last frame in the range. Defaults to the last captured frame.")] int? lastFrame = null,
+            [CliArg("frame_budget_ms", "Positive frame budget in milliseconds. Defaults to 60 FPS.")] double frameBudgetMs = 1000.0 / 60,
+            [CliArg("top", "Number of slow frames to return (1–50).")] int top = 5,
+            [CliArg("confirm", "Allow switching captures and replacing existing Profiler history.")] bool confirm = false)
+        {
+            if (frameBudgetMs <= 0 || double.IsNaN(frameBudgetMs) || double.IsInfinity(frameBudgetMs))
+                throw new ArgumentException("Use a finite, positive frame budget.", nameof(frameBudgetMs));
+            if (top < 1 || top > 50)
+                throw new ArgumentOutOfRangeException(nameof(top), "Use 1–50 slow frames.");
+            EnsureResident(GetSession(sessionId), confirm);
+            var first = firstFrame ?? ProfilerDriver.firstFrameIndex;
+            var last = lastFrame ?? ProfilerDriver.lastFrameIndex;
+            ValidateFrame(first);
+            ValidateFrame(last);
+            if (last < first)
+                throw new ArgumentException("The last frame must be at or after the first frame.");
+
+            var rows = new List<(int frame, double ms, long? gcBytes)>();
+            for (var frame = first; frame <= last; frame++)
+            {
+                using (var data = ProfilerDriver.GetRawFrameDataView(frame, 0))
+                {
+                    if (data.valid)
+                        rows.Add((frame, data.frameTimeMs, SumGcSampleBytes(frame, data)));
+                }
+            }
+            if (rows.Count == 0)
+                throw new InvalidOperationException("No valid frames in the requested range.");
+
+            var ranked = rows.OrderByDescending(row => row.ms).ThenBy(row => row.frame).ToArray();
+            var cpu = rows.Select(row => row.ms).OrderBy(value => value).ToArray();
+            var gc = rows.Where(row => row.gcBytes.HasValue).Select(row => row.gcBytes.Value).OrderBy(value => value).ToArray();
+            var overBudget = rows.Count(row => row.ms > frameBudgetMs);
+            return new
+            {
+                sessionId, firstFrame = first, lastFrame = last,
+                validFrames = rows.Count, skippedFrames = last - first + 1 - rows.Count, gcFrames = gc.Length,
+                cpuMs = new { median = Percentile(cpu, 0.5), p95 = Percentile(cpu, 0.95), max = cpu[cpu.Length - 1] },
+                gcBytes = gc.Length == 0 ? null : new { median = Percentile(gc, 0.5), p95 = Percentile(gc, 0.95), total = gc.Sum() },
+                budget = new { frameBudgetMs, framesOverBudget = overBudget, percentOverBudget = 100.0 * overBudget / rows.Count },
+                slowFrames = ranked.Take(top).Select(row => new { row.frame, row.ms, row.gcBytes, overBudget = row.ms > frameBudgetMs }).ToArray()
+            };
+        }
+
+        static T Percentile<T>(T[] ordered, double fraction) => ordered[(int)Math.Floor((ordered.Length - 1) * fraction)];
+
+        static void RequireProfilerIdle()
         {
             RequireIdle();
             if (ProfilerDriver.enabled)
                 throw new InvalidOperationException("Stop the active Profiler recording before loading a capture.");
+        }
+
+        static void LoadCapture(string file, bool confirm)
+        {
+            RequireProfilerIdle();
             if (ProfilerDriver.lastFrameIndex >= 0 && !confirm)
                 throw new InvalidOperationException("Pass confirm=true to replace existing Profiler history.");
             var path = ProfilePath(file, ".data");
-            if (!File.Exists(path) || !ProfilerDriver.LoadProfile(path, false))
+            if (!File.Exists(path))
+                throw new IOException($"Unity could not open '{file}' as a Profiler capture.");
+            s_Resident = null;
+            if (!ProfilerDriver.LoadProfile(path, false))
                 throw new IOException($"Unity could not open '{file}' as a Profiler capture.");
         }
 

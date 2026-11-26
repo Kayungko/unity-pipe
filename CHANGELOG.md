@@ -8,6 +8,11 @@
 
 - **文档维护迭代（过时引用与漏登记项清理，无代码改动）**：README「文档」区与目录树补录 `docs/RECIPES.md` / `docs/BACKLOG.md`（两者实际存在但从未登记），升级示例版本跟进 v0.1.12；ARCHITECTURE.md 残留的 0.5 时代"5 处改动 × 9 文件"适配规模描述更正为双层补丁体系（与 package/ADAPTATION-2022.md 对齐）；LICENSE-NOTES.md 的包来源基线同步至 0.6.0-exp.1（rev `27af91a9`）并注明兼容层 + 演进层两类修改；CLAUDE.md 规则模板及技能/规则/迁移文档中 6 处 `§13` 引用统一为 `6.4`——全局 CLAUDE.md 已重构为与 AGENTS.md 1:1 镜像的章节结构，两侧模板编号至此对齐（行为面影响：`--apply-rules` / `--upgrade-rules` 渲染的规则块标题由 `## 13.` 变为 `### 6.4`，与 AGENTS.md 侧一致）；BACKLOG 勾销两项实际已完成条目（README 0.5 残留、CHANGELOG compare 链接）。
 
+## [0.1.19] - 本地候选
+
+- `profiler_session` 打开并复用已保存的 .data 捕获。慢帧排序、帧内热点和 GC 调用栈可共用会话 ID。切换占用中的 Profiler 历史需确认，域重载后需重新打开。
+- `profiler_summary` 汇总指定帧区间的 CPU 帧耗时、GC 分配、超预算比例和最慢帧。
+
 ## [0.1.18] - 本地候选
 
 - `wait_start` 可等待后出现的场景组件和嵌套只读成员，支持值变化触发、同帧截图和暂停。

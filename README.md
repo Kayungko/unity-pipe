@@ -207,12 +207,18 @@ upipe pkg-status --project-path <project>           # 对比工程内版本 vs �
 ```bash
 upipe exec profiler_record --set file=perf.data --set player_id=PLAYER_ID --set gc_callstacks=true --set confirm=true
 upipe exec profiler_record_status --json
-upipe exec profiler_rank_frames --set file=perf.data --set top=10 --set confirm=true --json
-upipe exec profiler_frame_paths --set file=perf.data --set frame=FRAME --set confirm=true --json
-upipe exec profiler_gc_callstacks --set file=perf.data --set frame=FRAME --set confirm=true --json
+upipe exec profiler_session --set file=perf.data --set confirm=true --json
+upipe exec profiler_summary --set session_id=SESSION_ID --set frame_budget_ms=16.67 --json
+upipe exec profiler_rank_frames --set session_id=SESSION_ID --set top=10 --json
+upipe exec profiler_frame_paths --set session_id=SESSION_ID --set frame=FRAME --json
+upipe exec profiler_gc_callstacks --set session_id=SESSION_ID --set frame=FRAME --json
 ```
 
-用排序返回的 `frame` 查看热点。用 `metric=gc_bytes` 按录到的分配字节排序。帧内标记链来自 Profiler 样本树，GC 调用栈来自录制时保存的堆栈，未解析的符号仍带有地址。加载录制文件会替换 Editor Profiler 历史。GC 调用栈需在录制时开启，会增加采样开销。
+用 `profiler_session` 返回的 `sessionId` 替换示例中的 `SESSION_ID`，用 `slowFrames` 或排序结果中的 `frame` 查看热点。会话复用当前已加载的历史。切换捕获或外部替换历史后，覆盖已有历史需显式传入 `confirm=true`。域重载或重启后要重新打开会话。`profiler_close --set session_id=SESSION_ID` 可注销会话，Profiler 窗口保留当前历史。排序、热点和 GC 栈仍支持原有的 `file` 参数。
+
+`profiler_summary` 默认统计整份捕获。可用 `first_frame` 和 `last_frame` 指定含首尾的区间。帧时间超过预算才计入超预算帧，默认预算为 60 FPS 对应的帧时间。中位数和 P95 取升序数据中下标为 `floor((样本数 - 1) × 分位数)` 的值，超预算比例以有效帧为分母。GC 统计用有分配数据的帧计数，整个区间缺少 GC 数据时返回 `null`。
+
+用 `metric=gc_bytes` 按录到的分配字节排序。帧内标记链来自 Profiler 样本树，GC 调用栈来自录制时保存的堆栈，未解析的符号仍带有地址。GC 调用栈需在录制时开启，会增加采样开销。
 
 本机内存快照要求构建 Development Player 时启用 Pipeline Runtime。启动后，`--player-path` 指向 Player 的工作目录。
 
@@ -225,7 +231,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.7`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.8`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）
