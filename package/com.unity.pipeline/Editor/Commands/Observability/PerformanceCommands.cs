@@ -1,11 +1,13 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using Unity.Pipeline.Commands;
 using UnityEditor;
+using UnityEditor.Profiling;
 using UnityEditorInternal;
 using UnityEngine;
 using UnityEngine.Profiling;
@@ -616,7 +618,9 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             [CliArg("top", "Maximum samples to return (1–50).")] int top = 10,
             [CliArg("marker", "Optional exact sample marker name.")] string marker = null,
             [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false,
-            [CliArg("session_id", "Analysis session ID instead of a file.")] string sessionId = null)
+            [CliArg("session_id", "Analysis session ID instead of a file.")] string sessionId = null,
+            [CliArg("sample_index", "Optional exact sample index from a Profiler result.")] int? sampleIndex = null,
+            [CliArg("exclude_markers", "Exact marker names to omit from the ranking.")] string[] excludeMarkers = null)
         {
             if (top < 1 || top > 50 || thread < 0)
                 throw new ArgumentException("Use 1–50 samples and a non-negative thread index.");
@@ -627,6 +631,9 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             {
                 if (!data.valid)
                     throw new ArgumentException("The requested thread is not present in this frame.", nameof(thread));
+                if (sampleIndex < 0 || sampleIndex >= data.sampleCount)
+                    throw new ArgumentException("The requested sample index is outside this thread.", nameof(sampleIndex));
+                var excluded = new HashSet<string>(excludeMarkers ?? Array.Empty<string>(), StringComparer.Ordinal);
                 var samples = new List<(int index, string name, float inclusive, float self)>();
                 var parents = new int[data.sampleCount];
                 var ancestors = new Stack<(int index, int end)>();
@@ -639,7 +646,8 @@ namespace Unity.Pipeline.Editor.Commands.Observability
                     if (children > 0)
                         ancestors.Push((index, index + children + 1));
                     var name = data.GetSampleName(index);
-                    if (string.IsNullOrEmpty(marker) || name == marker)
+                    if ((!sampleIndex.HasValue || index == sampleIndex.Value) &&
+                        (string.IsNullOrEmpty(marker) || name == marker) && !excluded.Contains(name))
                         samples.Add((index, name, data.GetSampleTimeMs(index), SampleSelfTime(data, index)));
                 }
                 return new
@@ -661,6 +669,155 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             for (var sample = index; sample >= 0; sample = parents[sample])
                 path.Push(data.GetSampleName(sample));
             return path.ToArray();
+        }
+
+        [CliCommand("profiler_threads", "List the threads recorded in a capture frame.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object ListThreads(
+            [CliArg("session_id", "Analysis session ID.", Required = true)] string sessionId,
+            [CliArg("frame", "Profiler frame index.", Required = true)] int? frameIndex,
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+        {
+            var frame = frameIndex ?? throw new ArgumentException("Provide a frame index.");
+            EnsureResident(GetSession(sessionId), confirm);
+            ValidateFrame(frame);
+            var threads = new List<object>();
+            for (var index = 0; ; index++)
+            {
+                using (var data = ProfilerDriver.GetRawFrameDataView(frame, index))
+                {
+                    if (!data.valid)
+                        break;
+                    threads.Add(new
+                    {
+                        threadIndex = index, threadId = data.threadId.ToString(CultureInfo.InvariantCulture),
+                        thread = data.threadName, group = data.threadGroupName, samples = data.sampleCount
+                    });
+                }
+            }
+            return new { sessionId, frame, threads };
+        }
+
+        [CliCommand("profiler_rank_markers", "Aggregate marker timings by thread across an inclusive capture range.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object RankMarkers(
+            [CliArg("session_id", "Analysis session ID.", Required = true)] string sessionId,
+            [CliArg("first_frame", "First frame in the range. Defaults to the first captured frame.")] int? firstFrame = null,
+            [CliArg("last_frame", "Last frame in the range. Defaults to the last captured frame.")] int? lastFrame = null,
+            [CliArg("thread_id", "Optional thread ID from profiler_threads.")] string threadId = null,
+            [CliArg("marker", "Optional exact marker name.")] string marker = null,
+            [CliArg("exclude_markers", "Exact marker names to omit from the ranking.")] string[] excludeMarkers = null,
+            [CliArg("top", "Maximum ranked results (1–50).")] int top = 10,
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+        {
+            if (top < 1 || top > 50)
+                throw new ArgumentOutOfRangeException(nameof(top), "Use 1–50 markers.");
+            ulong selectedThread = 0;
+            if (threadId != null && !ulong.TryParse(threadId, NumberStyles.None, CultureInfo.InvariantCulture, out selectedThread))
+                throw new ArgumentException("Use a thread ID from profiler_threads.", nameof(threadId));
+            EnsureResident(GetSession(sessionId), confirm);
+            var first = firstFrame ?? ProfilerDriver.firstFrameIndex;
+            var last = lastFrame ?? ProfilerDriver.lastFrameIndex;
+            ValidateFrame(first);
+            ValidateFrame(last);
+            if (last < first || last - first >= 300)
+                throw new ArgumentException("Select an inclusive range of 1–300 frames.");
+
+            var excluded = new HashSet<string>(excludeMarkers ?? Array.Empty<string>(), StringComparer.Ordinal);
+            var rows = new Dictionary<(ulong id, string group, string thread, string name), MarkerAggregate>();
+            for (var frame = first; frame <= last; frame++)
+            {
+                for (var thread = 0; ; thread++)
+                {
+                    using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
+                    {
+                        if (!data.valid)
+                            break;
+                        if (threadId == null || data.threadId == selectedThread)
+                            AccumulateMarkers(data, marker, excluded, rows);
+                    }
+                }
+            }
+
+            var ranked = rows.OrderByDescending(entry => entry.Value.SelfMs)
+                .ThenBy(entry => entry.Key.name, StringComparer.Ordinal).ThenBy(entry => entry.Key.id)
+                .ThenBy(entry => entry.Key.group, StringComparer.Ordinal).ThenBy(entry => entry.Key.thread, StringComparer.Ordinal)
+                .Take(top).Select(entry => new
+                {
+                    marker = entry.Key.name, threadId = entry.Key.id.ToString(CultureInfo.InvariantCulture),
+                    thread = entry.Key.thread, group = entry.Key.group,
+                    samples = entry.Value.Samples, frames = entry.Value.Frames,
+                    totalMs = entry.Value.TotalMs, selfMs = entry.Value.SelfMs, coveredMs = entry.Value.CoveredMs,
+                    peak = new
+                    {
+                        frame = entry.Value.PeakFrame, threadIndex = entry.Value.PeakThread, sampleIndex = entry.Value.PeakSample,
+                        selfMs = entry.Value.PeakSelfMs
+                    }
+                }).ToArray();
+            return new { sessionId, firstFrame = first, lastFrame = last, matchingMarkers = rows.Count, markers = ranked };
+        }
+
+        sealed class MarkerAggregate
+        {
+            public int Samples, Frames;
+            public double TotalMs, SelfMs, CoveredMs;
+            public float PeakSelfMs = -1;
+            public int PeakFrame, PeakThread, PeakSample;
+        }
+
+        static void AccumulateMarkers(RawFrameDataView data, string marker, HashSet<string> excluded,
+            Dictionary<(ulong id, string group, string thread, string name), MarkerAggregate> rows)
+        {
+            var intervalsByMarker = new Dictionary<MarkerAggregate, List<(double start, double end)>>();
+            var threadId = data.threadId;
+            var threadGroup = data.threadGroupName;
+            var threadName = data.threadName;
+            for (var sample = 0; sample < data.sampleCount; sample++)
+            {
+                var name = data.GetSampleName(sample);
+                if ((marker != null && name != marker) || excluded.Contains(name))
+                    continue;
+                var key = (threadId, threadGroup, threadName, name);
+                if (!rows.TryGetValue(key, out var row))
+                    rows.Add(key, row = new MarkerAggregate());
+                if (!intervalsByMarker.TryGetValue(row, out var intervals))
+                {
+                    intervalsByMarker.Add(row, intervals = new List<(double start, double end)>());
+                    row.Frames++;
+                }
+                var duration = data.GetSampleTimeMs(sample);
+                var self = SampleSelfTime(data, sample);
+                row.Samples++;
+                row.TotalMs += duration;
+                row.SelfMs += self;
+                if (self > row.PeakSelfMs)
+                {
+                    row.PeakSelfMs = self;
+                    row.PeakFrame = data.frameIndex;
+                    row.PeakThread = data.threadIndex;
+                    row.PeakSample = sample;
+                }
+                if (duration > 0)
+                {
+                    var start = data.GetSampleStartTimeMs(sample);
+                    intervals.Add((start, start + duration));
+                }
+            }
+            foreach (var entry in intervalsByMarker)
+                entry.Key.CoveredMs += IntervalCoverage(entry.Value);
+        }
+
+        static double IntervalCoverage(List<(double start, double end)> intervals)
+        {
+            intervals.Sort((left, right) => left.start.CompareTo(right.start));
+            var lastEnd = double.NegativeInfinity;
+            var covered = 0.0;
+            foreach (var (start, end) in intervals)
+            {
+                if (end <= lastEnd)
+                    continue;
+                covered += end - Math.Max(start, lastEnd);
+                lastEnd = end;
+            }
+            return covered;
         }
 
         [CliCommand("profiler_gc_callstacks", "Read recorded GC.Alloc call stacks for one frame and thread.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]

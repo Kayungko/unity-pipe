@@ -224,6 +224,10 @@ upipe exec profiler_gc_callstacks --set session_id=SESSION_ID --set frame=FRAME 
 
 用 `metric=gc_bytes` 按录到的分配字节排序。帧内标记链来自 Profiler 样本树，GC 调用栈来自录制时保存的堆栈，未解析的符号仍带有地址。GC 调用栈需在录制时开启，会增加采样开销。
 
+用 `profiler_threads` 查看某帧的线程 ID 和线程索引。用 `profiler_rank_markers` 汇总含首尾的 1–300 帧，按累计自身耗时排序，同名 marker 按线程分别统计。用 `thread_id` 限定线程，用 `--params '{"exclude_markers":["WaitForJobGroupID"]}'` 排除精确名称。将结果 `peak` 中的 `frame`、`threadIndex` 和 `sampleIndex` 分别传给 `profiler_frame_paths` 的 `frame`、`thread` 和 `sample_index`，即可读回原始标记链。
+
+`totalMs` 是所有匹配样本的含子样本时长之和，嵌套样本可能重复计时。`coveredMs` 取同一线程、同一帧内时间区间的并集，再跨帧求和。不同线程可能并发，线程之间的时长不能相加作为经过时间。
+
 本机内存快照要求构建 Development Player 时启用 Pipeline Runtime。启动后，`--player-path` 指向 Player 的工作目录。
 
 ```bash
@@ -235,7 +239,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.9`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.10`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）
