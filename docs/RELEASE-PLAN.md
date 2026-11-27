@@ -16,6 +16,8 @@
 
 **v0.1.39**（2026-11-27，`8669713`）已发布，一并交付 v0.1.38 的 `profiler_overlaps`。CPU 样本重叠已用隔离 Editor 和 IL2CPP 开发 Player 的捕获复验。自定义命令二进制标准输入与输出已用隔离 Editor 验收，Player 二进制链路列入 v0.1.40。11 个发布附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.39)
 
+**v0.1.40**（2026-11-27，`c21e5f8`）已发布。后台任务支持实时日志和按序号续读。隔离 Editor 与 Windows IL2CPP 开发 Player 验证了续读和二进制往返，11 个发布附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.40)
+
 ## 开发顺序与验收
 
 未发布版本号为计划，按顺序推进。各版用隔离的 Unity 2022.3.23f1 工程或对应版本生成的快照验收。GPU 继续暂缓，SGAME 先不动。

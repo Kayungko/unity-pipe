@@ -15,6 +15,15 @@ import (
 // OpenGit resolves a project's directory within a Git tree, without reading
 // asset bytes from the working tree.
 func OpenGit(ctx context.Context, dir, revision string) (*Version, error) {
+	return openGit(ctx, dir, revision, "Assets", "Packages")
+}
+
+// OpenGitProject also reads ProjectSettings, which can affect test selection.
+func OpenGitProject(ctx context.Context, dir, revision string) (*Version, error) {
+	return openGit(ctx, dir, revision, "Assets", "Packages", "ProjectSettings")
+}
+
+func openGit(ctx context.Context, dir, revision string, roots ...string) (*Version, error) {
 	commitBytes, err := run(ctx, dir, "git", "rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
 	if err != nil {
 		return nil, err
@@ -23,7 +32,7 @@ func OpenGit(ctx context.Context, dir, revision string) (*Version, error) {
 	if len(commit) != 40 && len(commit) != 64 {
 		return nil, fmt.Errorf("unexpected Git commit ID")
 	}
-	tree, err := run(ctx, dir, "git", "ls-tree", "-rz", commit, "--", "Assets", "Packages")
+	tree, err := run(ctx, dir, "git", append([]string{"ls-tree", "-rz", commit, "--"}, roots...)...)
 	if err != nil {
 		return nil, err
 	}

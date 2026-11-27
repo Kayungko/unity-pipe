@@ -15,7 +15,7 @@ func TestCommand() SubCommand {
 	return SubCommand{
 		Name:     "test",
 		Aliases:  []string{"tests"},
-		Synopsis: "run tests and wait: upipe test [--mode editor|playmode|all] [--filter F] [--detail full|failures|summary] [--require-match] [--no-wait]",
+		Synopsis: "run tests and wait: upipe test [--mode editor|playmode|all] [--filter F] [--affected --from OLD --to NEW [--plan] | --rerun-failed] [--nunit FILE]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe test")
 			mode := fs.String("mode", "all", "all | editor | playmode")
@@ -25,9 +25,34 @@ func TestCommand() SubCommand {
 			noWait := fs.Bool("no-wait", false, "submit async and return immediately")
 			requireMatch := fs.Bool("require-match", false, "fail if the completed run matched zero tests")
 			testTimeout := fs.Int("test-timeout", 0, "server-side test budget in seconds for the whole run (0 uses server default)")
+			affected := fs.Bool("affected", false, "select tests using Git or submitted P4 snapshots")
+			from := fs.String("from", "", "baseline Git revision or P4 changelist for --affected")
+			to := fs.String("to", "", "target Git revision or P4 changelist for --affected")
+			planOnly := fs.Bool("plan", false, "show the affected assembly plan without running tests")
+			rerun := fs.Bool("rerun-failed", false, "rerun the failed cases in the latest completed run")
+			failedRunID := fs.String("failed-run-id", "", "require this retained run ID for --rerun-failed")
+			nunit := fs.String("nunit", "", "write NUnit 3 XML for the completed run")
+			source := attachAssetSource(fs)
 			attachShared(fs, rt.Opts)
-			if _, err := parseArgs(fs, args); err != nil {
+			rest, err := parseArgs(fs, args)
+			if err != nil {
 				return nil, usageErr("test: " + err.Error())
+			}
+			if len(rest) != 0 {
+				return nil, usageErr("test: unexpected positional arguments")
+			}
+			if (*planOnly || *from != "" || *to != "" || source.p4.Root != "" ||
+				source.p4.Port != "" || source.p4.User != "" || source.p4.Client != "") && !*affected {
+				return nil, usageErr("test: revision and plan options require --affected")
+			}
+			if *affected && *rerun || (*affected || *rerun) && *filter != "" {
+				return nil, usageErr("test: --affected, --rerun-failed and --filter are mutually exclusive")
+			}
+			if *failedRunID != "" && !*rerun {
+				return nil, usageErr("test: --failed-run-id requires --rerun-failed")
+			}
+			if *nunit != "" && (*noWait || *planOnly) {
+				return nil, usageErr("test: --nunit requires waiting for a test run")
 			}
 			if *noWait && *requireMatch {
 				return nil, usageErr("test: --require-match requires waiting for the result")
@@ -44,13 +69,50 @@ func TestCommand() SubCommand {
 			if *testTimeout < 0 {
 				return nil, usageErr("test: --test-timeout must be non-negative")
 			}
-			if err := rt.requireCleanTestScenes(); err != nil {
-				return nil, err
-			}
-
 			params := map[string]any{
 				"mode":        *mode,
 				"async_tests": true,
+			}
+			if *affected || *rerun {
+				switch *mode = strings.ToLower(*mode); *mode {
+				case "all", "editor", "editmode", "playmode", "play":
+				default:
+					return nil, usageErr("test: mode must be all, editor or playmode")
+				}
+			}
+			if *affected {
+				plan, err := affectedTestPlan(rt, source, *from, *to)
+				if err != nil {
+					return nil, err
+				}
+				if *planOnly {
+					return plan, nil
+				}
+				reportAffectedTests(plan)
+				if !plan.RunAll {
+					if len(plan.Assemblies) == 0 {
+						return noSelectedTests(*nunit, "no affected assemblies", *requireMatch)
+					}
+					params["exact_selection"] = map[string][]string{"assemblies": plan.Assemblies}
+				}
+			}
+			if *rerun {
+				selection, count, err := recentFailedTests(rt, *mode, *failedRunID)
+				if err != nil {
+					return nil, err
+				}
+				if count == 0 {
+					return noSelectedTests(*nunit, "no failed tests in the selected modes", *requireMatch)
+				}
+				params["exact_selection"] = selection
+			}
+			if _, exact := params["exact_selection"]; exact {
+				if err := requireExactTestSelection(rt); err != nil {
+					return nil, err
+				}
+			}
+			if err := rt.requireCleanTestScenes(); err != nil {
+				return nil, err
 			}
 			if *filter != "" {
 				params["filter"] = *filter
@@ -76,7 +138,7 @@ func TestCommand() SubCommand {
 			if started.RunID != "" {
 				statusParams["run_id"] = started.RunID
 			}
-			if *detail != "full" {
+			if *detail != "full" && *nunit == "" {
 				statusParams["detail"] = *detail
 			}
 			result, err := rt.pollCommandWithParams("test_status", statusParams, protocol.PollConfig{
@@ -92,6 +154,22 @@ func TestCommand() SubCommand {
 				return nil, failure
 			}
 
+			if *nunit != "" {
+				var report testRunReport
+				if json.Unmarshal(result.Body, &report) != nil {
+					return nil, protocol.ErrProtocol("invalid terminal result for NUnit XML")
+				}
+				if err := writeNUnit(*nunit, report); err != nil {
+					return nil, err
+				}
+				if *detail != "full" {
+					body, err := projectTestDetail(result.Body, *detail)
+					if err != nil {
+						return nil, err
+					}
+					result.Body = body
+				}
+			}
 			// Completed async runs report outcomes in the summary counters.
 			var final struct {
 				Summary json.RawMessage `json:"summary"`

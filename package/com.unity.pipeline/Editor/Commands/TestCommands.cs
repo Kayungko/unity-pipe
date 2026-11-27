@@ -29,7 +29,8 @@ namespace Unity.Pipeline.Editor.Commands
             [CliArg("filter_type", "Filter type: testName, assembly, category (default: testName)")] string filterType = "testName",
             [CliArg("include_explicit", "Include tests marked with [Explicit] attribute")] bool includeExplicit = false,
             [CliArg("async_tests", "Return immediately and poll test_status. Mode all always runs asynchronously.")] bool asyncTests = false,
-            [CliArg("timeout", "Test execution timeout in seconds (default: 300)")] int timeout = 300)
+            [CliArg("timeout", "Test execution timeout in seconds (default: 300)")] int timeout = 300,
+            [CliArg("exact_selection", "Exact async selection: {assemblies:[...]} or {edit:{assembly:[fullName]},play:{assembly:[fullName]}}.")] JObject exactSelection = null)
         {
             // Return the full structured response (including failures and the Error field on a
             // failed run) rather than throwing: the server now awaits this Task and serializes the
@@ -41,7 +42,8 @@ namespace Unity.Pipeline.Editor.Commands
                 filterType,
                 includeExplicit,
                 asyncTests,
-                timeout);
+                timeout,
+                exactSelection?.ToObject<ExactTestSelection>());
         }
 
         /// <summary>

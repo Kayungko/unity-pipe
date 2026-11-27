@@ -163,6 +163,7 @@ namespace Unity.Pipeline.Editor.Testing
             return new TestResult
             {
                 FullName = result.Test.FullName,
+                Assembly = result.Test.TypeInfo?.Assembly?.GetName()?.Name,
                 Status = result.TestStatus.ToString(),
                 Duration = result.Duration,
                 Message = Truncate(result.Message, 10000),

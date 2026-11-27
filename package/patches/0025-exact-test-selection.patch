@@ -1,0 +1,332 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index f049f27..080fb11 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,10 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
++## [0.6.0-2022.20] - Local candidate
++
++- Support exact async test selection by assembly or by failed case and phase.
++
+ ## [0.6.0-2022.19] - Local candidate
+
+ - Add live leveled logs for detached custom commands with per-job cursors and bounded retention.
+diff --git a/com.unity.pipeline/Documentation~/testing.md b/com.unity.pipeline/Documentation~/testing.md
+index 427abdc..0437053 100644
+--- a/com.unity.pipeline/Documentation~/testing.md
++++ b/com.unity.pipeline/Documentation~/testing.md
+@@ -2,6 +2,30 @@
+
+ Poll an asynchronous test run with `upipe exec test_status`. Use `--set detail=failures` for failed test details or `--set detail=summary` for counts only. The default `full` returns every result. Use `upipe test` to propagate a failed run (exit 20) or cancellation (exit 22). The terminal result is reported in `error.data` under `--json`.
+
++## Selecting tests from the CLI
++
++```sh
++upipe test --affected --from OLD --to NEW --plan --json
++upipe test --affected --from OLD --to NEW --nunit test-results.xml --json
++upipe test --rerun-failed --failed-run-id RUN_ID --nunit rerun-results.xml --json
++```
++
++Use `--p4-root`, `--p4-ops`, `--p4-port`, `--p4-user` and `--p4-client` with submitted
++changelists for P4. The plan reads both snapshots and follows reverse assembly dependencies.
++It includes previous ownership for removed or moved scripts. When ownership or references
++cannot be resolved, or a project setting or non-code asset changes, the command falls back
++to all tests and reports the reason. Before running the plan, open the target revision in
++Unity. `--plan` can run without a live Editor when an explicit project path is provided.
++
++`--rerun-failed` uses the last retained completed run and matches exact test names by assembly
++and phase. Use `--failed-run-id` to reject a different retained run. The old report format
++can be used when the phase and test name can be identified unambiguously.
++
++`--nunit` writes a separate NUnit 3 XML file for a completed run, including runs with failing
++tests and completed selections with zero tests. It requires an existing destination directory.
++`--detail` can still reduce JSON results while XML contains every completed test case.
++Canceled and timed-out runs keep their exit codes and do not write an XML report.
++
+ How the package's tests exercise commands. There are two complementary styles — **ViaClient** (over real HTTP, end-to-end) and **CommandDirect** (calling the static command method straight) — backed by a small set of shared test helpers.
+
+ ## Two test styles
+diff --git a/com.unity.pipeline/Editor/Commands/TestCommands.cs b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+index b7f62b0..e7f398e 100644
+--- a/com.unity.pipeline/Editor/Commands/TestCommands.cs
++++ b/com.unity.pipeline/Editor/Commands/TestCommands.cs
+@@ -29,7 +29,8 @@ namespace Unity.Pipeline.Editor.Commands
+             [CliArg("filter_type", "Filter type: testName, assembly, category (default: testName)")] string filterType = "testName",
+             [CliArg("include_explicit", "Include tests marked with [Explicit] attribute")] bool includeExplicit = false,
+             [CliArg("async_tests", "Return immediately and poll test_status. Mode all always runs asynchronously.")] bool asyncTests = false,
+-            [CliArg("timeout", "Test execution timeout in seconds (default: 300)")] int timeout = 300)
++            [CliArg("timeout", "Test execution timeout in seconds (default: 300)")] int timeout = 300,
++            [CliArg("exact_selection", "Exact async selection: {assemblies:[...]} or {edit:{assembly:[fullName]},play:{assembly:[fullName]}}.")] JObject exactSelection = null)
+         {
+             // Return the full structured response (including failures and the Error field on a
+             // failed run) rather than throwing: the server now awaits this Task and serializes the
+@@ -41,7 +42,8 @@ namespace Unity.Pipeline.Editor.Commands
+                 filterType,
+                 includeExplicit,
+                 asyncTests,
+-                timeout);
++                timeout,
++                exactSelection?.ToObject<ExactTestSelection>());
+         }
+
+         /// <summary>
+diff --git a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+index f962932..6282026 100644
+--- a/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
++++ b/com.unity.pipeline/Editor/Testing/PipelineTestRunner.cs
+@@ -17,6 +17,22 @@ using Unity.Scripting.LifecycleManagement;
+
+ namespace Unity.Pipeline.Editor.Testing
+ {
++    [Serializable]
++    internal sealed class ExactTestSelection
++    {
++        public string[] assemblies;
++        public Dictionary<string, string[]> edit;
++        public Dictionary<string, string[]> play;
++
++        internal bool IsValid()
++        {
++            if (assemblies != null)
++                return edit == null && play == null && assemblies.All(name => !string.IsNullOrWhiteSpace(name));
++            return edit != null && play != null && edit.Concat(play).All(pair =>
++                pair.Value != null && pair.Value.All(name => !string.IsNullOrWhiteSpace(name)));
++        }
++    }
++
+     /// <summary>
+     /// Core test execution engine supporting both synchronous and asynchronous execution modes.
+     /// Adapted from unity-tools with domain reload handling and dual mode support.
+@@ -60,7 +76,8 @@ namespace Unity.Pipeline.Editor.Testing
+             string filterType,
+             bool includeExplicit,
+             bool asyncMode,
+-            int timeoutSeconds)
++            int timeoutSeconds,
++            ExactTestSelection selection = null)
+         {
+             try
+             {
+@@ -83,8 +100,13 @@ namespace Unity.Pipeline.Editor.Testing
+                 if (s_AsyncRun != null || m_ActiveCollector != null || FindLegacyJob(s_DrainingRunId) != null)
+                     return CreateErrorResponse("A Pipeline test run is still active. Poll test_status or cancel it before starting another.");
+
++                if (selection != null && (!selection.IsValid() || !string.IsNullOrEmpty(filter)))
++                    return CreateErrorResponse("Use one valid exact test selection without a partial filter.");
++                if (selection != null && !parsedMode.IsAll && !asyncMode)
++                    return CreateErrorResponse("Exact test selection requires asynchronous execution.");
++
+                 if (parsedMode.IsAll || asyncMode)
+-                    return StartAsyncRun(parsedMode, filter, normalizedFilterType, includeExplicit, timeoutSeconds);
++                    return StartAsyncRun(parsedMode, filter, normalizedFilterType, includeExplicit, timeoutSeconds, selection);
+                 if (parsedMode.TestMode == TestMode.PlayMode)
+                 {
+                     // PlayMode entry triggers a domain reload that drops the in-flight HTTP request,
+@@ -251,7 +273,7 @@ namespace Unity.Pipeline.Editor.Testing
+         }
+
+         private static TestExecutionResponse StartAsyncRun(ParsedTestMode mode, string filter, string filterType,
+-            bool includeExplicit, int timeoutSeconds)
++            bool includeExplicit, int timeoutSeconds, ExactTestSelection selection)
+         {
+             var now = DateTime.UtcNow;
+             var request = new TestRequest
+@@ -262,6 +284,7 @@ namespace Unity.Pipeline.Editor.Testing
+                 filter = filter,
+                 filterType = filterType,
+                 includeExplicit = includeExplicit,
++                selection = selection,
+                 startedAtUtc = now,
+                 deadlineUtc = now.AddSeconds(timeoutSeconds)
+             };
+@@ -323,18 +346,14 @@ namespace Unity.Pipeline.Editor.Testing
+                     return;
+                 try
+                 {
+-                    var names = CollectTestNames(rootTest, request.filter, request.filterType, request.includeExplicit);
+-                    if (names.Count == 0)
++                    var filters = CollectPhaseFilters(rootTest, testMode, request);
++                    if (filters.Length == 0)
+                     {
+                         CompletePhase(request, new TestPhase(), api, collector);
+                         return;
+                     }
+                     api.RegisterCallbacks(collector);
+-                    request.nativeRunId = api.Execute(new ExecutionSettings(new Filter
+-                    {
+-                        testMode = testMode,
+-                        testNames = names.ToArray()
+-                    }));
++                    request.nativeRunId = api.Execute(new ExecutionSettings(filters));
+                     SaveRequest(request);
+                 }
+                 catch (Exception ex)
+@@ -377,6 +396,8 @@ namespace Unity.Pipeline.Editor.Testing
+         private static void CompletePhase(TestRequest request, TestPhase phase, TestRunnerApi api, TestResultCollector collector)
+         {
+             UnregisterCollector(api, collector);
++            foreach (var result in phase.results)
++                result.Mode = request.mode;
+             if (request.mode == nameof(TestMode.EditMode))
+                 request.editMode = phase;
+             else
+@@ -589,11 +610,15 @@ namespace Unity.Pipeline.Editor.Testing
+         private static List<string> CollectTestNames(ITestAdaptor test, string filter, string filterType, bool includeExplicit)
+         {
+             var testNames = new List<string>();
+-            CollectTestNamesRecursive(test, testNames, filter, filterType, includeExplicit);
++            VisitLeafTests(test, includeExplicit, leaf =>
++            {
++                if (ShouldIncludeTest(leaf, filter, filterType))
++                    testNames.Add(leaf.FullName);
++            });
+             return testNames;
+         }
+
+-        private static void CollectTestNamesRecursive(ITestAdaptor test, List<string> testNames, string filter, string filterType, bool includeExplicit)
++        private static void VisitLeafTests(ITestAdaptor test, bool includeExplicit, Action<ITestAdaptor> visit)
+         {
+             if (test == null) return;
+
+@@ -607,11 +632,7 @@ namespace Unity.Pipeline.Editor.Testing
+             // Only collect leaf tests (actual test methods, not fixtures/suites)
+             if (!test.HasChildren && test.IsSuite == false)
+             {
+-                // Apply user filter
+-                if (!ShouldIncludeTest(test, filter, filterType))
+-                    return;
+-
+-                testNames.Add(test.FullName);
++                visit(test);
+             }
+
+             // Recurse into children
+@@ -619,11 +640,75 @@ namespace Unity.Pipeline.Editor.Testing
+             {
+                 foreach (var child in test.Children)
+                 {
+-                    CollectTestNamesRecursive(child, testNames, filter, filterType, includeExplicit);
++                    VisitLeafTests(child, includeExplicit, visit);
+                 }
+             }
+         }
+
++        private static Filter[] CollectPhaseFilters(ITestAdaptor root, TestMode mode, TestRequest request)
++        {
++            if (request.selection == null)
++            {
++                var names = CollectTestNames(root, request.filter, request.filterType, request.includeExplicit);
++                return names.Count == 0 ? Array.Empty<Filter>() :
++                    new[] { new Filter { testMode = mode, testNames = names.ToArray() } };
++            }
++
++            var selection = request.selection;
++            var assemblies = selection.assemblies == null ? null :
++                new HashSet<string>(selection.assemblies, StringComparer.Ordinal);
++            var cases = (mode == TestMode.EditMode ? selection.edit : selection.play)?.ToDictionary(
++                pair => pair.Key, pair => new HashSet<string>(pair.Value, StringComparer.Ordinal), StringComparer.Ordinal);
++            var matches = new Dictionary<string, List<string>>(StringComparer.Ordinal);
++            var previousOwners = new Dictionary<string, string>(StringComparer.Ordinal);
++            VisitLeafTests(root, request.includeExplicit, test =>
++            {
++                var assembly = test.TypeInfo?.Assembly?.GetName()?.Name ?? "";
++                var name = test.FullName;
++                if (string.IsNullOrEmpty(name))
++                    return;
++                if (assemblies != null)
++                {
++                    if (!assemblies.Contains(assembly))
++                        return;
++                }
++                else
++                {
++                    var exact = cases.TryGetValue(assembly, out var names) && names.Contains(name);
++                    var legacy = cases.TryGetValue("", out var oldNames) && oldNames.Contains(name);
++                    if (!exact && !legacy)
++                        return;
++                    if (legacy && previousOwners.TryGetValue(name, out var previous) && previous != assembly)
++                        throw new InvalidOperationException($"The previous run did not identify which assembly failed for '{name}'.");
++                    if (legacy)
++                        previousOwners[name] = assembly;
++                }
++
++                if (!matches.TryGetValue(assembly, out var selected))
++                    matches[assembly] = selected = new List<string>();
++                selected.Add(name);
++            });
++
++            if (cases != null)
++            {
++                foreach (var pair in cases)
++                {
++                    IEnumerable<string> found = pair.Key.Length == 0 ? previousOwners.Keys :
++                        matches.TryGetValue(pair.Key, out var names) ? names : Enumerable.Empty<string>();
++                    var missing = pair.Value.Except(found, StringComparer.Ordinal).FirstOrDefault();
++                    if (missing != null)
++                        throw new InvalidOperationException($"Previously failed test '{missing}' is unavailable in {mode}.");
++                }
++            }
++
++            return matches.Select(pair => new Filter
++            {
++                testMode = mode,
++                assemblyNames = pair.Key.Length == 0 ? null : new[] { pair.Key },
++                testNames = pair.Value.ToArray()
++            }).ToArray();
++        }
++
+         /// <summary>
+         /// True if the test, its method, or its declaring fixture type is marked [Explicit].
+         /// Class-level [Explicit] must be honored here because Unity does not always propagate it
+@@ -825,6 +910,7 @@ namespace Unity.Pipeline.Editor.Testing
+             public string filterType;
+             public string mode;
+             public bool includeExplicit;
++            public ExactTestSelection selection;
+             public bool isSync;
+             public string runId;
+             public bool all;
+diff --git a/com.unity.pipeline/Editor/Testing/TestResultCollector.cs b/com.unity.pipeline/Editor/Testing/TestResultCollector.cs
+index c4ff392..dc8b3fc 100644
+--- a/com.unity.pipeline/Editor/Testing/TestResultCollector.cs
++++ b/com.unity.pipeline/Editor/Testing/TestResultCollector.cs
+@@ -163,6 +163,7 @@ namespace Unity.Pipeline.Editor.Testing
+             return new TestResult
+             {
+                 FullName = result.Test.FullName,
++                Assembly = result.Test.TypeInfo?.Assembly?.GetName()?.Name,
+                 Status = result.TestStatus.ToString(),
+                 Duration = result.Duration,
+                 Message = Truncate(result.Message, 10000),
+diff --git a/com.unity.pipeline/Runtime/Models/TestResult.cs b/com.unity.pipeline/Runtime/Models/TestResult.cs
+index 83d4790..6e0b3a7 100644
+--- a/com.unity.pipeline/Runtime/Models/TestResult.cs
++++ b/com.unity.pipeline/Runtime/Models/TestResult.cs
+@@ -10,6 +10,12 @@ namespace Unity.Pipeline
+     {
+         /// <summary>Fully-qualified test name.</summary>
+         public string FullName { get; set; }
++
++        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
++        public string Assembly { get; set; }
++
++        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
++        public string Mode { get; set; }
+         /// <summary>Outcome: Passed, Failed, Skipped, or Inconclusive.</summary>
+         public string Status { get; set; } // Passed, Failed, Skipped, Inconclusive
+         /// <summary>How long the test took, in seconds.</summary>
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index 3989b13..36b0903 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.19",
++  "version": "0.6.0-2022.20",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

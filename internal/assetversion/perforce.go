@@ -96,6 +96,15 @@ func (p P4Options) records(ctx context.Context, args ...string) ([]p4Record, err
 // OpenP4 selects the depot tree as of a submitted changelist, including
 // unchanged files at their last revision at or before that changelist.
 func OpenP4(ctx context.Context, options P4Options, change string) (*Version, error) {
+	return openP4(ctx, options, change, "Assets", "Packages")
+}
+
+// OpenP4Project also reads ProjectSettings, which can affect test selection.
+func OpenP4Project(ctx context.Context, options P4Options, change string) (*Version, error) {
+	return openP4(ctx, options, change, "Assets", "Packages", "ProjectSettings")
+}
+
+func openP4(ctx context.Context, options P4Options, change string, roots ...string) (*Version, error) {
 	if !ValidP4Root(options.Root) || !ValidChangelist(change) {
 		return nil, fmt.Errorf("invalid P4 depot root or changelist")
 	}
@@ -121,7 +130,7 @@ func OpenP4(ctx context.Context, options P4Options, change string) (*Version, er
 		paths[name] = file{name, depot + "#" + record.Rev}
 		return nil
 	}
-	for _, root := range []string{"Assets", "Packages"} {
+	for _, root := range roots {
 		if err := options.listFiles(ctx, options.Root+"/"+root, "@"+change, true, add); err != nil {
 			return nil, err
 		}

@@ -2,6 +2,30 @@
 
 Poll an asynchronous test run with `upipe exec test_status`. Use `--set detail=failures` for failed test details or `--set detail=summary` for counts only. The default `full` returns every result. Use `upipe test` to propagate a failed run (exit 20) or cancellation (exit 22). The terminal result is reported in `error.data` under `--json`.
 
+## Selecting tests from the CLI
+
+```sh
+upipe test --affected --from OLD --to NEW --plan --json
+upipe test --affected --from OLD --to NEW --nunit test-results.xml --json
+upipe test --rerun-failed --failed-run-id RUN_ID --nunit rerun-results.xml --json
+```
+
+Use `--p4-root`, `--p4-ops`, `--p4-port`, `--p4-user` and `--p4-client` with submitted
+changelists for P4. The plan reads both snapshots and follows reverse assembly dependencies.
+It includes previous ownership for removed or moved scripts. When ownership or references
+cannot be resolved, or a project setting or non-code asset changes, the command falls back
+to all tests and reports the reason. Before running the plan, open the target revision in
+Unity. `--plan` can run without a live Editor when an explicit project path is provided.
+
+`--rerun-failed` uses the last retained completed run and matches exact test names by assembly
+and phase. Use `--failed-run-id` to reject a different retained run. The old report format
+can be used when the phase and test name can be identified unambiguously.
+
+`--nunit` writes a separate NUnit 3 XML file for a completed run, including runs with failing
+tests and completed selections with zero tests. It requires an existing destination directory.
+`--detail` can still reduce JSON results while XML contains every completed test case.
+Canceled and timed-out runs keep their exit codes and do not write an XML report.
+
 How the package's tests exercise commands. There are two complementary styles — **ViaClient** (over real HTTP, end-to-end) and **CommandDirect** (calling the static command method straight) — backed by a small set of shared test helpers.
 
 ## Two test styles
