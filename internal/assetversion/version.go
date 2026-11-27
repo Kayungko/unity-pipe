@@ -29,6 +29,10 @@ type Version struct {
 	read  func(context.Context, []file, func(file, []byte) error) error
 }
 
+func emptyVersion(backend string, read func(context.Context, []file, func(file, []byte) error) error) *Version {
+	return &Version{Identity: Identity{Backend: backend, Revision: "empty"}, read: read}
+}
+
 func (v *Version) readFile(ctx context.Context, name string) ([]byte, bool, error) {
 	ref, exists := v.files[name]
 	if !exists {
@@ -65,6 +69,12 @@ type metadata struct {
 type GuidIndex map[string][]metadata
 
 func (v *Version) GUIDs(ctx context.Context) (GuidIndex, error) {
+	return v.readGUIDs(ctx, func(name string) error {
+		return fmt.Errorf("%s does not contain a Unity GUID", name)
+	})
+}
+
+func (v *Version) readGUIDs(ctx context.Context, invalidMeta func(string) error) (GuidIndex, error) {
 	index := make(GuidIndex)
 	metas := make([]file, 0)
 	for name, ref := range v.files {
@@ -77,7 +87,7 @@ func (v *Version) GUIDs(ctx context.Context) (GuidIndex, error) {
 		data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 		match := metaGUID.FindSubmatch(data)
 		if match == nil {
-			return fmt.Errorf("%s does not contain a Unity GUID", ref.name)
+			return invalidMeta(ref.name)
 		}
 		name := strings.TrimSuffix(ref.name, ".meta")
 		_, exists := v.files[name]

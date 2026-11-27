@@ -128,6 +128,28 @@ func OpenP4(ctx context.Context, options P4Options, change string) (*Version, er
 	}, nil
 }
 
+// PreviousP4 uses the previous visible submitted change across the server.
+func PreviousP4(ctx context.Context, options P4Options, after *Version) (*Version, error) {
+	change, err := strconv.ParseUint(after.Revision, 10, 64)
+	if err != nil || change == 0 {
+		return nil, fmt.Errorf("invalid submitted P4 changelist")
+	}
+	if change == 1 {
+		return emptyVersion("p4", after.read), nil
+	}
+	records, err := options.records(ctx, "changes", "-s", "submitted", "-m", "1", "@1,@"+strconv.FormatUint(change-1, 10))
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return emptyVersion("p4", after.read), nil
+	}
+	if len(records) != 1 || !ValidChangelist(records[0].Change) {
+		return nil, fmt.Errorf("unexpected P4 baseline changelist")
+	}
+	return OpenP4(ctx, options, records[0].Change)
+}
+
 // Bound each response to fit the bridge's subprocess buffer. Only descend
 // into the versioned directories on larger trees.
 func (p P4Options) listFiles(ctx context.Context, dir, at string, recursive bool, add func(p4Record) error) error {

@@ -59,23 +59,12 @@ func (v *Version) FindReferences(ctx context.Context, guid, under string) (Refer
 	}
 	result.Target = index.Resolve(guid)
 
-	var files []file
-	for name, ref := range v.files {
-		if ValidUnityPath(name) && (under == "" || name == under || strings.HasPrefix(name, under+"/")) {
-			files = append(files, ref)
-		}
-	}
-	slices.SortFunc(files, func(a, b file) int { return strings.Compare(a.name, b.name) })
 	pattern := regexp.MustCompile("(?i)" + guid)
-	err = v.read(ctx, files, func(ref file, data []byte) error {
+	err = v.read(ctx, v.referenceFiles(under), func(ref file, data []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !documentHeader.Match(data) {
-			reason := "not_unity_text"
-			if bytes.HasPrefix(data, []byte("version https://git-lfs.github.com/spec/v1")) {
-				reason = "git_lfs_pointer"
-			}
+		if reason := skipReferenceFile(data); reason != "" {
 			result.Complete = false
 			result.SkippedFiles = append(result.SkippedFiles, SkippedReferenceAsset{AssetPath: ref.name, Reason: reason})
 			return nil
@@ -97,6 +86,31 @@ func (v *Version) FindReferences(ctx context.Context, guid, under string) (Refer
 	return result, ctx.Err()
 }
 
+func withinScope(name, under string) bool {
+	return under == "" || name == under || strings.HasPrefix(name, under+"/")
+}
+
+func (v *Version) referenceFiles(under string) []file {
+	var files []file
+	for name, ref := range v.files {
+		if ValidUnityPath(name) && withinScope(name, under) {
+			files = append(files, ref)
+		}
+	}
+	slices.SortFunc(files, func(a, b file) int { return strings.Compare(a.name, b.name) })
+	return files
+}
+
+func skipReferenceFile(data []byte) string {
+	if documentHeader.Match(data) {
+		return ""
+	}
+	if bytes.HasPrefix(data, []byte("version https://git-lfs.github.com/spec/v1")) {
+		return "git_lfs_pointer"
+	}
+	return "not_unity_text"
+}
+
 func scanReferences(data []byte, name, guid string, index GuidIndex) ([]ReferenceUse, error) {
 	docs, err := parseUnity(data)
 	if err != nil {
@@ -116,7 +130,7 @@ func scanReferences(data []byte, name, guid string, index GuidIndex) ([]Referenc
 			var matched []string
 			for key, value := range fields {
 				ref, ok := value.(Reference)
-				if ok && ref.Asset != nil && ref.Asset.GUID == guid && ref.FileID != "0" && !referenceBookkeeping(doc.kind, key) {
+				if ok && ref.Asset != nil && (guid == "" || ref.Asset.GUID == guid) && ref.FileID != "0" && !referenceBookkeeping(doc.kind, key) {
 					matched = append(matched, key)
 				}
 			}

@@ -165,11 +165,14 @@ upipe commands                                      # 浏览当前编辑器支�
 ```powershell
 upipe asset-guid --at REV GUID --json
 upipe asset-refs --at REV --under Assets/UI GUID --json
+upipe asset-check --at REV --under Assets/UI --json
+upipe asset-impact --from OLD --to NEW --json
+upipe asset-impact --at REV --json
 upipe asset-diff --from OLD --to NEW Assets/UI/Screen.prefab --json
 upipe asset-diff --include-inherited --from OLD --to NEW Assets/UI/Screen.prefab --json
 ```
 
-P4 用已提交的数字 changelist 作为 `--at`、`--from` 或 `--to`。三个命令都支持以下读取参数。P4 Suite 负责认证和路径编码。
+P4 用已提交的数字 changelist 作为 `--at`、`--from` 或 `--to`。这些命令都支持以下读取参数。P4 Suite 负责认证和路径编码。
 
 ```powershell
 upipe asset-guid --at CL GUID --p4-root //depot/Project --p4-ops PATH_TO_P4_OPS_JS --p4-port SERVER --p4-user USER --p4-client CLIENT --json
@@ -178,6 +181,12 @@ upipe asset-guid --at CL GUID --p4-root //depot/Project --p4-ops PATH_TO_P4_OPS_
 GUID 解析范围为选定版本中纳管的 `Assets/` 和 `Packages/`。报告区分已解析、未解析、重复 GUID、只有元数据的资源以及 Unity 内建引用。未纳管的注册表包引用可能无法解析。
 
 `asset-refs` 查找该版本中每个文本 Prefab 和 Scene 直接保存的对象引用，返回资产路径、节点、组件、字段和引用 File ID。嵌套 Prefab 的源引用和已保存的对象引用覆盖分别出现在对应字段中。覆盖还提供目标 GUID、File ID 和属性路径。被删资源的 GUID 仍可用于定位残留引用。用 `--under` 指定目录或单个资产可以缩小搜索范围。未读取的二进制资源或 Git LFS 指针列在 `skippedFiles` 中，此时 `complete` 为 `false`。零匹配使用正常成功响应。
+
+`asset-check` 报告 `Assets/` 中文件和目录缺失的 `.meta`，以及纳管的 `Assets/`、`Packages/` 中的无效元数据、孤立元数据和重复 GUID。它还列出文本 Prefab、Scene 中无法按快照解析的 GUID 引用及字段位置。来自注册表包等未纳管依赖的 GUID 也可能无法解析。
+
+`asset-impact` 将资产和元数据的版本变更放在 `changes`，通过已保存的 GUID 引用找出直接和间接受影响的 Prefab、Scene。引用此前已失效且位置不变时不会列入 `newlyInvalidReferences`。移动资产会显示原路径移除、新路径新增，并用同一 GUID 关联引用。单版本模式 `--at` 对比 Git 第一父提交，或 P4 上一个可见的已提交 Changelist。显式 `--from` 和 `--to` 比较两个快照。P4 按文件修订比较，提交了相同内容也可能列为变更。可用 `--under` 限定所扫描的 Prefab、Scene，变更清单和 GUID 仍取自整个项目快照。影响链如果经过限定范围之外的资产，使用全项目扫描可以看到完整链路。
+
+这两条命令以单个 `--json` 信封返回。完成扫描时退出 `0`，发现问题放在报告中。参数错误、读取失败和超时分别退出 `2`、`20`、`21`。二进制资源和 Git LFS 指针计入跳过清单。引用诊断验证资源 GUID 的解析状态，适用于版本库中可见的文本 Prefab 和 Scene。
 
 差异支持 Unity 文本序列化的 `.prefab` 和 `.unity`，以类型和本地 File ID 配对节点及组件。同名兄弟节点按层级顺序标记，字段使用 JSON Pointer。嵌套 Prefab 实例以源资产名标识，实例的序列化覆盖和引用在实例下显示。资源移动会展示两边不同的路径，引用无法解析时保留原 GUID 和 File ID。资产本身改名可用 `--to-path` 指定新路径。
 

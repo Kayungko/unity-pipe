@@ -51,6 +51,31 @@ func OpenGit(ctx context.Context, dir, revision string) (*Version, error) {
 
 const maxFileBytes = 64 << 20
 
+// PreviousGit selects the first parent of the already pinned commit.
+func PreviousGit(ctx context.Context, dir string, after *Version) (*Version, error) {
+	output, err := run(ctx, dir, "git", "rev-list", "--parents", "-n", "1", after.Revision)
+	if err != nil {
+		return nil, err
+	}
+	parents := strings.Fields(string(output))
+	if len(parents) == 0 || parents[0] != after.Revision {
+		return nil, fmt.Errorf("could not identify the selected Git commit's parent")
+	}
+	if len(parents) == 1 {
+		// A shallow boundary has no visible parent, even when the commit does.
+		object, err := run(ctx, dir, "git", "cat-file", "commit", after.Revision)
+		if err != nil {
+			return nil, err
+		}
+		headers, _, _ := bytes.Cut(object, []byte("\n\n"))
+		if bytes.Contains(headers, []byte("\nparent ")) {
+			return nil, fmt.Errorf("the selected Git commit's parent is unavailable")
+		}
+		return emptyVersion("git", after.read), nil
+	}
+	return OpenGit(ctx, dir, parents[1])
+}
+
 func readGitBlobs(ctx context.Context, dir string, refs []file, consume func(file, []byte) error) error {
 	if len(refs) == 0 {
 		return nil
