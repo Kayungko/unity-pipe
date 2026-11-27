@@ -28,7 +28,7 @@ type batchRunResult struct {
 func RunCommand() SubCommand {
 	return SubCommand{
 		Name:     "run",
-		Synopsis: "run exec, test or build in a temporary batchmode Editor: upipe run --unity PATH --project-path DIR -- SUBCOMMAND",
+		Synopsis: "run exec, test, build or preview-pack in a temporary batchmode Editor: upipe run --unity PATH --project-path DIR -- SUBCOMMAND",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe run")
 			unity := fs.String("unity", "", "path to the Unity Editor executable")
@@ -44,7 +44,7 @@ func RunCommand() SubCommand {
 				return nil, usageErr("run: " + err.Error())
 			}
 			if len(rest) != 0 || separator < 0 || separator+1 == len(args) {
-				return nil, usageErr("run: provide '-- exec COMMAND', '-- test [flags]' or '-- build [flags]' after the Editor options")
+				return nil, usageErr("run: provide exec, test, build or preview-pack after '--'")
 			}
 			if *unity == "" || rt.Opts.ProjectPath == "" || rt.Opts.PlayerPath != "" {
 				return nil, usageErr("run: --unity and --project-path are required")
@@ -68,8 +68,10 @@ func RunCommand() SubCommand {
 				command = TestCommand()
 			case "build":
 				command = BuildCommand()
+			case "preview-pack":
+				command = previewPackCommand()
 			default:
-				return nil, usageErr("run: only exec, test and build are supported")
+				return nil, usageErr("run: only exec, test, build and preview-pack are supported")
 			}
 			for _, arg := range nested[1:] {
 				name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")

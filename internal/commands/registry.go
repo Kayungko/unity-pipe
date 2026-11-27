@@ -41,6 +41,7 @@ func All() []SubCommand {
 		RecompileCommand(),
 		TestCommand(),
 		BuildCommand(),
+		PreviewCommand(),
 		AuditCommand(),
 		AssetGUIDCommand(),
 		AssetRefsCommand(),

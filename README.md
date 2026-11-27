@@ -48,6 +48,18 @@ upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --l
 
 `--timeout` 覆盖启动与执行。取消或超时后回收本次启动的 Editor，已有 Editor 保持独立。写操作要在命令中显式保存。测试支持 NUnit XML。构建使用 `--dry-run` 预检或 `--confirm` 执行，按构建 ID 等到 BuildReport。已提交的构建被中断时返回最后一次观察到的状态，输出目录可能包含不完整的文件。二进制管道和后台任务可用常驻 Editor 的原有入口。
 
+### 本地 Scene Preview
+
+在 Windows x64 上可为使用 Built-in Render Pipeline 的 Unity 工程预览带有 3D Renderer 的 Prefab。先准备一个空场景作为预览宿主，再按顺序运行以下命令。
+
+```powershell
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --json -- preview-pack --asset Assets/Props/Crate.prefab --output-dir "D:/CI/preview-content" --confirm
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --json -- build --target StandaloneWindows64 --option Development --scene Assets/PreviewHost.unity --scene-preview-bundle "D:/CI/preview-content" --output-path "D:/CI/PreviewPlayer/Preview.exe" --confirm
+upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI/preview-content" --output-path "D:/CI/Crate.png" --json
+```
+
+打包目录和 PNG 路径必须是新路径，打包目录须位于项目外。预览 Player 使用 AssetBundle 构建清单保留所需类型，预览时会检查项目、目标平台和 Unity 版本。可以用同一个 Player 渲染兼容的包，引入新脚本类型后应重新构建。加载会运行 Prefab 上的组件，只预览可信项目自己生成的包。进程退出和日志路径由 CLI 回传，`--timeout` 控制预览时限。当前支持有图形设备的 Built-in 3D 渲染。
+
 ## 快速开始
 
 ### 前置条件
@@ -338,7 +350,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.20`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.21`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

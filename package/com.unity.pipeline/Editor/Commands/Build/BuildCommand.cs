@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Unity.Pipeline.Commands;
 using Unity.Pipeline.Editor.Authoring;
+using Unity.Pipeline.Preview;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
@@ -85,6 +86,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
         static string[] s_PendingScenes;
         static string s_PendingProfileGuid;
         static string s_PendingBuildId;
+        static string s_PendingPreviewBundle;
 
         static BuildCommand()
         {
@@ -105,16 +107,17 @@ namespace Unity.Pipeline.Editor.Commands.Build
             [CliArg("options", "BuildOptions names. Omit to get just DetailedBuildReport; supplying any disables that default.")] string[] options = null,
             [CliArg("scenes", "Scene asset paths to build (e.g. Assets/Scenes/Main.unity). Defaults to EditorBuildSettings.")] string[] scenes = null,
             [CliArg("confirm", "Acknowledge and run the build; without it the call is refused. Use dry_run to validate only.")] bool confirm = false,
-            [CliArg("dry_run", "Validate target/outputPath/scenes without building.")] bool dryRun = false)
+            [CliArg("dry_run", "Validate target/outputPath/scenes without building.")] bool dryRun = false,
+            [CliArg("scenePreviewBundle", "Local preview bundle directory for a dedicated Windows Development Player.")] string scenePreviewBundle = "")
         {
             // Validation + queueing both touch Unity APIs, so run them on the main thread. When invoked
             // off-thread (the normal HTTP path) this marshals through the server dispatcher; in-process
             // (tests, no server) it runs inline.
-            return RunOnMain<object>(() => ValidateAndQueue(target, outputPath, profileName, options, scenes, confirm, dryRun));
+            return RunOnMain<object>(() => ValidateAndQueue(target, outputPath, profileName, options, scenes, confirm, dryRun, scenePreviewBundle));
         }
 
         static object ValidateAndQueue(string targetArg, string outputArg, string profileName,
-            string[] optionArgs, string[] sceneArgs, bool confirm, bool dryRun)
+            string[] optionArgs, string[] sceneArgs, bool confirm, bool dryRun, string scenePreviewBundle)
         {
             lock (s_Lock)
             {
@@ -194,6 +197,24 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 errors.Add(Invalid("outputPath", $"Output path is invalid: {ex.Message}"));
             }
 
+            string previewManifest = null;
+            if (!string.IsNullOrWhiteSpace(scenePreviewBundle))
+            {
+                if (target != BuildTarget.StandaloneWindows64 || (options & BuildOptions.Development) == 0 ||
+                    !string.IsNullOrEmpty(profileName) || sceneArgs?.Length != 1)
+                    errors.Add(Invalid("scenePreviewBundle", "Specify StandaloneWindows64, Development and one explicit preview host scene."));
+                if (outputPath != null && (File.Exists(outputPath) || File.Exists(outputPath + ".scene-preview.json")))
+                    errors.Add(Invalid("outputPath", "The dedicated preview Player requires a new output path."));
+                try
+                {
+                    previewManifest = ScenePreviewCommand.ValidatePlayerBundle(scenePreviewBundle);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(Invalid("scenePreviewBundle", ex.Message));
+                }
+            }
+
             if (dryRun)
             {
                 return new
@@ -233,6 +254,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 s_PendingScenes = scenes;
                 s_PendingProfileGuid = profile?.Guid;
                 s_PendingBuildId = buildId;
+                s_PendingPreviewBundle = previewManifest;
                 s_Pending = true;
             }
 
@@ -297,6 +319,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
             string[] scenes;
             string profile;
             string buildId;
+            string previewManifest;
 
             lock (s_Lock)
             {
@@ -310,11 +333,12 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 scenes = s_PendingScenes;
                 profile = s_PendingProfileGuid;
                 buildId = s_PendingBuildId;
+                previewManifest = s_PendingPreviewBundle;
             }
 
             try
             {
-                RunBuild(buildId, target, output, options, scenes, profile);
+                RunBuild(buildId, target, output, options, scenes, profile, previewManifest);
             }
             catch (Exception ex)
             {
@@ -335,7 +359,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
         }
 
         static void RunBuild(string buildId, BuildTarget target, string outputPath, BuildOptions options,
-            string[] scenes, string profileGuid)
+            string[] scenes, string profileGuid, string previewManifest)
         {
             var startedAt = DateTime.UtcNow;
             WriteStatusJson(new
@@ -372,7 +396,17 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 options = options
             };
 
+            if (previewManifest != null)
+            {
+                buildOptions.assetBundleManifestPath = previewManifest;
+                buildOptions.extraScriptingDefines = new[] { ScenePreviewCommand.RuntimeDefine };
+            }
             var report = BuildPipeline.BuildPlayer(buildOptions);
+            if (previewManifest != null && report.summary.result == BuildResult.Succeeded)
+            {
+                var metadata = Path.Combine(Path.GetDirectoryName(previewManifest), PreviewPackage.FileName);
+                File.Copy(metadata, outputPath + ".scene-preview.json", false);
+            }
             WriteStatusJson(Project(buildId, report));
         }
 

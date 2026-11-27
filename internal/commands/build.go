@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ func BuildCommand() SubCommand {
 			target := fs.String("target", "", "Unity BuildTarget name (default: active target)")
 			output := fs.String("output-path", "", "Player output path, relative to the project or absolute")
 			profile := fs.String("profile", "", "Build Profile name (requires Unity 6)")
+			preview := fs.String("scene-preview-bundle", "", "build a dedicated Development Player for this preview bundle directory")
 			confirm := fs.Bool("confirm", false, "allow the Editor to build the Player")
 			dryRun := fs.Bool("dry-run", false, "validate and return the resolved build plan without building")
 			noWait := fs.Bool("no-wait", false, "return the queued build ID instead of waiting for a report")
@@ -42,6 +44,13 @@ func BuildCommand() SubCommand {
 			}
 			if len(buildOptions) != 0 {
 				params["options"] = buildOptions
+			}
+			if *preview != "" {
+				manifestDir, err := filepath.Abs(*preview)
+				if err != nil {
+					return nil, usageErr("build: invalid preview bundle directory: " + err.Error())
+				}
+				params["scenePreviewBundle"] = manifestDir
 			}
 			// The Editor may already have queued the build if the reply gets lost.
 			reply, err := rt.Client.Exec("build", protocol.ExecOptions{Parameters: params, Timeout: rt.Opts.Timeout})

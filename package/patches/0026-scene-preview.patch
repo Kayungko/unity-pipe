@@ -1,0 +1,535 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index 080fb11..de51270 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,10 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+ 
++## [0.6.0-2022.21] - Local candidate
++
++- Package a saved Prefab and its dependencies for a dedicated Windows Development Player. Build with the bundle manifest to preserve serialized types, then render the loaded asset to PNG in the Built-in Render Pipeline.
++
+ ## [0.6.0-2022.20] - Local candidate
+ 
+ - Support exact async test selection by assembly or by failed case and phase.
+diff --git a/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs b/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs
+index 151ca49..9b553b3 100644
+--- a/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs
+@@ -7,6 +7,7 @@ using Newtonsoft.Json;
+ using Newtonsoft.Json.Linq;
+ using Unity.Pipeline.Commands;
+ using Unity.Pipeline.Editor.Authoring;
++using Unity.Pipeline.Preview;
+ using UnityEditor;
+ using UnityEditor.Build;
+ using UnityEditor.Build.Reporting;
+@@ -85,6 +86,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
+         static string[] s_PendingScenes;
+         static string s_PendingProfileGuid;
+         static string s_PendingBuildId;
++        static string s_PendingPreviewBundle;
+ 
+         static BuildCommand()
+         {
+@@ -105,16 +107,17 @@ namespace Unity.Pipeline.Editor.Commands.Build
+             [CliArg("options", "BuildOptions names. Omit to get just DetailedBuildReport; supplying any disables that default.")] string[] options = null,
+             [CliArg("scenes", "Scene asset paths to build (e.g. Assets/Scenes/Main.unity). Defaults to EditorBuildSettings.")] string[] scenes = null,
+             [CliArg("confirm", "Acknowledge and run the build; without it the call is refused. Use dry_run to validate only.")] bool confirm = false,
+-            [CliArg("dry_run", "Validate target/outputPath/scenes without building.")] bool dryRun = false)
++            [CliArg("dry_run", "Validate target/outputPath/scenes without building.")] bool dryRun = false,
++            [CliArg("scenePreviewBundle", "Local preview bundle directory for a dedicated Windows Development Player.")] string scenePreviewBundle = "")
+         {
+             // Validation + queueing both touch Unity APIs, so run them on the main thread. When invoked
+             // off-thread (the normal HTTP path) this marshals through the server dispatcher; in-process
+             // (tests, no server) it runs inline.
+-            return RunOnMain<object>(() => ValidateAndQueue(target, outputPath, profileName, options, scenes, confirm, dryRun));
++            return RunOnMain<object>(() => ValidateAndQueue(target, outputPath, profileName, options, scenes, confirm, dryRun, scenePreviewBundle));
+         }
+ 
+         static object ValidateAndQueue(string targetArg, string outputArg, string profileName,
+-            string[] optionArgs, string[] sceneArgs, bool confirm, bool dryRun)
++            string[] optionArgs, string[] sceneArgs, bool confirm, bool dryRun, string scenePreviewBundle)
+         {
+             lock (s_Lock)
+             {
+@@ -194,6 +197,24 @@ namespace Unity.Pipeline.Editor.Commands.Build
+                 errors.Add(Invalid("outputPath", $"Output path is invalid: {ex.Message}"));
+             }
+ 
++            string previewManifest = null;
++            if (!string.IsNullOrWhiteSpace(scenePreviewBundle))
++            {
++                if (target != BuildTarget.StandaloneWindows64 || (options & BuildOptions.Development) == 0 ||
++                    !string.IsNullOrEmpty(profileName) || sceneArgs?.Length != 1)
++                    errors.Add(Invalid("scenePreviewBundle", "Specify StandaloneWindows64, Development and one explicit preview host scene."));
++                if (outputPath != null && (File.Exists(outputPath) || File.Exists(outputPath + ".scene-preview.json")))
++                    errors.Add(Invalid("outputPath", "The dedicated preview Player requires a new output path."));
++                try
++                {
++                    previewManifest = ScenePreviewCommand.ValidatePlayerBundle(scenePreviewBundle);
++                }
++                catch (Exception ex)
++                {
++                    errors.Add(Invalid("scenePreviewBundle", ex.Message));
++                }
++            }
++
+             if (dryRun)
+             {
+                 return new
+@@ -233,6 +254,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
+                 s_PendingScenes = scenes;
+                 s_PendingProfileGuid = profile?.Guid;
+                 s_PendingBuildId = buildId;
++                s_PendingPreviewBundle = previewManifest;
+                 s_Pending = true;
+             }
+ 
+@@ -297,6 +319,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
+             string[] scenes;
+             string profile;
+             string buildId;
++            string previewManifest;
+ 
+             lock (s_Lock)
+             {
+@@ -310,11 +333,12 @@ namespace Unity.Pipeline.Editor.Commands.Build
+                 scenes = s_PendingScenes;
+                 profile = s_PendingProfileGuid;
+                 buildId = s_PendingBuildId;
++                previewManifest = s_PendingPreviewBundle;
+             }
+ 
+             try
+             {
+-                RunBuild(buildId, target, output, options, scenes, profile);
++                RunBuild(buildId, target, output, options, scenes, profile, previewManifest);
+             }
+             catch (Exception ex)
+             {
+@@ -335,7 +359,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
+         }
+ 
+         static void RunBuild(string buildId, BuildTarget target, string outputPath, BuildOptions options,
+-            string[] scenes, string profileGuid)
++            string[] scenes, string profileGuid, string previewManifest)
+         {
+             var startedAt = DateTime.UtcNow;
+             WriteStatusJson(new
+@@ -372,7 +396,17 @@ namespace Unity.Pipeline.Editor.Commands.Build
+                 options = options
+             };
+ 
++            if (previewManifest != null)
++            {
++                buildOptions.assetBundleManifestPath = previewManifest;
++                buildOptions.extraScriptingDefines = new[] { ScenePreviewCommand.RuntimeDefine };
++            }
+             var report = BuildPipeline.BuildPlayer(buildOptions);
++            if (previewManifest != null && report.summary.result == BuildResult.Succeeded)
++            {
++                var metadata = Path.Combine(Path.GetDirectoryName(previewManifest), PreviewPackage.FileName);
++                File.Copy(metadata, outputPath + ".scene-preview.json", false);
++            }
+             WriteStatusJson(Project(buildId, report));
+         }
+ 
+diff --git a/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs b/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs
+new file mode 100644
+index 0000000..49fa05e
+--- /dev/null
++++ b/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs
+@@ -0,0 +1,104 @@
++#if UNITY_EDITOR
++using System;
++using System.IO;
++using System.Linq;
++using Unity.Pipeline.Commands;
++using Unity.Pipeline.Preview;
++using UnityEditor;
++using UnityEngine;
++
++namespace Unity.Pipeline.Editor.Commands.Build
++{
++    static class ScenePreviewCommand
++    {
++        internal const string RuntimeDefine = "UPIPE_SCENE_PREVIEW";
++        private const string BundleName = "preview-prefab";
++        private const string DependencyName = "preview-dependencies";
++
++        [CliCommand("pack_scene_preview", "Package one saved Prefab and its dependencies for a local preview Player.",
++            MainThreadRequired = true, Effect = CommandEffect.Destructive, Tags = new[] { "build", "preview" })]
++        public static PipelineCommandResult Pack(string asset, string output_dir, bool confirm = false)
++        {
++            if (!confirm)
++                return PipelineCommandResult.Fail("Packaging requires confirm=true", new { stage = "validate" });
++            if (!asset.StartsWith("Assets/", StringComparison.Ordinal) || !asset.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) ||
++                AssetDatabase.LoadAssetAtPath<GameObject>(asset) == null)
++                return PipelineCommandResult.Fail("Expected a saved Prefab under Assets/", new { stage = "validate", asset });
++            if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling ||
++                BuildPipeline.isBuildingPlayer || EditorUserBuildSettings.activeBuildTarget != BuildTarget.StandaloneWindows64)
++                return PipelineCommandResult.Fail("Use an idle Editor with StandaloneWindows64 active", new { stage = "validate" });
++
++            string staging = null;
++            var stage = "output";
++            try
++            {
++                var destination = Path.GetFullPath(output_dir);
++                var project = Directory.GetParent(Application.dataPath).FullName;
++                if (destination.Equals(project, StringComparison.OrdinalIgnoreCase) ||
++                    destination.StartsWith(project + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
++                    throw new ArgumentException("Choose an output directory outside the Unity project");
++                var parent = Path.GetDirectoryName(destination);
++                if (!Directory.Exists(parent) || Directory.Exists(destination) || File.Exists(destination))
++                    throw new IOException("Output directory must be new and its parent must already exist");
++
++                staging = Path.Combine(parent, ".upipe-preview-" + Guid.NewGuid().ToString("N"));
++                var bundleDirectory = Path.Combine(staging, PreviewPackage.CatalogName);
++                Directory.CreateDirectory(bundleDirectory);
++                stage = "build";
++                var root = new AssetBundleBuild { assetBundleName = BundleName, assetNames = new[] { asset } };
++                var dependencyPaths = AssetDatabase.GetDependencies(asset)
++                    .Where(path => path != asset && AssetImporter.GetAtPath(path) != null &&
++                        AssetDatabase.GetMainAssetTypeAtPath(path) != null &&
++                        AssetDatabase.GetMainAssetTypeAtPath(path) != typeof(MonoScript) &&
++                        AssetDatabase.GetMainAssetTypeAtPath(path) != typeof(SceneAsset) &&
++                        !path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
++                    .ToArray();
++                var builds = dependencyPaths.Length == 0 ? new[] { root } :
++                    new[] { root, new AssetBundleBuild { assetBundleName = DependencyName, assetNames = dependencyPaths } };
++                var catalog = BuildPipeline.BuildAssetBundles(bundleDirectory, builds,
++                    BuildAssetBundleOptions.ChunkBasedCompression | BuildAssetBundleOptions.StrictMode,
++                    BuildTarget.StandaloneWindows64);
++                if (catalog == null || !catalog.GetAllAssetBundles().Contains(BundleName))
++                    throw new InvalidOperationException("Unity failed to build the preview AssetBundle");
++
++                var package = new PreviewPackage
++                {
++                    schema = PreviewPackage.CurrentSchema,
++                    target = PreviewPackage.WindowsTarget,
++                    unityVersion = Application.unityVersion,
++                    projectGuid = PlayerSettings.productGUID.ToString(),
++                    asset = asset,
++                    bundle = BundleName,
++                    dependencies = catalog.GetAllDependencies(BundleName)
++                };
++                File.WriteAllText(Path.Combine(bundleDirectory, PreviewPackage.FileName), JsonUtility.ToJson(package));
++                stage = "output";
++                Directory.Move(bundleDirectory, destination);
++                return PipelineCommandResult.Succeed(new { directory = destination, package });
++            }
++            catch (Exception ex)
++            {
++                return PipelineCommandResult.Fail(ex.Message, new { stage, asset });
++            }
++            finally
++            {
++                if (staging != null && Directory.Exists(staging))
++                    Directory.Delete(staging, true);
++            }
++        }
++
++        internal static string ValidatePlayerBundle(string directory)
++        {
++            var path = Path.GetFullPath(directory);
++            var package = PreviewPackage.Read(path);
++            if (package.target != PreviewPackage.WindowsTarget || package.unityVersion != Application.unityVersion ||
++                package.projectGuid != PlayerSettings.productGUID.ToString())
++                throw new InvalidDataException("Preview bundle target, Unity version or project does not match");
++            var manifest = Path.Combine(path, PreviewPackage.CatalogName + ".manifest");
++            if (!File.Exists(manifest))
++                throw new FileNotFoundException("The Unity AssetBundle build manifest is missing", manifest);
++            return manifest;
++        }
++    }
++}
++#endif
+diff --git a/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs.meta b/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs.meta
+new file mode 100644
+index 0000000..b4eb1fc
+--- /dev/null
++++ b/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs.meta
+@@ -0,0 +1,11 @@
++fileFormatVersion: 2
++guid: ebe9adc7df9a4374d911b482bbd8904d
++MonoImporter:
++  externalObjects: {}
++  serializedVersion: 2
++  defaultReferences: []
++  executionOrder: 0
++  icon: {instanceID: 0}
++  userData: 
++  assetBundleName: 
++  assetBundleVariant: 
+diff --git a/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
+new file mode 100644
+index 0000000..590cd9f
+--- /dev/null
++++ b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
+@@ -0,0 +1,225 @@
++#if UNITY_EDITOR || (UPIPE_SCENE_PREVIEW && DEVELOPMENT_BUILD && UNITY_STANDALONE_WIN)
++using System;
++using System.IO;
++using UnityEngine;
++#if !UNITY_EDITOR
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading.Tasks;
++using UnityEngine.Rendering;
++using UnityEngine.SceneManagement;
++#endif
++
++namespace Unity.Pipeline.Preview
++{
++    [Serializable]
++    public sealed class PreviewPackage
++    {
++        public const int CurrentSchema = 1;
++        public const string FileName = "preview-package.json";
++        public const string CatalogName = "preview-catalog";
++        public const string WindowsTarget = "StandaloneWindows64";
++        public int schema;
++        public string target;
++        public string unityVersion;
++        public string projectGuid;
++        public string asset;
++        public string bundle;
++        public string[] dependencies;
++
++        public static PreviewPackage Read(string directory)
++        {
++            var package = JsonUtility.FromJson<PreviewPackage>(File.ReadAllText(Path.Combine(directory, FileName)));
++            if (package == null || package.schema != CurrentSchema || string.IsNullOrEmpty(package.asset) ||
++                !IsFileName(package.bundle) || package.dependencies == null || Array.Exists(package.dependencies, name => !IsFileName(name)))
++                throw new InvalidDataException("Invalid preview package metadata");
++            return package;
++        }
++
++        private static bool IsFileName(string name) =>
++            !string.IsNullOrEmpty(name) && name != "." && name != ".." &&
++            name.IndexOfAny(new[] { '/', '\\', ':' }) < 0 && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
++    }
++
++#if !UNITY_EDITOR
++    static class ScenePreview
++    {
++        private const int ImageSize = 768;
++        private const int PreviewLayer = 31;
++
++        [Serializable]
++        private sealed class Result
++        {
++            public bool success;
++            public string stage;
++            public string message;
++            public string asset;
++            public string graphicsDevice;
++            public int renderers;
++            public int missingScripts;
++            public string[] behaviourTypes;
++        }
++
++        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
++        private static void Initialize()
++        {
++            var args = Environment.GetCommandLineArgs();
++            var index = Array.IndexOf(args, "-upipe-scene-preview");
++            if (index >= 0 && args.Length > index + 2)
++                _ = Run(args[index + 1], args[index + 2]);
++        }
++
++        private static async Task Run(string directory, string output)
++        {
++            var result = new Result { stage = "validate", graphicsDevice = SystemInfo.graphicsDeviceType.ToString() };
++            var bundles = new List<AssetBundle>();
++            var scene = default(Scene);
++            try
++            {
++                var package = PreviewPackage.Read(directory);
++                result.asset = package.asset;
++                if (package.target != PreviewPackage.WindowsTarget || package.unityVersion != Application.unityVersion)
++                    throw new InvalidDataException("Preview package target or Unity version does not match this Player");
++                if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || GraphicsSettings.currentRenderPipeline != null)
++                    throw new InvalidOperationException("Scene Preview requires the Built-in Render Pipeline and a graphics device");
++
++                result.stage = "dependency";
++                foreach (var dependency in package.dependencies)
++                    await LoadBundle(directory, dependency, bundles);
++                result.stage = "bundle";
++                var root = await LoadBundle(directory, package.bundle, bundles);
++                var load = root.LoadAssetAsync<GameObject>(package.asset);
++                await Wait(load);
++                var prefab = load.asset as GameObject;
++                if (prefab == null)
++                    throw new InvalidDataException("Preview Prefab is absent from its bundle");
++
++                result.stage = "scene";
++                scene = SceneManager.CreateScene("UPipe Scene Preview", new CreateSceneParameters(LocalPhysicsMode.Physics3D));
++                var stage = CreateRoot("Preview", scene);
++                stage.SetActive(false);
++                var clone = UnityEngine.Object.Instantiate(prefab, stage.transform, false);
++                foreach (var transform in clone.GetComponentsInChildren<Transform>(true))
++                    transform.gameObject.layer = PreviewLayer;
++                var behaviours = clone.GetComponentsInChildren<MonoBehaviour>(true);
++                result.behaviourTypes = behaviours.Where(item => item != null).Select(item => item.GetType().FullName).Distinct().ToArray();
++                result.missingScripts = behaviours.Count(item => item == null);
++                if (result.missingScripts > 0)
++                    throw new InvalidDataException("Prefab contains missing Player script types");
++                stage.SetActive(true);
++                await Task.Yield();
++
++                result.stage = "render";
++                var renderers = clone.GetComponentsInChildren<Renderer>().Where(item => item.enabled).ToArray();
++                if (renderers.Length == 0)
++                    throw new InvalidDataException("Prefab has no enabled 3D Renderer to frame");
++                result.renderers = renderers.Length;
++                var bounds = renderers[0].bounds;
++                foreach (var renderer in renderers.Skip(1))
++                    bounds.Encapsulate(renderer.bounds);
++                File.WriteAllBytes(Path.Combine(output, "preview.png"), Capture(scene, bounds));
++                result.success = true;
++                result.stage = "completed";
++            }
++            catch (Exception ex)
++            {
++                result.message = ex.Message;
++            }
++            finally
++            {
++                try
++                {
++                    if (scene.IsValid())
++                        await Wait(SceneManager.UnloadSceneAsync(scene));
++                    for (var i = bundles.Count - 1; i >= 0; --i)
++                        bundles[i].Unload(true);
++                }
++                catch (Exception ex)
++                {
++                    result.success = false;
++                    result.stage = "cleanup";
++                    result.message = ex.Message;
++                }
++                try
++                {
++                    File.WriteAllText(Path.Combine(output, "result.json"), JsonUtility.ToJson(result));
++                }
++                finally
++                {
++                    Application.Quit(result.success ? 0 : 1);
++                }
++            }
++        }
++
++        private static GameObject CreateRoot(string name, Scene scene)
++        {
++            var root = new GameObject(name) { layer = PreviewLayer };
++            SceneManager.MoveGameObjectToScene(root, scene);
++            return root;
++        }
++
++        private static byte[] Capture(Scene scene, Bounds bounds)
++        {
++            var camera = CreateRoot("Preview Camera", scene).AddComponent<Camera>();
++            camera.enabled = false;
++            camera.orthographic = true;
++            camera.cullingMask = 1 << PreviewLayer;
++            camera.clearFlags = CameraClearFlags.SolidColor;
++            camera.backgroundColor = new Color(0.12f, 0.14f, 0.17f);
++            var radius = Mathf.Max(bounds.extents.magnitude, 0.05f);
++            camera.transform.position = bounds.center + new Vector3(1, 0.72f, -1.4f).normalized * radius * 4;
++            camera.transform.LookAt(bounds.center);
++            camera.nearClipPlane = Mathf.Max(radius * 0.02f, 0.001f);
++            camera.farClipPlane = radius * 8;
++            camera.orthographicSize = radius * 1.12f;
++
++            var light = CreateRoot("Preview Light", scene).AddComponent<Light>();
++            light.type = LightType.Directional;
++            light.cullingMask = camera.cullingMask;
++            light.intensity = 1.25f;
++            light.transform.rotation = Quaternion.Euler(42, -35, 0);
++
++            var target = RenderTexture.GetTemporary(ImageSize, ImageSize, 24, RenderTextureFormat.ARGB32);
++            var previous = RenderTexture.active;
++            var pixels = new Texture2D(ImageSize, ImageSize, TextureFormat.RGB24, false);
++            try
++            {
++                camera.targetTexture = target;
++                camera.Render();
++                RenderTexture.active = target;
++                pixels.ReadPixels(new Rect(0, 0, ImageSize, ImageSize), 0, 0);
++                return ImageConversion.EncodeToPNG(pixels);
++            }
++            finally
++            {
++                camera.targetTexture = null;
++                RenderTexture.active = previous;
++                RenderTexture.ReleaseTemporary(target);
++                UnityEngine.Object.Destroy(pixels);
++            }
++        }
++
++        private static async Task Wait(AsyncOperation operation)
++        {
++            if (operation == null)
++                throw new InvalidOperationException("Unity did not start the requested preview operation");
++            while (!operation.isDone)
++                await Task.Yield();
++        }
++
++        private static async Task<AssetBundle> LoadBundle(string directory, string file, List<AssetBundle> bundles)
++        {
++            var path = Path.Combine(directory, file);
++            if (!File.Exists(path))
++                throw new FileNotFoundException("Preview bundle is missing: " + file);
++            var load = AssetBundle.LoadFromFileAsync(path);
++            await Wait(load);
++            if (load.assetBundle == null)
++                throw new InvalidDataException("Unity could not load preview bundle: " + file);
++            bundles.Add(load.assetBundle);
++            return load.assetBundle;
++        }
++    }
++#endif
++}
++#endif
+diff --git a/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs.meta b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs.meta
+new file mode 100644
+index 0000000..522349f
+--- /dev/null
++++ b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs.meta
+@@ -0,0 +1,11 @@
++fileFormatVersion: 2
++guid: 2cb7deab76517ea439cb8ed472cf1e3d
++MonoImporter:
++  externalObjects: {}
++  serializedVersion: 2
++  defaultReferences: []
++  executionOrder: 0
++  icon: {instanceID: 0}
++  userData: 
++  assetBundleName: 
++  assetBundleVariant: 
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index 36b0903..7bf4443 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.20",
++  "version": "0.6.0-2022.21",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",
+@@ -13,6 +13,8 @@
+   ],
+   "dependencies": {
+     "com.unity.test-framework": "1.1.33",
++    "com.unity.modules.assetbundle": "1.0.0",
++    "com.unity.modules.imageconversion": "1.0.0",
+     "com.unity.modules.jsonserialize": "1.0.0",
+     "com.unity.nuget.newtonsoft-json": "3.0.2",
+     "com.unity.nuget.mono-cecil": "1.11.6",
