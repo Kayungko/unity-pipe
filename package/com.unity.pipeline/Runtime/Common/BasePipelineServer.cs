@@ -1038,7 +1038,7 @@ namespace Unity.Pipeline
         /// </summary>
         private JObject BuildCommandEntry(CommandInfo command)
         {
-            return JObject.FromObject(new
+            var entry = JObject.FromObject(new
             {
                 name = command.Name,
                 description = command.Description,
@@ -1056,7 +1056,13 @@ namespace Unity.Pipeline
                     defaultValue = p.DefaultValue
                 }).ToList()
             });
+            if (AcceptsBinaryStdin(command))
+                entry["acceptsBinaryStdin"] = true;
+            return entry;
         }
+
+        private static bool AcceptsBinaryStdin(CommandInfo command) =>
+            command.Parameters.Any(p => p.Name == "stdin" && p.ParameterType == typeof(byte[]));
 
         private static string GetCommandEffect(CommandInfo command)
         {
@@ -1925,6 +1931,7 @@ namespace Unity.Pipeline
                 // (for a "job": true submission that now happens BEFORE a job is created, so a
                 // misnamed command fails fast instead of producing a job that fails later).
                 var command = ResolveCommand(cmd);
+                BindBinaryStdin(command, commandRequest);
 
                 // Bind the remaining tokens and normalize in place, so everything from
                 // ExtractCommandParameters downwards sees exactly one shape.
@@ -2240,6 +2247,32 @@ namespace Unity.Pipeline
             response.ErrorCode = PipelineCommandResult.FailureCode;
             response.Result = value;
             return response;
+        }
+
+        private static void BindBinaryStdin(CommandInfo command, CommandExecutionRequest request)
+        {
+            if (request.StdinBase64 == null)
+                return;
+
+            if (!AcceptsBinaryStdin(command))
+                throw new ArgumentException("This command does not accept binary stdin.");
+            if (request.HasParameter("stdin"))
+                throw new ArgumentException("Binary stdin duplicates the stdin parameter.");
+
+            byte[] input;
+            try
+            {
+                input = Convert.FromBase64String(request.StdinBase64);
+            }
+            catch (FormatException)
+            {
+                throw new ArgumentException("Binary stdin must be valid Base64.");
+            }
+            if (input.Length > PipelineCommandResult.MaxBinaryBytes)
+                throw new ArgumentException($"Binary stdin exceeds the {PipelineCommandResult.MaxBinaryBytes}-byte limit.");
+
+            request.Parameters ??= new JObject();
+            request.Parameters["stdin"] = new JValue(input);
         }
 
         /// <summary>

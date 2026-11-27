@@ -58,6 +58,10 @@ namespace Unity.Pipeline.Models
         [JsonProperty("parameters")]
         public JObject Parameters { get; set; }
 
+        /// <summary>Optional piped input, bound to a byte[] parameter named stdin.</summary>
+        [JsonProperty("stdinBase64")]
+        public string StdinBase64 { get; set; }
+
         /// <summary>
         /// Optional timeout for command execution in milliseconds.
         /// Default: 60000 (60 seconds)
@@ -167,6 +171,8 @@ namespace Unity.Pipeline.Models
                 // Rejected, not ignored: a silently-dropped payload is indistinguishable from
                 // one that was never sent, which is the ambiguity the lean envelope already
                 // legislates against.
+                if (StdinBase64 != null)
+                    return "'stdinBase64' requires the structured 'command' request form";
                 if (Parameters != null && Parameters.Count > 0)
                     return "'parameters' cannot be combined with 'commandLine' or 'argv'; the arguments belong in the command line itself";
 

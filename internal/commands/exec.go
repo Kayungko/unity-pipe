@@ -19,13 +19,15 @@ func ExecCommand() SubCommand {
 	return SubCommand{
 		Name:     "exec",
 		Aliases:  []string{"c", "command"},
-		Synopsis: "execute a server command: upipe exec <name> [--set k=v ...] [--job]",
+		Synopsis: "execute a server command: upipe exec <name> [--set k=v ...] [--stdin] [--stdout | --job]",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe exec")
 			sets := multiFlag{}
 			fs.Var(&sets, "set", "command parameter k=v (repeatable; JSON-scalar values keep their type)")
 			paramsJSON := fs.String("params", "", "command parameters as a JSON object (merged after --set)")
 			job := fs.Bool("job", false, "submit as a detached job; prints the jobId handle")
+			stdin := fs.Bool("stdin", false, "pass up to 512 KiB of raw stdin to a byte[] stdin parameter")
+			stdout := fs.Bool("stdout", false, "write raw binary command output to stdout")
 			logs := attachCommandLogFlags(fs)
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
@@ -37,6 +39,9 @@ func ExecCommand() SubCommand {
 			}
 			if err := logs.validate(); err != nil {
 				return nil, err
+			}
+			if *stdout && (rt.Opts.JSONOut || *job) {
+				return nil, usageErr("exec: --stdout cannot be combined with --json or --job (use job --stdout to read a detached result)")
 			}
 			name := rest[0]
 
@@ -63,12 +68,25 @@ func ExecCommand() SubCommand {
 				}
 			}
 
-			opts := protocol.ExecOptions{Parameters: params, Job: *job}
+			opts := protocol.ExecOptions{Parameters: params, Job: *job, BinaryIO: *stdin || *stdout}
+			if *stdin {
+				if _, exists := params["stdin"]; exists {
+					return nil, usageErr("exec: --stdin cannot be combined with a stdin parameter")
+				}
+				if err := requireBinaryStdin(rt.Client, name); err != nil {
+					return nil, err
+				}
+				input, err := readBinaryStdin(os.Stdin)
+				if err != nil {
+					return nil, err
+				}
+				opts.Stdin = &input
+			}
 			if rt.Opts.Timeout > 0 {
 				opts.Timeout = rt.Opts.Timeout
 			}
 			// A lost response may already have registered a wait and its capture.
-			if name == "wait_start" {
+			if name == "wait_start" && !opts.BinaryIO {
 				return rt.Client.Exec(name, opts)
 			}
 			resp, err := rt.Client.ExecReloadTolerant(name, opts, 0)
@@ -78,6 +96,9 @@ func ExecCommand() SubCommand {
 			}
 			logs.write(resp.Logs)
 			resp.Logs = nil
+			if *stdout {
+				return decodeBinaryOutput(resp.Result)
+			}
 			return resp, nil
 		},
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Kayungko/unity-pipe/internal/commands"
 	"github.com/Kayungko/unity-pipe/internal/options"
 	"github.com/Kayungko/unity-pipe/internal/protocol"
 )
@@ -34,6 +35,13 @@ func render(err error, opts *options.Options, data ...any) int {
 	}
 	if opts.JSONOut {
 		writeJSON(envelope{OK: true, Data: payload})
+		return protocol.ExitOK
+	}
+	if binary, ok := payload.(commands.BinaryOutput); ok {
+		if _, err := os.Stdout.Write(binary); err != nil {
+			fmt.Fprintf(os.Stderr, "upipe: write binary stdout: %v\n", err)
+			return protocol.ExitInternal
+		}
 		return protocol.ExitOK
 	}
 	if report, ok := payload.(interface{ Markdown() string }); ok {

@@ -43,6 +43,7 @@ namespace Unity.Pipeline.Commands
     /// </summary>
     public sealed class PipelineCommandResult
     {
+        internal const int MaxBinaryBytes = 512 * 1024;
         internal const string FailureCode = "COMMAND_REPORTED_FAILURE";
 
         internal bool Success => Error == null;
@@ -60,6 +61,16 @@ namespace Unity.Pipeline.Commands
 
         public static PipelineCommandResult Succeed(object value = null, params CommandLog[] logs) =>
             new PipelineCommandResult(value, null, logs);
+
+        /// <summary>Return binary stdout with optional terminal logs.</summary>
+        public static PipelineCommandResult SucceedBinary(byte[] stdout, params CommandLog[] logs)
+        {
+            if (stdout == null)
+                throw new ArgumentNullException(nameof(stdout));
+            if (stdout.Length > MaxBinaryBytes)
+                return Fail($"Binary stdout exceeds the {MaxBinaryBytes}-byte limit.", null, logs);
+            return Succeed(new { stdoutBase64 = Convert.ToBase64String(stdout) }, logs);
+        }
 
         public static PipelineCommandResult Fail(string message, object data = null, params CommandLog[] logs)
         {

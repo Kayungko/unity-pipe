@@ -309,6 +309,41 @@ An asynchronous detached handler can read `Unity.Pipeline.PipelineCancellation.I
 
 In a batch, a synchronous handler's successful value is available to subsequent operations. An explicit failure enters the batch's existing error and rollback path.
 
+## Binary input and output with upipe
+
+Declare a byte array parameter named `stdin` for piped input. Return
+`PipelineCommandResult.SucceedBinary` with the bytes to write and any terminal logs.
+Both attribute-declared and dynamically registered custom commands can use this contract.
+
+```csharp
+[CliCommand("binary_echo", "Echo bytes", MainThreadRequired = false)]
+public static PipelineCommandResult Echo(byte[] stdin)
+{
+    if (stdin == null)
+        return PipelineCommandResult.Fail("Supply --stdin to this command.");
+    return PipelineCommandResult.SucceedBinary(stdin,
+        new CommandLog(CommandLogLevel.Info, "Copied binary input."));
+}
+```
+
+```sh
+upipe exec binary_echo --stdin --stdout --log-format json < input.bin > output.bin
+upipe exec binary_echo --stdin --job --json < input.bin
+upipe job JOB_ID --stdout --log-format json > output.bin
+upipe job-cancel JOB_ID --json
+```
+
+Use a shell or process launcher that preserves native byte streams. Each direction accepts up to
+512 KiB and buffers the complete payload. EOF with no bytes is valid input. Empty output writes
+zero bytes. Use either `--stdout` for bytes or `--json` for the existing single envelope,
+where binary output appears as `result.stdoutBase64`. Logs remain on stderr.
+
+For detached execution, `--timeout` on `job` limits the wait. Use `job-cancel` to
+request cooperative cancellation. Timeout and cancellation write zero bytes and return exit 21
+and 22, respectively. A foreground request can time out after execution starts. The CLI
+reports an unknown outcome in that case. A broken downstream pipe makes the CLI fail. A reader
+that needs a complete file should check the exit code or the expected hash before using the bytes.
+
 ## Minimal custom command template
 
 ```csharp

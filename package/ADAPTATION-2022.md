@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本为 **0.6.0-2022.17**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
+本仓库 vendored 版本为 **0.6.0-2022.18**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
@@ -29,6 +29,7 @@
 | 自定义命令结果 | `patches/0020-custom-command-results.patch` | 结构化成功与失败、终态日志和跨 await 的后台任务取消 | 对照 Editor 与 IL2CPP Player 的直接执行、后台任务和原有返回类型 |
 | Editor 状态快照 | `patches/0021-editor-status-snapshot.patch` | 回传 Editor 阶段、Auto Refresh 和会话内代码加载次数 | 复测冷启动、编译失败、域重载和模态弹窗 |
 | Profiler 样本重叠 | `patches/0022-profiler-overlaps.patch` | 查找两个 CPU marker 的时间交集，定位原始样本并计算逐帧去重覆盖 | 在 Editor 与 IL2CPP Player 捕获中对照原始纳秒时间戳 |
+| 自定义命令二进制输入与输出 | `patches/0023-custom-command-binary-io.patch` | 绑定字节输入、返回二进制结果并沿用任务与日志契约 | 复测哈希、空数据、退出码与 stdout 中断 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

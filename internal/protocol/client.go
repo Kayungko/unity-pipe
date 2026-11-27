@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +49,15 @@ func (c *PipelineClient) exchange(req Request, operation string) (Response, erro
 	resp, err := c.Transport.Do(req)
 	if err != nil {
 		var notSent *RequestNotSent
+		if req.ReportTimeout && errors.Is(err, context.DeadlineExceeded) {
+			timeout := ErrTimeout("binary command request deadline exceeded")
+			timeout.Retryable = false
+			if operation != "" && !errors.As(err, &notSent) {
+				unknown := unknownOutcome(ExitConnectionLost, operation, "request deadline exceeded")
+				timeout.Message, timeout.Data = unknown.Message, unknown.Data
+			}
+			return Response{}, timeout
+		}
 		if operation != "" && !errors.As(err, &notSent) {
 			return Response{}, unknownOutcome(ExitConnectionLost, operation, err.Error())
 		}
@@ -205,6 +215,8 @@ type ExecOptions struct {
 	Parameters map[string]any
 	Timeout    time.Duration // server-side command timeout hint (sent as ms); 0 = DefaultRoundTripTimeout (10m)
 	Job        bool          // submit as a detached job, returns a jobId handle
+	Stdin      *[]byte       // nil omits stdin; an empty slice is an explicit input
+	BinaryIO   bool          // use the exact transport deadline for binary exec
 }
 
 // execRequestBody is the wire format of POST /api/exec.
@@ -213,6 +225,7 @@ type execRequestBody struct {
 	Parameters map[string]any `json:"parameters"`
 	Timeout    *int64         `json:"timeout,omitempty"`
 	Job        bool           `json:"job,omitempty"`
+	Stdin      *[]byte        `json:"stdinBase64,omitempty"`
 	Verbose    bool           `json:"verbose,omitempty"`
 }
 
@@ -223,6 +236,7 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 		Command:    command,
 		Parameters: opts.Parameters,
 		Job:        opts.Job,
+		Stdin:      opts.Stdin,
 		// Official 0.6 lean envelope (verbose default false) drops command /
 		// executedAt / executionTimeMs. Keep the full envelope until upipe
 		// consumers stop reading those fields.
@@ -237,6 +251,9 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 		timeout = DefaultRoundTripTimeout
 	}
 	ms := timeout.Milliseconds()
+	if opts.BinaryIO {
+		ms = max(ms, 1)
+	}
 	body.Timeout = &ms
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -250,7 +267,9 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 	// A small margin is added so the server can deliver its own timeout
 	// envelope before the client gives up.
 	roundTrip := timeout + 30*time.Second
-	if command == "wait" && !opts.Job {
+	if opts.BinaryIO {
+		roundTrip = timeout
+	} else if command == "wait" && !opts.Job {
 		// A domain reload can orphan a pending response. Retry this read-only
 		// request promptly once its condition deadline has elapsed.
 		budget := 10 * time.Second
@@ -260,10 +279,12 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 		roundTrip = min(timeout, budget+2*time.Second)
 	}
 	operation := command
-	if replayableCommand(command, opts.Job) {
+	if !opts.BinaryIO && replayableCommand(command, opts.Job) {
 		operation = ""
 	}
-	resp, err := c.exchange(Request{Method: http.MethodPost, Path: "/api/exec", Body: raw, Timeout: roundTrip}, operation)
+	resp, err := c.exchange(Request{
+		Method: http.MethodPost, Path: "/api/exec", Body: raw, Timeout: roundTrip, ReportTimeout: opts.BinaryIO,
+	}, operation)
 	if err != nil {
 		return nil, err
 	}
@@ -279,8 +300,13 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 
 // GetJob polls GET /api/job?id=….
 func (c *PipelineClient) GetJob(jobID string) (*JobResponse, error) {
+	return c.GetJobWithin(jobID, 0)
+}
+
+// GetJobWithin limits a single status request to the remaining wait budget.
+func (c *PipelineClient) GetJobWithin(jobID string, timeout time.Duration) (*JobResponse, error) {
 	var r JobResponse
-	if err := c.getJSON("/api/job?id="+url.QueryEscape(jobID), &r, 0); err != nil {
+	if err := c.getJSON("/api/job?id="+url.QueryEscape(jobID), &r, timeout); err != nil {
 		return nil, err
 	}
 	return &r, nil

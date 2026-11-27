@@ -1,0 +1,196 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index 92ebb39..9862aea 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,6 +5,10 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
++## [0.6.0-2022.18] - Local candidate
++
++- Add byte-array stdin binding and binary command outcomes with separate terminal logs.
++
+ ## [0.6.0-2022.17] - Local candidate
+
+ - Find overlapping CPU sample intervals in saved captures with exact timings, sample indexes and per-frame coverage.
+diff --git a/com.unity.pipeline/Documentation~/creating-commands.md b/com.unity.pipeline/Documentation~/creating-commands.md
+index 43afc92..8cbbcff 100644
+--- a/com.unity.pipeline/Documentation~/creating-commands.md
++++ b/com.unity.pipeline/Documentation~/creating-commands.md
+@@ -309,6 +309,41 @@ An asynchronous detached handler can read `Unity.Pipeline.PipelineCancellation.I
+
+ In a batch, a synchronous handler's successful value is available to subsequent operations. An explicit failure enters the batch's existing error and rollback path.
+
++## Binary input and output with upipe
++
++Declare a byte array parameter named `stdin` for piped input. Return
++`PipelineCommandResult.SucceedBinary` with the bytes to write and any terminal logs.
++Both attribute-declared and dynamically registered custom commands can use this contract.
++
++```csharp
++[CliCommand("binary_echo", "Echo bytes", MainThreadRequired = false)]
++public static PipelineCommandResult Echo(byte[] stdin)
++{
++    if (stdin == null)
++        return PipelineCommandResult.Fail("Supply --stdin to this command.");
++    return PipelineCommandResult.SucceedBinary(stdin,
++        new CommandLog(CommandLogLevel.Info, "Copied binary input."));
++}
++```
++
++```sh
++upipe exec binary_echo --stdin --stdout --log-format json < input.bin > output.bin
++upipe exec binary_echo --stdin --job --json < input.bin
++upipe job JOB_ID --stdout --log-format json > output.bin
++upipe job-cancel JOB_ID --json
++```
++
++Use a shell or process launcher that preserves native byte streams. Each direction accepts up to
++512 KiB and buffers the complete payload. EOF with no bytes is valid input. Empty output writes
++zero bytes. Use either `--stdout` for bytes or `--json` for the existing single envelope,
++where binary output appears as `result.stdoutBase64`. Logs remain on stderr.
++
++For detached execution, `--timeout` on `job` limits the wait. Use `job-cancel` to
++request cooperative cancellation. Timeout and cancellation write zero bytes and return exit 21
++and 22, respectively. A foreground request can time out after execution starts. The CLI
++reports an unknown outcome in that case. A broken downstream pipe makes the CLI fail. A reader
++that needs a complete file should check the exit code or the expected hash before using the bytes.
++
+ ## Minimal custom command template
+
+ ```csharp
+diff --git a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+index f8f497d..fddce57 100644
+--- a/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
++++ b/com.unity.pipeline/Runtime/Common/BasePipelineServer.cs
+@@ -1038,7 +1038,7 @@ namespace Unity.Pipeline
+         /// </summary>
+         private JObject BuildCommandEntry(CommandInfo command)
+         {
+-            return JObject.FromObject(new
++            var entry = JObject.FromObject(new
+             {
+                 name = command.Name,
+                 description = command.Description,
+@@ -1056,8 +1056,14 @@ namespace Unity.Pipeline
+                     defaultValue = p.DefaultValue
+                 }).ToList()
+             });
++            if (AcceptsBinaryStdin(command))
++                entry["acceptsBinaryStdin"] = true;
++            return entry;
+         }
+
++        private static bool AcceptsBinaryStdin(CommandInfo command) =>
++            command.Parameters.Any(p => p.Name == "stdin" && p.ParameterType == typeof(byte[]));
++
+         private static string GetCommandEffect(CommandInfo command)
+         {
+             switch (command.Effect)
+@@ -1925,6 +1931,7 @@ namespace Unity.Pipeline
+                 // (for a "job": true submission that now happens BEFORE a job is created, so a
+                 // misnamed command fails fast instead of producing a job that fails later).
+                 var command = ResolveCommand(cmd);
++                BindBinaryStdin(command, commandRequest);
+
+                 // Bind the remaining tokens and normalize in place, so everything from
+                 // ExtractCommandParameters downwards sees exactly one shape.
+@@ -2242,6 +2249,32 @@ namespace Unity.Pipeline
+             return response;
+         }
+
++        private static void BindBinaryStdin(CommandInfo command, CommandExecutionRequest request)
++        {
++            if (request.StdinBase64 == null)
++                return;
++
++            if (!AcceptsBinaryStdin(command))
++                throw new ArgumentException("This command does not accept binary stdin.");
++            if (request.HasParameter("stdin"))
++                throw new ArgumentException("Binary stdin duplicates the stdin parameter.");
++
++            byte[] input;
++            try
++            {
++                input = Convert.FromBase64String(request.StdinBase64);
++            }
++            catch (FormatException)
++            {
++                throw new ArgumentException("Binary stdin must be valid Base64.");
++            }
++            if (input.Length > PipelineCommandResult.MaxBinaryBytes)
++                throw new ArgumentException($"Binary stdin exceeds the {PipelineCommandResult.MaxBinaryBytes}-byte limit.");
++
++            request.Parameters ??= new JObject();
++            request.Parameters["stdin"] = new JValue(input);
++        }
++
+         /// <summary>
+         /// Convert a single JSON parameter token to the command's parameter type.
+         ///
+diff --git a/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs b/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
+index 131af35..82285ca 100644
+--- a/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
++++ b/com.unity.pipeline/Runtime/Common/CliCommandAttribute.cs
+@@ -43,6 +43,7 @@ namespace Unity.Pipeline.Commands
+     /// </summary>
+     public sealed class PipelineCommandResult
+     {
++        internal const int MaxBinaryBytes = 512 * 1024;
+         internal const string FailureCode = "COMMAND_REPORTED_FAILURE";
+
+         internal bool Success => Error == null;
+@@ -61,6 +62,16 @@ namespace Unity.Pipeline.Commands
+         public static PipelineCommandResult Succeed(object value = null, params CommandLog[] logs) =>
+             new PipelineCommandResult(value, null, logs);
+
++        /// <summary>Return binary stdout with optional terminal logs.</summary>
++        public static PipelineCommandResult SucceedBinary(byte[] stdout, params CommandLog[] logs)
++        {
++            if (stdout == null)
++                throw new ArgumentNullException(nameof(stdout));
++            if (stdout.Length > MaxBinaryBytes)
++                return Fail($"Binary stdout exceeds the {MaxBinaryBytes}-byte limit.", null, logs);
++            return Succeed(new { stdoutBase64 = Convert.ToBase64String(stdout) }, logs);
++        }
++
+         public static PipelineCommandResult Fail(string message, object data = null, params CommandLog[] logs)
+         {
+             if (string.IsNullOrWhiteSpace(message))
+diff --git a/com.unity.pipeline/Runtime/Models/CommandExecutionRequest.cs b/com.unity.pipeline/Runtime/Models/CommandExecutionRequest.cs
+index 9ac97b9..2f91e3a 100644
+--- a/com.unity.pipeline/Runtime/Models/CommandExecutionRequest.cs
++++ b/com.unity.pipeline/Runtime/Models/CommandExecutionRequest.cs
+@@ -58,6 +58,10 @@ namespace Unity.Pipeline.Models
+         [JsonProperty("parameters")]
+         public JObject Parameters { get; set; }
+
++        /// <summary>Optional piped input, bound to a byte[] parameter named stdin.</summary>
++        [JsonProperty("stdinBase64")]
++        public string StdinBase64 { get; set; }
++
+         /// <summary>
+         /// Optional timeout for command execution in milliseconds.
+         /// Default: 60000 (60 seconds)
+@@ -167,6 +171,8 @@ namespace Unity.Pipeline.Models
+                 // Rejected, not ignored: a silently-dropped payload is indistinguishable from
+                 // one that was never sent, which is the ambiguity the lean envelope already
+                 // legislates against.
++                if (StdinBase64 != null)
++                    return "'stdinBase64' requires the structured 'command' request form";
+                 if (Parameters != null && Parameters.Count > 0)
+                     return "'parameters' cannot be combined with 'commandLine' or 'argv'; the arguments belong in the command line itself";
+
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index 3b381df..58a0716 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.17",
++  "version": "0.6.0-2022.18",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

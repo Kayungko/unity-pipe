@@ -6,12 +6,13 @@ import "time"
 // AuthToken live per-request (not per-transport) so a client can transparently
 // follow a domain reload that rewrites the port and the eval token.
 type Request struct {
-	Method    string        // "GET" or "POST"
-	Path      string        // e.g. "/api/exec" — may carry a query string
-	Body      []byte        // JSON body; nil for GET
-	HostPort  string        // e.g. "127.0.0.1:7802"
-	AuthToken string        // Bearer token; empty = no auth header
-	Timeout   time.Duration // per-request timeout; 0 = transport default
+	Method        string        // "GET" or "POST"
+	Path          string        // e.g. "/api/exec" — may carry a query string
+	Body          []byte        // JSON body; nil for GET
+	HostPort      string        // e.g. "127.0.0.1:7802"
+	AuthToken     string        // Bearer token; empty = no auth header
+	Timeout       time.Duration // per-request timeout; 0 = transport default
+	ReportTimeout bool          // map an expired request deadline to exit 21
 }
 
 // Response is the raw HTTP response.

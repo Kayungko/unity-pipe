@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"time"
+
+	"github.com/Kayungko/unity-pipe/internal/options"
 	"github.com/Kayungko/unity-pipe/internal/protocol"
 )
 
@@ -9,11 +12,12 @@ import (
 func JobCommand() SubCommand {
 	return SubCommand{
 		Name: "job",
-		Synopsis: "inspect a detached job: upipe job <id> [--no-wait] " +
+		Synopsis: "inspect a detached job: upipe job <id> [--no-wait | --stdout] " +
 			"(long builds/bakes: raise the wait budget with --timeout, e.g. --timeout 45m; default 10m)",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe job")
 			noWait := fs.Bool("no-wait", false, "single snapshot instead of waiting for terminal state")
+			stdout := fs.Bool("stdout", false, "write raw binary command output to stdout on success")
 			logs := attachCommandLogFlags(fs)
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
@@ -27,6 +31,9 @@ func JobCommand() SubCommand {
 				return nil, err
 			}
 
+			if *stdout && (rt.Opts.JSONOut || *noWait) {
+				return nil, usageErr("job: --stdout cannot be combined with --json or --no-wait")
+			}
 			job := rest[0]
 			if *noWait {
 				reply, err := rt.Client.GetJob(job)
@@ -37,8 +44,31 @@ func JobCommand() SubCommand {
 				reply.Logs = nil
 				return reply, nil
 			}
+			getJob := rt.Client.GetJob
+			var sleep protocol.SleepFunc
+			if *stdout {
+				budget := rt.Opts.Timeout
+				if budget <= 0 {
+					budget = options.DefaultTimeout
+				}
+				deadline := time.Now().Add(budget)
+				getJob = func(job string) (*protocol.JobResponse, error) {
+					remaining := time.Until(deadline)
+					if remaining <= 0 {
+						return nil, protocol.ErrTimeout("deadline exceeded waiting for binary output")
+					}
+					reply, err := rt.Client.GetJobWithin(job, remaining)
+					if time.Until(deadline) <= 0 {
+						return nil, protocol.ErrTimeout("deadline exceeded waiting for binary output")
+					}
+					return reply, err
+				}
+				sleep = func(interval time.Duration) {
+					time.Sleep(min(interval, time.Until(deadline)))
+				}
+			}
 			result, err := protocol.Poll(func() (protocol.PollStep, error) {
-				jr, err := rt.Client.GetJob(job)
+				jr, err := getJob(job)
 				if err != nil {
 					return protocol.PollStep{}, err
 				}
@@ -53,6 +83,9 @@ func JobCommand() SubCommand {
 						return protocol.PollStep{}, err
 					}
 				}
+				if *stdout && jr.State == "completed" {
+					return protocol.PollStep{Status: jr.State, Body: jr.Result}, nil
+				}
 				return protocol.PollStep{Status: jr.State, Body: mustMarshal(jr)}, nil
 			}, protocol.PollConfig{
 				TerminalOK:     []string{"completed"},
@@ -64,9 +97,12 @@ func JobCommand() SubCommand {
 				// The synopsis above surfaces this so long waits are not a
 				// surprise cutoff.
 				Deadline: rt.Opts.Timeout,
-			}, nil, nil)
+			}, sleep, nil)
 			if err != nil {
 				return nil, err
+			}
+			if *stdout {
+				return decodeBinaryOutput(result.Body)
 			}
 			return jsonRaw(result.Body), nil
 		},

@@ -94,6 +94,9 @@ func (t *HTTPTransport) Do(req protocol.Request) (protocol.Response, error) {
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		failure := compactHTTPError(err)
+		if ctx.Err() == context.DeadlineExceeded {
+			failure = context.DeadlineExceeded
+		}
 		if !acquired.Load() {
 			failure = &protocol.RequestNotSent{Cause: failure}
 		}
