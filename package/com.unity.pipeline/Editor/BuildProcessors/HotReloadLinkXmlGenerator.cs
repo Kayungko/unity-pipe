@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -10,6 +11,7 @@ using UnityEditor.Compilation;
 using UnityEditor.UnityLinker;
 using UnityEngine;
 using Unity.Pipeline.Compilation;
+using Unity.Pipeline.Editor.Commands.Build;
 using Unity.Pipeline.HotReload;
 using IlInterpreter.Interpreter;
 using Assembly = System.Reflection.Assembly;
@@ -40,8 +42,8 @@ namespace Unity.Pipeline.Editor.BuildProcessors
 
         public string GenerateAdditionalLinkXmlFile(BuildReport report, UnityLinkerBuildPipelineData data)
         {
-            // Only development builds carry the interpreter; release builds need no extra preservation.
-            if (report == null || !report.summary.options.HasFlag(BuildOptions.Development))
+            // The preview host uses the bundle manifest and has no runtime hot-reload server.
+            if (BuildCommand.IsBuildingPreviewPlayer || report == null || !report.summary.options.HasFlag(BuildOptions.Development))
                 return string.Empty;
 
             // The managed assemblies staged for this player build — the universe for the wholesale
@@ -349,3 +351,4 @@ namespace Unity.Pipeline.Editor.BuildProcessors
         }
     }
 }
+#endif

@@ -13,6 +13,105 @@ index de51270..18b5fdd 100644
  ## [0.6.0-2022.21] - Local candidate
  
  - Package a saved Prefab and its dependencies for a dedicated Windows Development Player. Build with the bundle manifest to preserve serialized types, then render the loaded asset to PNG in the Built-in Render Pipeline.
+diff --git a/com.unity.pipeline/Editor/BuildProcessors/HotReloadLinkXmlGenerator.cs b/com.unity.pipeline/Editor/BuildProcessors/HotReloadLinkXmlGenerator.cs
+index e86e0b8..a8de480 100644
+--- a/com.unity.pipeline/Editor/BuildProcessors/HotReloadLinkXmlGenerator.cs
++++ b/com.unity.pipeline/Editor/BuildProcessors/HotReloadLinkXmlGenerator.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using System.IO;
+@@ -10,6 +11,7 @@ using UnityEditor.Compilation;
+ using UnityEditor.UnityLinker;
+ using UnityEngine;
+ using Unity.Pipeline.Compilation;
++using Unity.Pipeline.Editor.Commands.Build;
+ using Unity.Pipeline.HotReload;
+ using IlInterpreter.Interpreter;
+ using Assembly = System.Reflection.Assembly;
+@@ -40,8 +42,8 @@ namespace Unity.Pipeline.Editor.BuildProcessors
+ 
+         public string GenerateAdditionalLinkXmlFile(BuildReport report, UnityLinkerBuildPipelineData data)
+         {
+-            // Only development builds carry the interpreter; release builds need no extra preservation.
+-            if (report == null || !report.summary.options.HasFlag(BuildOptions.Development))
++            // The preview host uses the bundle manifest and has no runtime hot-reload server.
++            if (BuildCommand.IsBuildingPreviewPlayer || report == null || !report.summary.options.HasFlag(BuildOptions.Development))
+                 return string.Empty;
+ 
+             // The managed assemblies staged for this player build — the universe for the wholesale
+@@ -349,3 +351,4 @@ namespace Unity.Pipeline.Editor.BuildProcessors
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/BuildProcessors/PipelineRuntimeBuildProcessor.cs b/com.unity.pipeline/Editor/BuildProcessors/PipelineRuntimeBuildProcessor.cs
+index 9815a36..a8469b2 100644
+--- a/com.unity.pipeline/Editor/BuildProcessors/PipelineRuntimeBuildProcessor.cs
++++ b/com.unity.pipeline/Editor/BuildProcessors/PipelineRuntimeBuildProcessor.cs
+@@ -1,3 +1,4 @@
++#if UNITY_EDITOR
+ using System;
+ using System.Collections.Generic;
+ using System.IO;
+@@ -5,6 +6,7 @@ using System.Linq;
+ using System.Security.Cryptography;
+ using System.Text;
+ using Unity.Pipeline.Config;
++using Unity.Pipeline.Editor.Commands.Build;
+ using UnityEngine;
+ using UnityEditor;
+ using UnityEditor.Build;
+@@ -67,6 +69,12 @@ namespace Unity.Pipeline.Editor.BuildProcessors
+             // Integrity gate: fail the build if a bundled Roslyn DLL was swapped or modified.
+             VerifyBundledChecksums();
+ 
++            if (BuildCommand.IsBuildingPreviewPlayer)
++            {
++                Debug.Log("Pipeline: building a dedicated preview Player with the bundle manifest; runtime server disabled");
++                return;
++            }
++
+             var config = RuntimePipelineConfig.Load();
+             if (config == null)
+             {
+@@ -361,3 +369,4 @@ namespace Unity.Pipeline.Editor.BuildProcessors
+         }
+     }
+ }
++#endif
+diff --git a/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs b/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs
+index 9b553b3..605dc13 100644
+--- a/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs
++++ b/com.unity.pipeline/Editor/Commands/Build/BuildCommand.cs
+@@ -88,6 +88,8 @@ namespace Unity.Pipeline.Editor.Commands.Build
+         static string s_PendingBuildId;
+         static string s_PendingPreviewBundle;
+ 
++        internal static bool IsBuildingPreviewPlayer { get; private set; }
++
+         static BuildCommand()
+         {
+             RestoreInterruptedStatus();
+@@ -401,7 +403,16 @@ namespace Unity.Pipeline.Editor.Commands.Build
+                 buildOptions.assetBundleManifestPath = previewManifest;
+                 buildOptions.extraScriptingDefines = new[] { ScenePreviewCommand.RuntimeDefine };
+             }
+-            var report = BuildPipeline.BuildPlayer(buildOptions);
++            BuildReport report;
++            IsBuildingPreviewPlayer = previewManifest != null;
++            try
++            {
++                report = BuildPipeline.BuildPlayer(buildOptions);
++            }
++            finally
++            {
++                IsBuildingPreviewPlayer = false;
++            }
+             if (previewManifest != null && report.summary.result == BuildResult.Succeeded)
+             {
+                 var metadata = Path.Combine(Path.GetDirectoryName(previewManifest), PreviewPackage.FileName);
 diff --git a/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
 index f14fcb6..6f3065d 100644
 --- a/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs

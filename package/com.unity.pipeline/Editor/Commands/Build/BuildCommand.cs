@@ -88,6 +88,8 @@ namespace Unity.Pipeline.Editor.Commands.Build
         static string s_PendingBuildId;
         static string s_PendingPreviewBundle;
 
+        internal static bool IsBuildingPreviewPlayer { get; private set; }
+
         static BuildCommand()
         {
             RestoreInterruptedStatus();
@@ -401,7 +403,16 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 buildOptions.assetBundleManifestPath = previewManifest;
                 buildOptions.extraScriptingDefines = new[] { ScenePreviewCommand.RuntimeDefine };
             }
-            var report = BuildPipeline.BuildPlayer(buildOptions);
+            BuildReport report;
+            IsBuildingPreviewPlayer = previewManifest != null;
+            try
+            {
+                report = BuildPipeline.BuildPlayer(buildOptions);
+            }
+            finally
+            {
+                IsBuildingPreviewPlayer = false;
+            }
             if (previewManifest != null && report.summary.result == BuildResult.Succeeded)
             {
                 var metadata = Path.Combine(Path.GetDirectoryName(previewManifest), PreviewPackage.FileName);

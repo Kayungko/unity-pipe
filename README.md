@@ -60,7 +60,7 @@ upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI
 
 打包目录和 PNG 路径必须是新路径，打包目录须位于项目外。预览 Player 使用 AssetBundle 构建清单保留所需类型，预览时会检查项目、目标平台和 Unity 版本。可以用同一个 Player 渲染兼容的包，引入新脚本类型后应重新构建。加载会运行 Prefab 上的组件，只预览可信项目自己生成的包。进程退出和日志路径由 CLI 回传，`--timeout` 控制预览时限。
 
-屏幕空间 Canvas 统一由预览相机渲染，Overlay 和 Camera 模式都可用。PNG 默认 `768×768`，UI 可用 `--width 720 --height 1280` 指定布局尺寸。宽高各支持 64 至 4096 像素。请用当前 UPM 包构建专用 Player。World Space Canvas 单独预览仍待支持。
+屏幕空间 Canvas 统一由预览相机渲染，Overlay 和 Camera 模式都可用。PNG 默认 `768×768`，UI 可用 `--width 720 --height 1280` 指定布局尺寸。宽高各支持 64 至 4096 像素。请用当前 UPM 包构建专用 Player，构建会关闭 Runtime Pipeline 服务。World Space Canvas 单独预览仍待支持。
 
 ## 快速开始
 

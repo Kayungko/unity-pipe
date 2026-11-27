@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -5,6 +6,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Unity.Pipeline.Config;
+using Unity.Pipeline.Editor.Commands.Build;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.Build;
@@ -66,6 +68,12 @@ namespace Unity.Pipeline.Editor.BuildProcessors
 
             // Integrity gate: fail the build if a bundled Roslyn DLL was swapped or modified.
             VerifyBundledChecksums();
+
+            if (BuildCommand.IsBuildingPreviewPlayer)
+            {
+                Debug.Log("Pipeline: building a dedicated preview Player with the bundle manifest; runtime server disabled");
+                return;
+            }
 
             var config = RuntimePipelineConfig.Load();
             if (config == null)
@@ -361,3 +369,4 @@ namespace Unity.Pipeline.Editor.BuildProcessors
         }
     }
 }
+#endif
