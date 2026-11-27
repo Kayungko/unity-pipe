@@ -368,6 +368,7 @@ unity-pipe/
 - **[docs/MIGRATION.md](docs/MIGRATION.md)** — 从 rocwood / 官方 CLI 迁移；后续编辑器管理能力迁移路线
 - **[docs/RECIPES.md](docs/RECIPES.md)** — Agent 实测配方：回包判据、三种守门模式、eval 禁忌、大规模普查策略（只收实测判据，未验证项单列）
 - **[docs/BACKLOG.md](docs/BACKLOG.md)** — 深度评审沉淀的非阻塞项清单，完成一项划掉一项
+- **[版本开发计划](docs/RELEASE-PLAN.md)** — 已发布基线、后续开发顺序及各版验收标准
 - **[package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)** — Unity 2022 适配全记录
 - **[harness/rules/README.md](harness/rules/README.md)** — 规则模板使用说明与变量对照表
 
