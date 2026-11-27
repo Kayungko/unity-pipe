@@ -131,15 +131,16 @@ namespace Unity.Pipeline.Preview
                 await Task.Yield();
 
                 result.stage = "render";
-                var canvases = clone.GetComponentsInChildren<Canvas>()
-                    .Where(canvas => canvas.isActiveAndEnabled && canvas.isRootCanvas && canvas.renderMode != RenderMode.WorldSpace)
+                var rootCanvases = clone.GetComponentsInChildren<Canvas>()
+                    .Where(canvas => canvas.isActiveAndEnabled && canvas.isRootCanvas)
                     .ToArray();
-                result.canvases = canvases.Length;
+                var screenCanvases = rootCanvases.Where(canvas => canvas.renderMode != RenderMode.WorldSpace).ToArray();
                 var camera = CreateCamera(scene, width, height);
-                if (canvases.Length > 0)
+                if (screenCanvases.Length > 0)
                 {
                     result.renderMode = "canvas";
-                    foreach (var canvas in canvases)
+                    result.canvases = screenCanvases.Length;
+                    foreach (var canvas in screenCanvases)
                     {
                         canvas.renderMode = RenderMode.ScreenSpaceCamera;
                         canvas.worldCamera = camera;
@@ -149,12 +150,19 @@ namespace Unity.Pipeline.Preview
                 }
                 else
                 {
-                    result.renderMode = "mesh";
                     var renderers = clone.GetComponentsInChildren<Renderer>().Where(item => item.enabled).ToArray();
-                    if (renderers.Length == 0)
-                        throw new InvalidDataException("Prefab needs an enabled Renderer or a screen-space root Canvas");
-                    result.renderers = renderers.Length;
-                    FrameMesh(camera, scene, renderers);
+                    if (renderers.Length > 0)
+                    {
+                        result.renderMode = "mesh";
+                        result.renderers = renderers.Length;
+                        FrameMesh(camera, scene, renderers);
+                    }
+                    else
+                    {
+                        result.renderMode = "worldCanvas";
+                        Canvas.ForceUpdateCanvases();
+                        result.canvases = FrameWorldCanvases(camera, rootCanvases);
+                    }
                 }
                 File.WriteAllBytes(Path.Combine(output, "preview.png"), Capture(camera, width, height));
                 result.success = true;
@@ -227,6 +235,45 @@ namespace Unity.Pipeline.Preview
             light.cullingMask = camera.cullingMask;
             light.intensity = 1.25f;
             light.transform.rotation = Quaternion.Euler(42, -35, 0);
+        }
+
+        private static int FrameWorldCanvases(Camera camera, Canvas[] canvases)
+        {
+            var orientation = Quaternion.identity;
+            var inverse = Quaternion.identity;
+            var bounds = default(Bounds);
+            var count = 0;
+            var corners = new Vector3[4];
+            foreach (var canvas in canvases)
+            {
+                if (!(canvas.transform is RectTransform rect))
+                    continue;
+                rect.GetWorldCorners(corners);
+                var right = corners[3] - corners[0];
+                var up = corners[1] - corners[0];
+                var area = Vector3.Cross(right, up).sqrMagnitude;
+                if (float.IsNaN(area) || float.IsInfinity(area) || area <= 0)
+                    continue;
+                if (count == 0)
+                {
+                    // Project all roots into the first drawable Canvas's authored orientation.
+                    orientation = rect.rotation;
+                    inverse = Quaternion.Inverse(orientation);
+                    bounds = new Bounds(inverse * corners[0], Vector3.zero);
+                }
+                foreach (var corner in corners)
+                    bounds.Encapsulate(inverse * corner);
+                count++;
+            }
+            if (count == 0)
+                throw new InvalidDataException("Prefab needs an enabled Renderer or a non-empty root Canvas");
+
+            var distance = Mathf.Max(0.05f, bounds.extents.magnitude);
+            var position = bounds.center - Vector3.forward * (bounds.extents.z + distance);
+            camera.transform.SetPositionAndRotation(orientation * position, orientation);
+            camera.farClipPlane = bounds.size.z + distance * 2f;
+            camera.orthographicSize = Mathf.Max(bounds.extents.y, bounds.extents.x / camera.aspect) * 1.12f;
+            return count;
         }
 
         private static byte[] Capture(Camera camera, int width, int height)

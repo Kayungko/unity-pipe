@@ -50,7 +50,7 @@ upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --l
 
 ### 本地 Scene Preview
 
-在 Windows x64 上可为使用 Built-in Render Pipeline 的 Unity 工程预览带有 3D Renderer 或屏幕空间 Canvas 的 Prefab。先准备一个空场景作为预览宿主，再按顺序运行以下命令。
+在 Windows x64 上可为使用 Built-in Render Pipeline 的 Unity 工程预览带有 3D Renderer 或 Canvas 的 Prefab。先准备一个空场景作为预览宿主，再按顺序运行以下命令。
 
 ```powershell
 upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --json -- preview-pack --asset Assets/Props/Crate.prefab --output-dir "D:/CI/preview-content" --confirm
@@ -60,7 +60,7 @@ upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI
 
 打包目录和 PNG 路径必须是新路径，打包目录须位于项目外。预览 Player 使用 AssetBundle 构建清单保留所需类型，预览时会检查项目、目标平台和 Unity 版本。可以用同一个 Player 渲染兼容的包，引入新脚本类型后应重新构建。加载会运行 Prefab 上的组件，只预览可信项目自己生成的包。进程退出和日志路径由 CLI 回传，`--timeout` 控制预览时限。
 
-屏幕空间 Canvas 统一由预览相机渲染，Overlay 和 Camera 模式都可用。PNG 默认 `768×768`，UI 可用 `--width 720 --height 1280` 指定布局尺寸。宽高各支持 64 至 4096 像素。请用当前 UPM 包构建专用 Player，构建会关闭 Runtime Pipeline 服务。World Space Canvas 单独预览仍待支持。
+屏幕空间 Canvas 统一由预览相机渲染，Overlay 和 Camera 模式都可用。只有 World Space Canvas 的 Prefab 按首个有效根画布的朝向取景，范围包含所有有效根画布。带 3D Renderer 的 Prefab 仍按模型范围取景。PNG 默认 `768×768`，可用 `--width 720 --height 1280` 指定尺寸，宽高各支持 64 至 4096 像素。请用当前 UPM 包构建专用 Player，构建会关闭 Runtime Pipeline 服务。
 
 ## 快速开始
 
@@ -352,7 +352,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.22`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.23`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

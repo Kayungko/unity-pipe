@@ -41,6 +41,7 @@
 | v0.1.43 | 临时 batchmode Editor 的 Player 构建。沿用预检、确认和 BuildReport，等待同一构建 ID。 | 隔离 Unity 2022.3.23f1 验证预检及未确认时无产物、真实构建及正确输出、构建失败回传、超时与取消后回收进程，以及后续构建恢复。 |
 | v0.1.44（本地候选） | Unity 2022.3 本地 Scene Preview。首版在独立开发 Player 中预览一个 Prefab，随包携带依赖清单。 | Windows x64 上回装正式包。验证按目标平台打包、嵌套 Prefab 和传递依赖、重复加载、缺失依赖、损坏包、宿主场景和进程回收。失败沿用 `--json` 单信封和退出码 `20`。 |
 | v0.1.45（本地候选） | 本地 Scene Preview 支持屏幕空间 Canvas 和横竖屏 PNG。 | 隔离 Unity 2022.3.23f1 IL2CPP 开发 Player 验证 Overlay、Camera、嵌套 Canvas 和布局回读，验证没有受支持绘制目标时返回 `20`。回归 3D 默认尺寸、取消和清理。 |
+| v0.1.46（本地候选） | 本地 Scene Preview 支持独立 World Space Canvas。 | 隔离 Windows x64 IL2CPP 开发 Player 验证旋转、缩放、多个根画布和横竖屏取景，零面积返回 `20`。回归屏幕空间 Canvas、3D 和进程回收。 |
 | 暂缓 | GPU 计数器和耗时分析。 | 恢复前先确认目标开发 Player 能稳定采到 GPU 数据，再检验单位以及零值和缺测的区分。 |
 
 ### Scene Preview 可行性记录
