@@ -12,6 +12,8 @@
 
 **v0.1.36**（2026-11-27，`142d91b`）已发布。`asset-blame` 支持 Git 和 P4 字段历史，隔离工程验证了同名节点、跨移动追溯、字段不存在和历史不足。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.36)
 
+**v0.1.37**（2026-11-27，`978db42`）已发布。`asset-conflict` 支持 Git 和 P4 三方只读比较，隔离工程验证了独立和同值修改、异值冲突及删除修改冲突。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.37)
+
 ## 开发顺序与验收
 
 未发布版本号为计划，按顺序推进。各版用隔离的 Unity 2022.3.23f1 工程或对应版本生成的快照验收。GPU 继续暂缓，SGAME 先不动。

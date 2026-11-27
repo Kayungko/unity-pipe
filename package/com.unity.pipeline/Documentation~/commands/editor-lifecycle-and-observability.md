@@ -142,6 +142,7 @@ No parameters.
 
 - `profiler_targets` lists the local Editor and discoverable Development Players. Pass a Player's ID as `player_id` to `profiler_record`, or omit it to record the Editor. Set `file` to a `.data` filename and poll `profiler_record_status`. Use `profiler_cancel` to stop an in-progress recording.
 - `profiler_analyze` loads a saved `.data` file and returns frame times, GC allocation and marker hot spots for the selected thread. Loading or recording over existing Profiler history requires `confirm=true`. Recording restores the previous target and Profiler settings.
+- `profiler_overlaps` compares two exact CPU marker names in a saved file or analysis session. Use `thread_id` and `other_thread_id` to select threads independently. It returns the per-frame union of the time intersections in nanoseconds and the longest distinct pairs with raw sample indexes. Touching endpoints do not overlap. A missing frame or thread has a null duration, while a measured frame without overlap has duration zero.
 - `memory_snapshot` takes an Editor memory snapshot. Pass a `.snap` filename and poll `memory_snapshot_status`.
 
 The files are saved under `Library/Pipeline/Profiles/`. Copy captures out of `Library` before cleaning the project cache.

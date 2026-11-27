@@ -307,6 +307,8 @@ upipe exec profiler_gc_callstacks --set session_id=SESSION_ID --set frame=FRAME 
 
 用 `profiler_threads` 查看某帧的线程 ID 和线程索引。用 `profiler_rank_markers` 汇总含首尾的 1–300 帧，按累计自身耗时排序，同名 marker 按线程分别统计。用 `thread_id` 限定线程，用 `--params '{"exclude_markers":["WaitForJobGroupID"]}'` 排除精确名称。将结果 `peak` 中的 `frame`、`threadIndex` 和 `sampleIndex` 分别传给 `profiler_frame_paths` 的 `frame`、`thread` 和 `sample_index`，即可读回原始标记链。
 
+`profiler_overlaps` 用 `marker` 和 `other_marker` 查看两个 CPU marker 样本的时间重叠。通过 `session_id` 或 `file` 读取同一个捕获，用 `first_frame` 和 `last_frame` 选择含首尾的 1–300 帧，并可用 `thread_id` 和 `other_thread_id` 各自限定线程。`top` 只限制返回的配对明细，`pairCount` 和 `overlapNs` 仍按所有重叠计算。逐帧覆盖按交集并集去重，区间相接时没有重叠。同名 marker 可比较不同样本，单个样本不会与自身配对。时间点用十进制纳秒字符串，耗时用纳秒数值。缺帧或指定线程缺失时，逐帧状态为 `missing_frame` 或 `missing_thread`，`overlapNs` 为 `null`。有数据而无重叠时为 `0`。用配对的 `frame`、`threadIndex` 和 `sampleIndex` 可在 `profiler_frame_paths` 中回查。
+
 用 `profiler_counters` 枚举捕获里记录的非 GPU 计数器。传入 `counters` 可按名称或 `类别/名称` 查询统计，`per_frame=true` 同时返回逐帧值。值和统计使用 Unity 的原始单位，例如 `TimeNanoseconds` 或 `Bytes`。`available=false` 和 `value=null` 表示该帧没有可用的数值。用 `profiler_marker_info` 查询某帧的 marker 定义，包括类别、原生标志，以及 Unity 记录的元数据字段、类型和单位。
 
 `totalMs` 是所有匹配样本的含子样本时长之和，嵌套样本可能重复计时。`coveredMs` 取同一线程、同一帧内时间区间的并集，再跨帧求和。不同线程可能并发，线程之间的时长不能相加作为经过时间。
@@ -322,7 +324,7 @@ upipe --player-path PLAYER_WORKING_DIR exec player_memory_snapshot_status --json
 
 ### 适配包维护（package/）
 
-- **`0.6.0-2022.16`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
+- **`0.6.0-2022.17`** 基于官方 `0.6.0-exp.1`（revision `27af91a9`），面向 Unity 2022.3。包括部分官方 1.0.1 的 Editor 生命周期、异步等待、Console、截图、Prefab 寻址和 Profiler 能力。详见 [package/ADAPTATION-2022.md](package/ADAPTATION-2022.md)。
 - `pkg-install` 将适配包作为 embedded 包安装到工程，由 Unity Package Manager 从本地包加载。
 - `upstream/` 原始基线（只读） · `com.unity.pipeline/` vendored 唯一真相源 · `patches/` 自动生成的适配补丁快照
 - 构建：`go run ./package/build` → `dist/*.tgz` + SHA256（剔除 Tests/ 与失效签名）

@@ -822,6 +822,254 @@ namespace Unity.Pipeline.Editor.Commands.Observability
             return covered;
         }
 
+        [CliCommand("profiler_overlaps", "Find overlapping CPU sample intervals in a saved capture.",
+            Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
+        public static object OverlapSamples(
+            [CliArg("marker", "Exact first CPU marker name.", Required = true)] string marker,
+            [CliArg("other_marker", "Exact second CPU marker name.", Required = true)] string otherMarker,
+            [CliArg("file", "Capture filename under Library/Pipeline/Profiles.")] string file = null,
+            [CliArg("session_id", "Analysis session ID instead of a file.")] string sessionId = null,
+            [CliArg("first_frame", "First frame to query. Defaults to the first captured frame.")] int? firstFrame = null,
+            [CliArg("last_frame", "Last frame to query. Defaults to the last captured frame.")] int? lastFrame = null,
+            [CliArg("thread_id", "Optional first marker thread ID from profiler_threads.")] string threadId = null,
+            [CliArg("other_thread_id", "Optional second marker thread ID from profiler_threads.")] string otherThreadId = null,
+            [CliArg("top", "Maximum pairs to return across the range (1–50).")] int top = 10,
+            [CliArg("confirm", "Allow replacing existing Profiler history.")] bool confirm = false)
+        {
+            if (string.IsNullOrEmpty(marker) || string.IsNullOrEmpty(otherMarker))
+                throw new ArgumentException("Provide both marker and other_marker.");
+            if (top < 1 || top > 50)
+                throw new ArgumentOutOfRangeException(nameof(top), "Use 1–50 pairs.");
+            var markerThread = ParseOverlapThread(threadId, nameof(threadId));
+            var otherThread = ParseOverlapThread(otherThreadId, nameof(otherThreadId));
+
+            SelectCapture(file, sessionId, confirm);
+            var captureFirst = ProfilerDriver.firstFrameIndex;
+            var captureLast = ProfilerDriver.lastFrameIndex;
+            var first = firstFrame ?? captureFirst;
+            var last = lastFrame ?? captureLast;
+            if (first < 0 || last < first || (long)last - first >= 300)
+                throw new ArgumentException("Select an inclusive range of 1–300 non-negative frames.");
+
+            var frames = new List<object>(last - first + 1);
+            var ranked = new List<OverlapPair>(top);
+            var availableFrames = 0;
+            long totalPairs = 0;
+            ulong totalOverlapNs = 0;
+            for (var offset = 0; offset <= last - first; offset++)
+            {
+                var frame = first + offset;
+                var samples = new List<OverlapSample>();
+                var markerThreadPresent = !markerThread.HasValue;
+                var otherThreadPresent = !otherThread.HasValue;
+                var available = false;
+                if (frame >= captureFirst && frame <= captureLast)
+                {
+                    for (var thread = 0; ; thread++)
+                    {
+                        using (var data = ProfilerDriver.GetRawFrameDataView(frame, thread))
+                        {
+                            if (!data.valid)
+                                break;
+                            available = true;
+                            var readFirst = !markerThread.HasValue || data.threadId == markerThread.Value;
+                            var readOther = !otherThread.HasValue || data.threadId == otherThread.Value;
+                            markerThreadPresent |= readFirst;
+                            otherThreadPresent |= readOther;
+                            if (readFirst || readOther)
+                                ReadOverlapSamples(data, marker, otherMarker, readFirst, readOther, samples);
+                        }
+                    }
+                }
+
+                var status = !available ? "missing_frame" : !markerThreadPresent || !otherThreadPresent ? "missing_thread" : "available";
+                if (status != "available")
+                {
+                    frames.Add(new { frame, status, available = false, markerSamples = (int?)null,
+                        otherSamples = (int?)null, pairCount = (long?)null, overlapNs = (ulong?)null });
+                    continue;
+                }
+
+                var (pairCount, covered) = FindSampleOverlaps(frame, samples, ranked, top);
+                totalPairs += pairCount;
+                totalOverlapNs += covered;
+                availableFrames++;
+                frames.Add(new { frame, status, available = true,
+                    markerSamples = samples.Count(sample => sample.First), otherSamples = samples.Count(sample => sample.Second),
+                    pairCount, overlapNs = covered });
+            }
+
+            return new
+            {
+                sessionId, file, marker, otherMarker, threadId, otherThreadId, firstFrame = first, lastFrame = last,
+                availableFrames, pairCount = totalPairs, overlapNs = availableFrames == 0 ? (ulong?)null : totalOverlapNs,
+                truncated = totalPairs > ranked.Count, frames,
+                pairs = ranked.Select(pair => new
+                {
+                    frame = pair.Frame,
+                    startNs = pair.Start.ToString(CultureInfo.InvariantCulture),
+                    endNs = pair.End.ToString(CultureInfo.InvariantCulture),
+                    overlapNs = pair.End - pair.Start, sameThread = pair.First.ThreadIndex == pair.Second.ThreadIndex,
+                    marker = DescribeOverlapSample(pair.First), other = DescribeOverlapSample(pair.Second)
+                }).ToArray()
+            };
+        }
+
+        static ulong? ParseOverlapThread(string value, string parameter)
+        {
+            if (value == null)
+                return null;
+            if (!ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id))
+                throw new ArgumentException("Use a thread ID from profiler_threads.", parameter);
+            return id;
+        }
+
+        readonly struct OverlapSample
+        {
+            public readonly int ThreadIndex, SampleIndex;
+            public readonly ulong ThreadId, Start, End;
+            public readonly string Thread, Marker;
+            public readonly bool First, Second;
+
+            public OverlapSample(int threadIndex, int sampleIndex, ulong threadId, string thread, string marker,
+                ulong start, ulong end, bool first, bool second)
+            {
+                ThreadIndex = threadIndex;
+                SampleIndex = sampleIndex;
+                ThreadId = threadId;
+                Thread = thread;
+                Marker = marker;
+                Start = start;
+                End = end;
+                First = first;
+                Second = second;
+            }
+        }
+
+        readonly struct OverlapPair
+        {
+            public readonly int Frame;
+            public readonly OverlapSample First, Second;
+            public readonly ulong Start, End;
+
+            public OverlapPair(int frame, OverlapSample first, OverlapSample second)
+            {
+                Frame = frame;
+                First = first;
+                Second = second;
+                Start = Math.Max(first.Start, second.Start);
+                End = Math.Min(first.End, second.End);
+            }
+        }
+
+        static object DescribeOverlapSample(OverlapSample sample) => new
+        {
+            threadIndex = sample.ThreadIndex, threadId = sample.ThreadId.ToString(CultureInfo.InvariantCulture),
+            thread = sample.Thread, sampleIndex = sample.SampleIndex, marker = sample.Marker,
+            startNs = sample.Start.ToString(CultureInfo.InvariantCulture),
+            endNs = sample.End.ToString(CultureInfo.InvariantCulture), durationNs = sample.End - sample.Start
+        };
+
+        static void ReadOverlapSamples(RawFrameDataView data, string marker, string otherMarker,
+            bool readFirst, bool readOther, List<OverlapSample> samples)
+        {
+            var firstId = readFirst ? data.GetMarkerId(marker) : FrameDataView.invalidMarkerId;
+            var otherId = readOther ? data.GetMarkerId(otherMarker) : FrameDataView.invalidMarkerId;
+            if (firstId == FrameDataView.invalidMarkerId && otherId == FrameDataView.invalidMarkerId)
+                return;
+            for (var index = 0; index < data.sampleCount; index++)
+            {
+                var id = data.GetSampleMarkerId(index);
+                if (id == FrameDataView.invalidMarkerId || (id != firstId && id != otherId))
+                    continue;
+                var duration = data.GetSampleTimeNs(index);
+                var start = data.GetSampleStartTimeNs(index);
+                if (duration == 0 || duration > ulong.MaxValue - start)
+                    continue;
+                var first = id == firstId;
+                samples.Add(new OverlapSample(data.threadIndex, index, data.threadId, data.threadName,
+                    first ? marker : otherMarker, start, start + duration, first, id == otherId));
+            }
+        }
+
+        static readonly IComparer<OverlapPair> OverlapRanking = Comparer<OverlapPair>.Create((left, right) =>
+        {
+            var compared = (right.End - right.Start).CompareTo(left.End - left.Start);
+            if (compared != 0) return compared;
+            compared = left.Frame.CompareTo(right.Frame);
+            if (compared != 0) return compared;
+            compared = CompareSamplePosition(left.First, right.First);
+            return compared != 0 ? compared : CompareSamplePosition(left.Second, right.Second);
+        });
+
+        static int CompareSamplePosition(OverlapSample left, OverlapSample right)
+        {
+            var compared = left.ThreadIndex.CompareTo(right.ThreadIndex);
+            return compared != 0 ? compared : left.SampleIndex.CompareTo(right.SampleIndex);
+        }
+
+        static (long pairs, ulong covered) FindSampleOverlaps(int frame, List<OverlapSample> samples,
+            List<OverlapPair> ranked, int top)
+        {
+            samples.Sort((left, right) =>
+            {
+                var compared = left.Start.CompareTo(right.Start);
+                return compared != 0 ? compared : CompareSamplePosition(left, right);
+            });
+            var firsts = new List<OverlapSample>();
+            var seconds = new List<OverlapSample>();
+            long pairs = 0;
+            ulong covered = 0;
+            ulong coveredUntil = 0;
+
+            void Visit(List<OverlapSample> active, OverlapSample current, bool currentIsSecond)
+            {
+                for (var i = active.Count - 1; i >= 0; i--)
+                {
+                    var previous = active[i];
+                    if (previous.End <= current.Start)
+                    {
+                        active[i] = active[active.Count - 1];
+                        active.RemoveAt(active.Count - 1);
+                        continue;
+                    }
+                    // Both samples can match both filters, particularly for two
+                    // occurrences of the same marker. Count that pair once.
+                    if (!currentIsSecond && current.Second && previous.First)
+                        continue;
+
+                    var pair = currentIsSecond ? new OverlapPair(frame, previous, current) : new OverlapPair(frame, current, previous);
+                    pairs++;
+                    // Pairs arrive in start order. Count the union so nested
+                    // and cross-thread pairs cannot double-count wall time.
+                    if (pair.End > coveredUntil)
+                    {
+                        covered += pair.End - Math.Max(pair.Start, coveredUntil);
+                        coveredUntil = pair.End;
+                    }
+                    if (ranked.Count == top && OverlapRanking.Compare(pair, ranked[top - 1]) >= 0)
+                        continue;
+                    var slot = ranked.BinarySearch(pair, OverlapRanking);
+                    ranked.Insert(slot < 0 ? ~slot : slot, pair);
+                    if (ranked.Count > top)
+                        ranked.RemoveAt(top);
+                }
+            }
+
+            foreach (var sample in samples)
+            {
+                if (sample.Second)
+                    Visit(firsts, sample, true);
+                if (sample.First)
+                    Visit(seconds, sample, false);
+                if (sample.First)
+                    firsts.Add(sample);
+                if (sample.Second)
+                    seconds.Add(sample);
+            }
+            return (pairs, covered);
+        }
+
         [CliCommand("profiler_gc_callstacks", "Read recorded GC.Alloc call stacks for one frame and thread.", Effect = CommandEffect.Destructive, Tags = new[] { "observability/profiling" })]
         public static object GcCallstacks(
             [CliArg("frame", "Profiler frame index.", Required = true)] int? frameIndex,
