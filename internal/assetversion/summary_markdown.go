@@ -49,7 +49,17 @@ func (r AssetSummaryResult) Markdown() string {
 		}
 		out.WriteByte('\n')
 		for _, node := range change.Nodes {
-			writeNodeChange(&out, node)
+			writeNodeChange(&out, node, isSerializedAsset(change.Path))
+		}
+	}
+
+	if len(r.ReferenceChanges) > 0 {
+		fmt.Fprintf(&out, "\n## Reference changes in unedited assets (%d)\n\n", len(r.ReferenceChanges))
+		for _, change := range r.ReferenceChanges {
+			fmt.Fprintf(&out, "- %s\n", inlineCode(change.Path))
+			for _, node := range change.Nodes {
+				writeNodeChange(&out, node, true)
+			}
 		}
 	}
 
@@ -91,7 +101,7 @@ func writeCoverage(out *strings.Builder, side string, coverage SnapshotCoverage)
 	}
 }
 
-func writeNodeChange(out *strings.Builder, change NodeChange) {
+func writeNodeChange(out *strings.Builder, change NodeChange, includeAddedFields bool) {
 	node := change.After
 	if node == nil {
 		node = change.Before
@@ -107,8 +117,7 @@ func writeNodeChange(out *strings.Builder, change NodeChange) {
 			item = component.Before
 		}
 		fmt.Fprintf(out, "    - %s %s\n", component.Change, inlineCode(item.Type+" #"+item.FileID))
-		// Added or removed components are already identified by type and ID.
-		if component.Change != "modified" {
+		if !includeAddedFields && component.Change != "modified" {
 			continue
 		}
 		for _, field := range component.Fields {
@@ -129,6 +138,24 @@ func fieldSummary(field FieldChange) string {
 }
 
 func fieldPreview(value any) string {
+	if ref, ok := value.(Reference); ok && ref.Target != nil {
+		target := ref.Target
+		switch target.Kind {
+		case "null":
+			return "null"
+		case "local":
+			if target.ObjectName != "" {
+				return fmt.Sprintf("%s #%s (same file)", target.ObjectName, ref.FileID)
+			}
+			return fmt.Sprintf("#%s (unresolved in same file)", ref.FileID)
+		default:
+			location := target.Path
+			if location == "" {
+				location = ref.Asset.GUID
+			}
+			return fmt.Sprintf("%s #%s (%s)", location, ref.FileID, target.Status)
+		}
+	}
 	body, err := json.Marshal(value)
 	if err != nil {
 		return "unavailable"

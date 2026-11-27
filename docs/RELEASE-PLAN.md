@@ -22,7 +22,7 @@
 
 **v0.1.42**（2026-11-27，`87cb216`）已发布。临时 batchmode Editor 支持自定义命令和 EditMode、PlayMode 测试，验证了已有 Editor 保护、失败、超时、Ctrl+C 和日志回传。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.42)
 
-**v0.1.43**（`97a471d`）已通过本地候选验收。隔离 Unity 2022.3.23f1 工程中，临时 batchmode Editor 完成 Windows x64 IL2CPP Development Player 构建，并验证预检、真实构建失败、超时、Ctrl+C 和恢复构建。
+**v0.1.46**（2026-11-28，`eaa6630`）已发布，包含 v0.1.43 至 v0.1.45。隔离 Unity 2022.3.23f1 验证了临时 batchmode Editor 构建，以及 Windows x64 IL2CPP 开发 Player 的 3D、屏幕空间和 World Space Canvas 预览。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.46)
 
 ## 开发顺序与验收
 
@@ -39,9 +39,13 @@
 | v0.1.41 | Git / P4 变更影响到测试程序集的选测、失败用例重跑和 NUnit XML。 | 同一批 Git / P4 快照选出一致的测试程序集。验证依赖变更、脚本删除或移动、无匹配、无法判定时的保守回退。NUnit 汇总与现有终态结果一致。 |
 | v0.1.42 | 启动临时 batchmode Editor 的 CI 入口，先覆盖自定义命令与测试，后续扩展构建。 | 无常驻 Editor 的隔离工程可启动、执行并正常退出。验证编译失败、启动失败、超时、取消、日志落盘及进程回收。 |
 | v0.1.43 | 临时 batchmode Editor 的 Player 构建。沿用预检、确认和 BuildReport，等待同一构建 ID。 | 隔离 Unity 2022.3.23f1 验证预检及未确认时无产物、真实构建及正确输出、构建失败回传、超时与取消后回收进程，以及后续构建恢复。 |
-| v0.1.44（本地候选） | Unity 2022.3 本地 Scene Preview。首版在独立开发 Player 中预览一个 Prefab，随包携带依赖清单。 | Windows x64 上回装正式包。验证按目标平台打包、嵌套 Prefab 和传递依赖、重复加载、缺失依赖、损坏包、宿主场景和进程回收。失败沿用 `--json` 单信封和退出码 `20`。 |
-| v0.1.45（本地候选） | 本地 Scene Preview 支持屏幕空间 Canvas 和横竖屏 PNG。 | 隔离 Unity 2022.3.23f1 IL2CPP 开发 Player 验证 Overlay、Camera、嵌套 Canvas 和布局回读，验证没有受支持绘制目标时返回 `20`。回归 3D 默认尺寸、取消和清理。 |
-| v0.1.46（本地候选） | 本地 Scene Preview 支持独立 World Space Canvas。 | 隔离 Windows x64 IL2CPP 开发 Player 验证旋转、缩放、多个根画布和横竖屏取景，零面积返回 `20`。回归屏幕空间 Canvas、3D 和进程回收。 |
+| v0.1.44 | Unity 2022.3 本地 Scene Preview。首版在独立开发 Player 中预览一个 Prefab，随包携带依赖清单。 | Windows x64 上回装正式包。验证按目标平台打包、嵌套 Prefab 和传递依赖、重复加载、缺失依赖、损坏包、宿主场景和进程回收。失败沿用 `--json` 单信封和退出码 `20`。 |
+| v0.1.45 | 本地 Scene Preview 支持屏幕空间 Canvas 和横竖屏 PNG。 | 隔离 Unity 2022.3.23f1 IL2CPP 开发 Player 验证 Overlay、Camera、嵌套 Canvas 和布局回读，验证没有受支持绘制目标时返回 `20`。回归 3D 默认尺寸、取消和清理。 |
+| v0.1.46 | 本地 Scene Preview 支持独立 World Space Canvas。 | 隔离 Windows x64 IL2CPP 开发 Player 验证旋转、缩放、多个根画布和横竖屏取景，零面积返回 `20`。回归屏幕空间 Canvas、3D 和进程回收。 |
+| v0.1.47 | `asset-diff` 和 `asset-summary` 支持文本 `.asset` 的对象、字段、数组差异，以及各侧引用解释。 | 隔离 Unity 2022.3.23f1 生成同一批 Git / P4 快照，覆盖子对象、数组、同文件引用、目标移动和删除、真实二进制资产提示。回归旧 `--json` 和退出码。 |
+| v0.1.48 | Windows Runner CI 模板和结果留档，复用选测、NUnit XML 和 batchmode 构建。 | 验证零匹配、测试失败时仍归档结果和日志、构建失败退出码、超时回收。 |
+| v0.1.49 | 使用 Unity 2022.3 的 UnityYAMLMerge 预演 Prefab 和 Scene 三方合并。 | 在临时目录验证自动合并、同字段冲突和删除修改冲突，回读候选文件差异。 |
+| v0.1.50 | 在隔离 Player 的场景上下文中预览 Sprite 或 Material 替换。 | Built-in 验证指定节点、替换前后截图和退出回收。URP 单独评估兼容性。 |
 | 暂缓 | GPU 计数器和耗时分析。 | 恢复前先确认目标开发 Player 能稳定采到 GPU 数据，再检验单位以及零值和缺测的区分。 |
 
 ### Scene Preview 可行性记录

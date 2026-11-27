@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -172,7 +173,7 @@ func AssetRefsCommand() SubCommand {
 func AssetDiffCommand() SubCommand {
 	return SubCommand{
 		Name:      "asset-diff",
-		Synopsis:  "compare a text-serialized Unity Prefab or Scene across two snapshots: upipe asset-diff --from REV --to REV PATH",
+		Synopsis:  "compare a text-serialized Unity asset across two snapshots: upipe asset-diff --from REV --to REV PATH",
 		NoRuntime: true,
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe asset-diff")
@@ -186,14 +187,19 @@ func AssetDiffCommand() SubCommand {
 			if err != nil {
 				return nil, err
 			}
-			if len(paths) != 1 || !assetversion.ValidUnityPath(paths[0]) {
-				return nil, usageErr("asset-diff: provide one project-relative .prefab or .unity path under Assets or Packages")
+			if len(paths) != 1 || !assetversion.ValidDiffPath(paths[0]) {
+				return nil, usageErr("asset-diff: provide one project-relative .prefab, .unity or .asset path under Assets or Packages")
 			}
 			if *toPath == "" {
 				*toPath = paths[0]
 			}
-			if !assetversion.ValidUnityPath(*toPath) {
+			if !assetversion.ValidDiffPath(*toPath) {
 				return nil, usageErr("asset-diff: invalid --to-path")
+			}
+			if path.Ext(paths[0]) == ".asset" || path.Ext(*toPath) == ".asset" {
+				if path.Ext(paths[0]) != path.Ext(*toPath) || *includeInherited {
+					return nil, usageErr("asset-diff: compare .asset with .asset and omit --include-inherited")
+				}
 			}
 			if err := source.validate(*from, *to); err != nil {
 				return nil, err

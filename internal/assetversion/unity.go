@@ -239,10 +239,11 @@ func groupUnity(docs []document, index GuidIndex) ([]*nodeGroup, error) {
 }
 
 type Reference struct {
-	FileID      string      `json:"fileId"`
-	Type        string      `json:"type,omitempty"`
-	Asset       *Resolution `json:"asset,omitempty"`
-	InstanceIDs []string    `json:"instanceIds,omitempty"`
+	FileID      string           `json:"fileId"`
+	Type        string           `json:"type,omitempty"`
+	Asset       *Resolution      `json:"asset,omitempty"`
+	InstanceIDs []string         `json:"instanceIds,omitempty"`
+	Target      *ReferenceTarget `json:"target,omitempty"`
 }
 
 func scalar(value *yaml.Node) any {
@@ -363,8 +364,12 @@ type DiffResult struct {
 }
 
 func ValidUnityPath(name string) bool {
-	return safeProjectPath(name) && (strings.HasPrefix(name, "Assets/") || strings.HasPrefix(name, "Packages/")) &&
+	return unityAssetPath(name) &&
 		(path.Ext(name) == ".prefab" || path.Ext(name) == ".unity")
+}
+
+func unityAssetPath(name string) bool {
+	return safeProjectPath(name) && (strings.HasPrefix(name, "Assets/") || strings.HasPrefix(name, "Packages/"))
 }
 
 func Diff(ctx context.Context, before, after *Version, oldPath, newPath string) (DiffResult, error) {
@@ -397,21 +402,27 @@ func diff(ctx context.Context, before, after *Version, oldPath, newPath string, 
 	if err != nil {
 		return result, err
 	}
-	load := func(data []byte, exists bool) ([]document, error) {
+	load := func(data []byte, exists bool, name string) ([]document, error) {
 		if !exists {
 			return nil, nil
 		}
-		return parseUnity(data)
+		docs, skip, err := parseDiffDocuments(data, name)
+		if skip != "" {
+			return nil, fmt.Errorf("%s", assetSkipMessage(skip))
+		}
+		return docs, err
 	}
-	oldDocs, err := load(oldData, oldExists)
+	oldDocs, err := load(oldData, oldExists, oldPath)
 	if err != nil {
 		return result, fmt.Errorf("%s: %w", oldPath, err)
 	}
-	newDocs, err := load(newData, newExists)
+	newDocs, err := load(newData, newExists, newPath)
 	if err != nil {
 		return result, fmt.Errorf("%s: %w", newPath, err)
 	}
-	result.Nodes, err = compareDocuments(oldDocs, newDocs, oldIndex, newIndex, oldPath, newPath)
+	result.Nodes, err = compareDocuments(
+		documentSide{version: before, index: oldIndex, path: oldPath, docs: oldDocs},
+		documentSide{version: after, index: newIndex, path: newPath, docs: newDocs})
 	if err != nil {
 		return result, err
 	}
@@ -432,15 +443,15 @@ func diff(ctx context.Context, before, after *Version, oldPath, newPath string, 
 	return result, nil
 }
 
-func compareDocuments(oldDocs, newDocs []document, oldIndex, newIndex GuidIndex, oldPath, newPath string) ([]NodeChange, error) {
+func compareDocuments(before, after documentSide) ([]NodeChange, error) {
 	nodes := []NodeChange{}
-	oldGroups, err := groupUnity(oldDocs, oldIndex)
+	oldGroups, err := before.groups()
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", oldPath, err)
+		return nil, fmt.Errorf("%s: %w", before.path, err)
 	}
-	newGroups, err := groupUnity(newDocs, newIndex)
+	newGroups, err := after.groups()
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", newPath, err)
+		return nil, fmt.Errorf("%s: %w", after.path, err)
 	}
 	for _, pair := range pairing(oldGroups, newGroups, func(group *nodeGroup) string {
 		return group.Kind + ":" + group.FileID
@@ -455,7 +466,7 @@ func compareDocuments(oldDocs, newDocs []document, oldIndex, newIndex GuidIndex,
 			diff.After, right = &new.Node, new.components
 		}
 		for _, component := range pairing(left, right, func(doc document) string { return doc.kind + ":" + doc.id }) {
-			result, err := diffComponent(component.before, component.after, oldIndex, newIndex)
+			result, err := diffComponent(component.before, component.after, before, after)
 			if err != nil {
 				return nil, err
 			}
@@ -503,20 +514,21 @@ func changeType(before, after bool) string {
 	return "modified"
 }
 
-func diffComponent(before, after document, a, b GuidIndex) (ComponentChange, error) {
+func diffComponent(before, after document, a, b documentSide) (ComponentChange, error) {
 	result := ComponentChange{Change: changeType(before.body != nil, after.body != nil), Fields: []FieldChange{}}
-	oldFields, newFields := make(map[string]any), make(map[string]any)
 	if before.body != nil {
 		result.Before = &Component{FileID: before.id, Type: before.kind}
-		if err := flatten(before.body, "", a, oldFields); err != nil {
-			return result, err
-		}
 	}
 	if after.body != nil {
 		result.After = &Component{FileID: after.id, Type: after.kind}
-		if err := flatten(after.body, "", b, newFields); err != nil {
-			return result, err
-		}
+	}
+	oldFields, err := a.fields(before, b, false)
+	if err != nil {
+		return result, err
+	}
+	newFields, err := b.fields(after, a, true)
+	if err != nil {
+		return result, err
 	}
 	result.Fields = compareFields(oldFields, newFields)
 	return result, nil
