@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -51,6 +52,8 @@ func OpenGit(ctx context.Context, dir, revision string) (*Version, error) {
 
 const maxFileBytes = 64 << 20
 
+var errGitParentUnavailable = errors.New("the selected Git commit's parent is unavailable")
+
 // PreviousGit selects the first parent of the already pinned commit.
 func PreviousGit(ctx context.Context, dir string, after *Version) (*Version, error) {
 	output, err := run(ctx, dir, "git", "rev-list", "--parents", "-n", "1", after.Revision)
@@ -69,7 +72,7 @@ func PreviousGit(ctx context.Context, dir string, after *Version) (*Version, err
 		}
 		headers, _, _ := bytes.Cut(object, []byte("\n\n"))
 		if bytes.Contains(headers, []byte("\nparent ")) {
-			return nil, fmt.Errorf("the selected Git commit's parent is unavailable")
+			return nil, errGitParentUnavailable
 		}
 		return emptyVersion("git", after.read), nil
 	}

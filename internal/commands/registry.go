@@ -46,6 +46,7 @@ func All() []SubCommand {
 		AssetCheckCommand(),
 		AssetImpactCommand(),
 		AssetSummaryCommand(),
+		AssetBlameCommand(),
 		AssetDiffCommand(),
 		JobCommand(),
 		JobCancelCommand(),

@@ -32,13 +32,18 @@ func ValidChangelist(value string) bool {
 }
 
 type p4Record struct {
-	DepotFile string  `json:"depotFile"`
-	Dir       string  `json:"dir"`
-	Rev       string  `json:"rev"`
-	Change    string  `json:"change"`
-	Severity  int     `json:"severity"`
-	Generic   int     `json:"generic"`
-	Data      *string `json:"data"`
+	DepotFile  string  `json:"depotFile"`
+	Dir        string  `json:"dir"`
+	Rev        string  `json:"rev"`
+	Change     string  `json:"change"`
+	Severity   int     `json:"severity"`
+	Generic    int     `json:"generic"`
+	Data       *string `json:"data"`
+	FileRev    string  `json:"rev0"`
+	FileChange string  `json:"change0"`
+	FileUser   string  `json:"user0"`
+	FileTime   string  `json:"time0"`
+	FileAction string  `json:"action0"`
 }
 
 func (p P4Options) raw(ctx context.Context, args ...string) (string, error) {
