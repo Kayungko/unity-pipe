@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本为 **0.6.0-2022.21**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
+本仓库 vendored 版本为 **0.6.0-2022.22**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
@@ -33,6 +33,7 @@
 | 后台任务实时日志 | `patches/0024-live-job-logs.patch` | 分级日志与终态共享序号，支持续读及保留窗口提示 | 隔离 Editor 和 IL2CPP Player 验证取消、超时、失效和二进制 SHA256 |
 | 变更选测与失败重跑 | `patches/0025-exact-test-selection.patch` | 保留跨重载请求，按程序集、阶段和用例全名精确筛选 | 隔离 Editor 验证 Git/P4 选测、同名用例和失败重跑 |
 | 本地 Scene Preview | `patches/0026-scene-preview.patch` | Prefab AssetBundle 打包、专用开发 Player 构建及 PNG 输出 | 用 Unity 2022.3 Windows IL2CPP 开发 Player 验证渲染、组件保留和进程回收 |
+| 屏幕空间 Canvas 预览 | `patches/0027-canvas-preview.patch` | 专用 Player 中渲染 UI Prefab，支持横竖屏 PNG | 回归 Overlay、Camera、嵌套 Canvas、错误回传及 3D 默认预览 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

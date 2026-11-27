@@ -59,6 +59,10 @@ namespace Unity.Pipeline.Preview
             public string message;
             public string asset;
             public string graphicsDevice;
+            public string renderMode;
+            public int width;
+            public int height;
+            public int canvases;
             public int renderers;
             public int missingScripts;
             public string[] behaviourTypes;
@@ -69,17 +73,30 @@ namespace Unity.Pipeline.Preview
         {
             var args = Environment.GetCommandLineArgs();
             var index = Array.IndexOf(args, "-upipe-scene-preview");
-            if (index >= 0 && args.Length > index + 2)
-                _ = Run(args[index + 1], args[index + 2]);
+            if (index < 0 || args.Length <= index + 2)
+                return;
+            var width = ImageSize;
+            var height = ImageSize;
+            if (args.Length > index + 4)
+            {
+                int.TryParse(args[index + 3], out width);
+                int.TryParse(args[index + 4], out height);
+            }
+            _ = Run(args[index + 1], args[index + 2], width, height);
         }
 
-        private static async Task Run(string directory, string output)
+        private static async Task Run(string directory, string output, int width, int height)
         {
-            var result = new Result { stage = "validate", graphicsDevice = SystemInfo.graphicsDeviceType.ToString() };
+            var result = new Result
+            {
+                stage = "validate", graphicsDevice = SystemInfo.graphicsDeviceType.ToString(), width = width, height = height
+            };
             var bundles = new List<AssetBundle>();
             var scene = default(Scene);
             try
             {
+                if (width < 64 || width > 4096 || height < 64 || height > 4096)
+                    throw new ArgumentException("Preview width and height must be between 64 and 4096");
                 var package = PreviewPackage.Read(directory);
                 result.asset = package.asset;
                 if (package.target != PreviewPackage.WindowsTarget || package.unityVersion != Application.unityVersion)
@@ -114,14 +131,32 @@ namespace Unity.Pipeline.Preview
                 await Task.Yield();
 
                 result.stage = "render";
-                var renderers = clone.GetComponentsInChildren<Renderer>().Where(item => item.enabled).ToArray();
-                if (renderers.Length == 0)
-                    throw new InvalidDataException("Prefab has no enabled 3D Renderer to frame");
-                result.renderers = renderers.Length;
-                var bounds = renderers[0].bounds;
-                foreach (var renderer in renderers.Skip(1))
-                    bounds.Encapsulate(renderer.bounds);
-                File.WriteAllBytes(Path.Combine(output, "preview.png"), Capture(scene, bounds));
+                var canvases = clone.GetComponentsInChildren<Canvas>()
+                    .Where(canvas => canvas.isActiveAndEnabled && canvas.isRootCanvas && canvas.renderMode != RenderMode.WorldSpace)
+                    .ToArray();
+                result.canvases = canvases.Length;
+                var camera = CreateCamera(scene, width, height);
+                if (canvases.Length > 0)
+                {
+                    result.renderMode = "canvas";
+                    foreach (var canvas in canvases)
+                    {
+                        canvas.renderMode = RenderMode.ScreenSpaceCamera;
+                        canvas.worldCamera = camera;
+                        canvas.targetDisplay = 0;
+                        canvas.planeDistance = 0.5f;
+                    }
+                }
+                else
+                {
+                    result.renderMode = "mesh";
+                    var renderers = clone.GetComponentsInChildren<Renderer>().Where(item => item.enabled).ToArray();
+                    if (renderers.Length == 0)
+                        throw new InvalidDataException("Prefab needs an enabled Renderer or a screen-space root Canvas");
+                    result.renderers = renderers.Length;
+                    FrameMesh(camera, scene, renderers);
+                }
+                File.WriteAllBytes(Path.Combine(output, "preview.png"), Capture(camera, width, height));
                 result.success = true;
                 result.stage = "completed";
             }
@@ -162,7 +197,7 @@ namespace Unity.Pipeline.Preview
             return root;
         }
 
-        private static byte[] Capture(Scene scene, Bounds bounds)
+        private static Camera CreateCamera(Scene scene, int width, int height)
         {
             var camera = CreateRoot("Preview Camera", scene).AddComponent<Camera>();
             camera.enabled = false;
@@ -170,28 +205,42 @@ namespace Unity.Pipeline.Preview
             camera.cullingMask = 1 << PreviewLayer;
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = new Color(0.12f, 0.14f, 0.17f);
+            camera.aspect = (float)width / height;
+            camera.nearClipPlane = 0.01f;
+            return camera;
+        }
+
+        private static void FrameMesh(Camera camera, Scene scene, Renderer[] renderers)
+        {
+            var bounds = renderers[0].bounds;
+            foreach (var renderer in renderers.Skip(1))
+                bounds.Encapsulate(renderer.bounds);
             var radius = Mathf.Max(bounds.extents.magnitude, 0.05f);
             camera.transform.position = bounds.center + new Vector3(1, 0.72f, -1.4f).normalized * radius * 4;
             camera.transform.LookAt(bounds.center);
             camera.nearClipPlane = Mathf.Max(radius * 0.02f, 0.001f);
             camera.farClipPlane = radius * 8;
-            camera.orthographicSize = radius * 1.12f;
+            camera.orthographicSize = radius * 1.12f * Mathf.Max(1, 1 / camera.aspect);
 
             var light = CreateRoot("Preview Light", scene).AddComponent<Light>();
             light.type = LightType.Directional;
             light.cullingMask = camera.cullingMask;
             light.intensity = 1.25f;
             light.transform.rotation = Quaternion.Euler(42, -35, 0);
+        }
 
-            var target = RenderTexture.GetTemporary(ImageSize, ImageSize, 24, RenderTextureFormat.ARGB32);
+        private static byte[] Capture(Camera camera, int width, int height)
+        {
+            var target = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
             var previous = RenderTexture.active;
-            var pixels = new Texture2D(ImageSize, ImageSize, TextureFormat.RGB24, false);
+            var pixels = new Texture2D(width, height, TextureFormat.RGB24, false);
             try
             {
                 camera.targetTexture = target;
+                Canvas.ForceUpdateCanvases();
                 camera.Render();
                 RenderTexture.active = target;
-                pixels.ReadPixels(new Rect(0, 0, ImageSize, ImageSize), 0, 0);
+                pixels.ReadPixels(new Rect(0, 0, width, height), 0, 0);
                 return ImageConversion.EncodeToPNG(pixels);
             }
             finally

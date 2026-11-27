@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image/png"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -62,6 +64,8 @@ func PreviewCommand() SubCommand {
 			executable := fs.String("player-exe", "", "dedicated preview Player executable")
 			bundle := fs.String("bundle-dir", "", "directory returned by run -- preview-pack")
 			image := fs.String("output-path", "", "new PNG path")
+			width := fs.Int("width", 768, "PNG width in pixels (64–4096)")
+			height := fs.Int("height", 768, "PNG height in pixels (64–4096)")
 			log := fs.String("log-file", "", "new Player log path (default: <output-path>.player.log)")
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
@@ -72,7 +76,10 @@ func PreviewCommand() SubCommand {
 			if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
 				return nil, usageErr("preview: Windows x64 is required")
 			}
-			return renderPreview(*executable, *bundle, *image, *log, rt.Opts.Timeout)
+			if *width < 64 || *width > 4096 || *height < 64 || *height > 4096 {
+				return nil, usageErr("preview: width and height must be between 64 and 4096")
+			}
+			return renderPreview(*executable, *bundle, *image, *log, *width, *height, rt.Opts.Timeout)
 		},
 	}
 }
@@ -90,7 +97,7 @@ func readPreviewMetadata(path string) (previewMetadata, error) {
 	return metadata, err
 }
 
-func renderPreview(executable, bundle, image, log string, budget time.Duration) (any, error) {
+func renderPreview(executable, bundle, image, log string, width, height int, budget time.Duration) (any, error) {
 	out := previewResult{Stage: "validate"}
 	failed := func(message string) (any, error) {
 		e := batchErr("ScenePreviewFailed", message)
@@ -146,8 +153,10 @@ func renderPreview(executable, bundle, image, log string, budget time.Duration) 
 	defer cancel()
 
 	out.Stage = "startup"
+	imageWidth, imageHeight := strconv.Itoa(width), strconv.Itoa(height)
 	cmd := exec.Command(executable, "-batchmode", "-force-d3d11", "-logFile", out.LogFile,
-		"-upipe-scene-preview", bundle, staging)
+		"-screen-width", imageWidth, "-screen-height", imageHeight, "-screen-fullscreen", "0",
+		"-upipe-scene-preview", bundle, staging, imageWidth, imageHeight)
 	cmd.Dir = staging
 	closeScope, err := startScopedEditor(cmd)
 	if err != nil {
@@ -205,8 +214,13 @@ func renderPreview(executable, bundle, image, log string, budget time.Duration) 
 	if err != nil {
 		return failed("preview Player did not produce a PNG: " + err.Error())
 	}
-	if _, err := png.DecodeConfig(bytes.NewReader(pixels)); err != nil {
+	config, err := png.DecodeConfig(bytes.NewReader(pixels))
+	if err != nil {
 		return failed("preview Player produced an invalid PNG")
+	}
+	if config.Width != width || config.Height != height {
+		return failed(fmt.Sprintf("Player produced %dx%d PNG instead of %dx%d; rebuild the preview Player",
+			config.Width, config.Height, width, height))
 	}
 	file, err := os.OpenFile(image, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
