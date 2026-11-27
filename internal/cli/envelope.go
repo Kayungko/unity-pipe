@@ -36,6 +36,13 @@ func render(err error, opts *options.Options, data ...any) int {
 		writeJSON(envelope{OK: true, Data: payload})
 		return protocol.ExitOK
 	}
+	if report, ok := payload.(interface{ Markdown() string }); ok {
+		if _, err := fmt.Fprint(os.Stdout, report.Markdown()); err != nil {
+			fmt.Fprintf(os.Stderr, "upipe: render: %v\n", err)
+			return protocol.ExitInternal
+		}
+		return protocol.ExitOK
+	}
 	if payload != nil {
 		pretty, merr := json.MarshalIndent(payload, "", "  ")
 		if merr != nil {

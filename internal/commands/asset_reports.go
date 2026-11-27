@@ -54,12 +54,20 @@ func AssetCheckCommand() SubCommand {
 }
 
 func AssetImpactCommand() SubCommand {
+	return assetComparisonCommand("asset-impact", "find affected Prefabs and Scenes across revisions", assetversion.Impact)
+}
+
+func AssetSummaryCommand() SubCommand {
+	return assetComparisonCommand("asset-summary", "write a review summary of Unity asset changes", assetversion.Summarize)
+}
+
+func assetComparisonCommand[T any](name, description string, compare func(context.Context, *assetversion.Version, *assetversion.Version, string) (T, error)) SubCommand {
 	return SubCommand{
-		Name:      "asset-impact",
-		Synopsis:  "find affected Prefabs and Scenes across revisions: upipe asset-impact --from OLD --to NEW (or --at REV)",
+		Name:      name,
+		Synopsis:  description + ": upipe " + name + " --from OLD --to NEW (or --at REV)",
 		NoRuntime: true,
 		Run: func(rt *Runtime, args []string) (any, error) {
-			fs := newFlagSet("upipe asset-impact")
+			fs := newFlagSet("upipe " + name)
 			at := fs.String("at", "", "compare a Git commit or submitted P4 changelist against its predecessor")
 			from := fs.String("from", "", "older Git revision or submitted P4 changelist")
 			to := fs.String("to", "", "newer Git revision or submitted P4 changelist")
@@ -71,7 +79,7 @@ func AssetImpactCommand() SubCommand {
 			}
 			if *at != "" {
 				if *from != "" || *to != "" {
-					return nil, usageErr("asset-impact: use --at or --from and --to")
+					return nil, usageErr(name + ": use --at or --from and --to")
 				}
 				if err := source.validate(*at); err != nil {
 					return nil, err
@@ -81,7 +89,11 @@ func AssetImpactCommand() SubCommand {
 			}
 			ctx, cancel := assetDeadline(rt)
 			defer cancel()
-			result, err := compareAssetRevisions(ctx, source, rt, *at, *from, *to, *under)
+			before, after, err := openAssetRevisions(ctx, source, rt, *at, *from, *to)
+			if err != nil {
+				return nil, assetError(ctx, err)
+			}
+			result, err := compare(ctx, before, after, *under)
 			if err != nil {
 				return nil, assetError(ctx, err)
 			}
@@ -90,13 +102,13 @@ func AssetImpactCommand() SubCommand {
 	}
 }
 
-func compareAssetRevisions(ctx context.Context, source *assetSourceFlags, rt *Runtime, at, from, to, under string) (assetversion.AssetImpactResult, error) {
+func openAssetRevisions(ctx context.Context, source *assetSourceFlags, rt *Runtime, at, from, to string) (*assetversion.Version, *assetversion.Version, error) {
 	if at != "" {
 		to = at
 	}
 	after, err := source.open(ctx, rt, to)
 	if err != nil {
-		return assetversion.AssetImpactResult{}, err
+		return nil, nil, err
 	}
 	var before *assetversion.Version
 	switch {
@@ -107,8 +119,5 @@ func compareAssetRevisions(ctx context.Context, source *assetSourceFlags, rt *Ru
 	default:
 		before, err = assetversion.PreviousGit(ctx, rt.Opts.ProjectPath, after)
 	}
-	if err != nil {
-		return assetversion.AssetImpactResult{}, err
-	}
-	return assetversion.Impact(ctx, before, after, under)
+	return before, after, err
 }

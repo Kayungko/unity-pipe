@@ -411,38 +411,9 @@ func diff(ctx context.Context, before, after *Version, oldPath, newPath string, 
 	if err != nil {
 		return result, fmt.Errorf("%s: %w", newPath, err)
 	}
-	oldGroups, err := groupUnity(oldDocs, oldIndex)
+	result.Nodes, err = compareDocuments(oldDocs, newDocs, oldIndex, newIndex, oldPath, newPath)
 	if err != nil {
-		return result, fmt.Errorf("%s: %w", oldPath, err)
-	}
-	newGroups, err := groupUnity(newDocs, newIndex)
-	if err != nil {
-		return result, fmt.Errorf("%s: %w", newPath, err)
-	}
-	for _, pair := range pairing(oldGroups, newGroups, func(group *nodeGroup) string {
-		return group.Kind + ":" + group.FileID
-	}) {
-		old, new := pair.before, pair.after
-		diff := NodeChange{Change: changeType(old != nil, new != nil), Components: []ComponentChange{}}
-		var left, right []document
-		if old != nil {
-			diff.Before, left = &old.Node, old.components
-		}
-		if new != nil {
-			diff.After, right = &new.Node, new.components
-		}
-		for _, component := range pairing(left, right, func(doc document) string { return doc.kind + ":" + doc.id }) {
-			result, err := diffComponent(component.before, component.after, oldIndex, newIndex)
-			if err != nil {
-				return DiffResult{}, err
-			}
-			if result.Change != "modified" || len(result.Fields) != 0 {
-				diff.Components = append(diff.Components, result)
-			}
-		}
-		if diff.Change != "modified" || len(diff.Components) != 0 || old.Path != new.Path {
-			result.Nodes = append(result.Nodes, diff)
-		}
+		return result, err
 	}
 	if includeInherited {
 		oldSources, err := inheritedSources(ctx, before, oldIndex, oldDocs)
@@ -459,6 +430,44 @@ func diff(ctx context.Context, before, after *Version, oldPath, newPath string, 
 		return result, err
 	}
 	return result, nil
+}
+
+func compareDocuments(oldDocs, newDocs []document, oldIndex, newIndex GuidIndex, oldPath, newPath string) ([]NodeChange, error) {
+	nodes := []NodeChange{}
+	oldGroups, err := groupUnity(oldDocs, oldIndex)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", oldPath, err)
+	}
+	newGroups, err := groupUnity(newDocs, newIndex)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", newPath, err)
+	}
+	for _, pair := range pairing(oldGroups, newGroups, func(group *nodeGroup) string {
+		return group.Kind + ":" + group.FileID
+	}) {
+		old, new := pair.before, pair.after
+		diff := NodeChange{Change: changeType(old != nil, new != nil), Components: []ComponentChange{}}
+		var left, right []document
+		if old != nil {
+			diff.Before, left = &old.Node, old.components
+		}
+		if new != nil {
+			diff.After, right = &new.Node, new.components
+		}
+		for _, component := range pairing(left, right, func(doc document) string { return doc.kind + ":" + doc.id }) {
+			result, err := diffComponent(component.before, component.after, oldIndex, newIndex)
+			if err != nil {
+				return nil, err
+			}
+			if result.Change != "modified" || len(result.Fields) != 0 {
+				diff.Components = append(diff.Components, result)
+			}
+		}
+		if diff.Change != "modified" || len(diff.Components) != 0 || old.Path != new.Path {
+			nodes = append(nodes, diff)
+		}
+	}
+	return nodes, nil
 }
 
 type pair[T any] struct{ before, after T }

@@ -168,6 +168,8 @@ upipe asset-refs --at REV --under Assets/UI GUID --json
 upipe asset-check --at REV --under Assets/UI --json
 upipe asset-impact --from OLD --to NEW --json
 upipe asset-impact --at REV --json
+upipe asset-summary --from OLD --to NEW
+upipe asset-summary --at REV --json
 upipe asset-diff --from OLD --to NEW Assets/UI/Screen.prefab --json
 upipe asset-diff --include-inherited --from OLD --to NEW Assets/UI/Screen.prefab --json
 ```
@@ -186,7 +188,9 @@ GUID 解析范围为选定版本中纳管的 `Assets/` 和 `Packages/`。报告�
 
 `asset-impact` 将资产和元数据的版本变更放在 `changes`，通过已保存的 GUID 引用找出直接和间接受影响的 Prefab、Scene。引用此前已失效且位置不变时不会列入 `newlyInvalidReferences`。移动资产会显示原路径移除、新路径新增，并用同一 GUID 关联引用。单版本模式 `--at` 对比 Git 第一父提交，或 P4 上一个可见的已提交 Changelist。显式 `--from` 和 `--to` 比较两个快照。P4 按文件修订比较，提交了相同内容也可能列为变更。可用 `--under` 限定所扫描的 Prefab、Scene，变更清单和 GUID 仍取自整个项目快照。影响链如果经过限定范围之外的资产，使用全项目扫描可以看到完整链路。
 
-这两条命令以单个 `--json` 信封返回。完成扫描时退出 `0`，发现问题放在报告中。参数错误、读取失败和超时分别退出 `2`、`20`、`21`。二进制资源和 Git LFS 指针计入跳过清单。引用诊断验证资源 GUID 的解析状态，适用于版本库中可见的文本 Prefab 和 Scene。
+`asset-summary` 默认输出可粘贴到 PR 或 CL 的 Markdown，也可使用 `--json` 取得完整报告。它先列新增失效引用，再汇总资产增删移动、直接修改的文本 Prefab 和 Scene 的节点、组件与字段，以及间接受影响的资产。移动按两侧唯一的 GUID 配对。`--under` 限定报告范围，移动只要有一侧匹配就会列出，两侧都在范围内时才比较移动资产的节点。间接影响保留对应的引用位置。
+
+这些命令以单个 `--json` 信封返回。完成扫描时退出 `0`，发现问题放在报告中。参数错误、读取失败和超时分别退出 `2`、`20`、`21`。二进制资源和 Git LFS 指针计入跳过清单。引用诊断验证资源 GUID 的解析状态，适用于版本库中可见的文本 Prefab 和 Scene。
 
 差异支持 Unity 文本序列化的 `.prefab` 和 `.unity`，以类型和本地 File ID 配对节点及组件。同名兄弟节点按层级顺序标记，字段使用 JSON Pointer。嵌套 Prefab 实例以源资产名标识，实例的序列化覆盖和引用在实例下显示。资源移动会展示两边不同的路径，引用无法解析时保留原 GUID 和 File ID。资产本身改名可用 `--to-path` 指定新路径。
 

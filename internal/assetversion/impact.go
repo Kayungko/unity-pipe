@@ -39,17 +39,21 @@ type AssetImpactResult struct {
 }
 
 func Impact(ctx context.Context, before, after *Version, under string) (AssetImpactResult, error) {
-	result := AssetImpactResult{
-		From: before.Identity, To: after.Identity, Under: under,
-		Changes: []AssetChange{}, Affected: []AffectedAsset{}, NewlyInvalid: []ReferenceUse{},
-	}
 	old, err := before.inventory(ctx)
 	if err != nil {
-		return result, err
+		return AssetImpactResult{}, err
 	}
 	current, err := after.inventory(ctx)
 	if err != nil {
-		return result, err
+		return AssetImpactResult{}, err
+	}
+	return impactWithInventory(ctx, before, after, under, old, current)
+}
+
+func impactWithInventory(ctx context.Context, before, after *Version, under string, old, current assetInventory) (AssetImpactResult, error) {
+	result := AssetImpactResult{
+		From: before.Identity, To: after.Identity, Under: under,
+		Changes: []AssetChange{}, Affected: []AffectedAsset{}, NewlyInvalid: []ReferenceUse{},
 	}
 	oldScan, err := before.scanAllReferences(ctx, old.index, under)
 	if err != nil {
