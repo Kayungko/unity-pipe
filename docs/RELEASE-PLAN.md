@@ -22,6 +22,8 @@
 
 **v0.1.42**（2026-11-27，`87cb216`）已发布。临时 batchmode Editor 支持自定义命令和 EditMode、PlayMode 测试，验证了已有 Editor 保护、失败、超时、Ctrl+C 和日志回传。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.42)
 
+**v0.1.43**（`97a471d`）已通过本地候选验收。隔离 Unity 2022.3.23f1 工程中，临时 batchmode Editor 完成 Windows x64 IL2CPP Development Player 构建，并验证预检、真实构建失败、超时、Ctrl+C 和恢复构建。
+
 ## 开发顺序与验收
 
 未发布版本号为计划，按顺序推进。各版用隔离的 Unity 2022.3.23f1 工程或对应版本生成的快照验收。GPU 继续暂缓，SGAME 先不动。
@@ -37,8 +39,14 @@
 | v0.1.41 | Git / P4 变更影响到测试程序集的选测、失败用例重跑和 NUnit XML。 | 同一批 Git / P4 快照选出一致的测试程序集。验证依赖变更、脚本删除或移动、无匹配、无法判定时的保守回退。NUnit 汇总与现有终态结果一致。 |
 | v0.1.42 | 启动临时 batchmode Editor 的 CI 入口，先覆盖自定义命令与测试，后续扩展构建。 | 无常驻 Editor 的隔离工程可启动、执行并正常退出。验证编译失败、启动失败、超时、取消、日志落盘及进程回收。 |
 | v0.1.43 | 临时 batchmode Editor 的 Player 构建。沿用预检、确认和 BuildReport，等待同一构建 ID。 | 隔离 Unity 2022.3.23f1 验证预检及未确认时无产物、真实构建及正确输出、构建失败回传、超时与取消后回收进程，以及后续构建恢复。 |
-| 待验证 | Scene Preview 的 Unity 2022.3 本地路径。 | 隔离验证单资产及依赖打包、开发 Player 加载、失败回传和预览隔离，再决定交付方式。 |
+| v0.1.44（计划） | Unity 2022.3 本地 Scene Preview。首版在独立开发 Player 中预览一个 Prefab，随包携带依赖清单。 | Windows x64 上回装正式包。验证按目标平台打包、嵌套 Prefab 和传递依赖、重复加载、缺失依赖、损坏包、宿主场景和进程回收。失败沿用 `--json` 单信封和退出码 `20`。 |
 | 暂缓 | GPU 计数器和耗时分析。 | 恢复前先确认目标开发 Player 能稳定采到 GPU 数据，再检验单位以及零值和缺测的区分。 |
+
+### Scene Preview 可行性记录
+
+Unity 2022.3.23f1 的隔离实验采用 AssetBundle。Windows x64 IL2CPP Development Player 从依赖清单加载嵌套 Prefab 及其引用的 TextAsset，在临时场景中实例化，随后卸载场景及本次加载的 Bundle。源资产和 `.meta` 的哈希一致，宿主场景保持激活。不存在的源资产、缺失依赖和损坏包均返回结构化退出码 `20`，同一 Player 随后再次加载成功。实验运行于 `-batchmode -nographics`，画面和项目专有组件仍待验收。
+
+产品入口采用显式启用的独立预览 Player，以进程隔离项目脚本的全局状态。构建与预览须使用匹配的目标平台，并在回装验收中确认包内组件所需类型保留。官方 Project Service 的内容归档和浏览器预览另需 Unity 服务链路。 [Unity 2022.3 AssetBundle 文档](https://docs.unity3d.com/2022.3/Documentation/Manual/AssetBundles-Dependencies.html) · [Unity Pipeline 官方说明](https://discussions.unity.com/t/unity-pipeline-1-0-0-pre-1-is-out/1741564)
 
 ## 交付检查
 
