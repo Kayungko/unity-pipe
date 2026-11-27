@@ -35,6 +35,13 @@ namespace Unity.Pipeline.Commands
             Level = level.ToString().ToLowerInvariant();
             Message = message ?? throw new ArgumentNullException(nameof(message));
         }
+
+        // The level was validated on the original entry.
+        internal CommandLog(string level, string message)
+        {
+            Level = level;
+            Message = message;
+        }
     }
 
     /// <summary>

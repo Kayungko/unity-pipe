@@ -300,13 +300,17 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 
 // GetJob polls GET /api/job?id=….
 func (c *PipelineClient) GetJob(jobID string) (*JobResponse, error) {
-	return c.GetJobWithin(jobID, 0)
+	return c.getJob(url.Values{"id": {jobID}}, 0)
 }
 
-// GetJobWithin limits a single status request to the remaining wait budget.
-func (c *PipelineClient) GetJobWithin(jobID string, timeout time.Duration) (*JobResponse, error) {
+// GetJobWithLogs requests a job snapshot and logs newer than the cursor.
+func (c *PipelineClient) GetJobWithLogs(jobID string, after int64, timeout time.Duration) (*JobResponse, error) {
+	return c.getJob(url.Values{"id": {jobID}, "log_after": {strconv.FormatInt(after, 10)}}, timeout)
+}
+
+func (c *PipelineClient) getJob(query url.Values, timeout time.Duration) (*JobResponse, error) {
 	var r JobResponse
-	if err := c.getJSON("/api/job?id="+url.QueryEscape(jobID), &r, timeout); err != nil {
+	if err := c.getJSON("/api/job?"+query.Encode(), &r, timeout); err != nil {
 		return nil, err
 	}
 	return &r, nil

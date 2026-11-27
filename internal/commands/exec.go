@@ -135,7 +135,7 @@ func (settings *commandLogFlags) write(logs []protocol.CommandLog) {
 	encoder := json.NewEncoder(os.Stderr)
 	minimum := commandLogLevels[settings.level]
 	for _, log := range logs {
-		if commandLogLevels[log.Level] < minimum {
+		if log.Dropped == 0 && commandLogLevels[log.Level] < minimum {
 			continue
 		}
 		if settings.format == "json" {

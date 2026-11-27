@@ -303,11 +303,33 @@ public static PipelineCommandResult ValidateCount(int count)
 }
 ```
 
-`upipe exec` and `upipe job <id>` expose the value on success and the diagnostic payload in `error.data` on failure (exit 20). Logs arrive with the terminal result. Use `--log-level debug|info|warning|error` to choose the minimum stderr level and `--log-format json` for one JSON object per log entry. The default level is `info`. The stdout envelope stays singular with `--json`.
+`upipe exec` and `upipe job <id>` expose the value on success and the diagnostic payload in `error.data` on failure (exit 20). Logs supplied with a result are available when the command ends. Use `--log-level debug|info|warning|error` to choose the minimum stderr level and `--log-format json` for one JSON object per log entry. The default level is `info`. The stdout envelope stays singular with `--json`.
 
 An asynchronous detached handler can read `Unity.Pipeline.PipelineCancellation.IsCancellationRequested` after an `await`. A requested cancellation ends the job with exit 22. If the handler returns a result when winding down, its logs remain available. A dynamically registered command that cancels itself before any cancellation request ends as a failure.
 
 In a batch, a synchronous handler's successful value is available to subsequent operations. An explicit failure enters the batch's existing error and rollback path.
+
+## Live logs for detached commands
+
+Call `Unity.Pipeline.PipelineJobLog.TryWrite(level, message)` to publish a log before the job
+finishes. The job context follows the command across `await`. The method returns false outside
+a running detached job. Return terminal logs through `PipelineCommandResult` as before.
+
+```sh
+upipe exec my_command --job --json
+upipe job JOB_ID --log-level debug --log-format json
+upipe job JOB_ID --log-after 7 --log-level debug --log-format json
+```
+
+Job log lines go to stderr. The JSON log's `sequence` is local to that job. Use the last sequence
+you received as `--log-after` to resume after an interruption. Terminal logs share that sequence.
+The job retains the latest 256 entries, with each message limited to 4096 UTF-16 code units.
+A warning reports how many older entries were dropped before the cursor could read them.
+Read-only polling does not restart the command. Jobs remain in memory and are unavailable after
+a domain reload or expiry. A missing job on a server supporting log cursors reports
+`JobUnavailable` (exit 30). Older servers can still return terminal logs when the caller
+does not request a cursor. `--json` still emits one result envelope, and `--stdout` emits bytes
+only on successful completion.
 
 ## Binary input and output with upipe
 

@@ -46,10 +46,15 @@ type CommandsResponse struct {
 // ReportedCommandFailure is the wire marker for a typed custom command failure.
 const ReportedCommandFailure = "COMMAND_REPORTED_FAILURE"
 
+// JobUnavailable marks a detached job which is no longer in the server's registry.
+const JobUnavailable = "JOB_UNAVAILABLE"
+
 // CommandLog is a leveled message returned with a custom command's result.
 type CommandLog struct {
-	Level   string `json:"level"`
-	Message string `json:"message"`
+	Level    string `json:"level"`
+	Message  string `json:"message"`
+	Sequence int64  `json:"sequence,omitempty"`
+	Dropped  int64  `json:"dropped,omitempty"`
 }
 
 // ExecResponse is the envelope of POST /api/exec, GET /api/job and the
@@ -187,6 +192,13 @@ func (r *ExecResponse) CommandError(command string) error {
 	return ErrCommandFailed(&ExecResponse{Error: message, Result: r.Result})
 }
 
+// JobLogPage is the ordered tail of a job's retained logs after a caller's cursor.
+type JobLogPage struct {
+	NextCursor int64        `json:"nextCursor"`
+	Dropped    int64        `json:"dropped"`
+	Entries    []CommandLog `json:"entries"`
+}
+
 // JobResponse is the shape of GET /api/job?id=… (job state envelope).
 type JobResponse struct {
 	JobId     string          `json:"jobId"`
@@ -197,4 +209,5 @@ type JobResponse struct {
 	Error     string          `json:"error"`
 	ErrorCode string          `json:"errorCode,omitempty"`
 	Logs      []CommandLog    `json:"logs,omitempty"`
+	LogPage   *JobLogPage     `json:"logPage,omitempty"`
 }

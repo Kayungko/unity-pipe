@@ -21,7 +21,7 @@ var BuildDate = "unknown"
 // distributes. Single source of truth for pkg-status reporting and the
 // version command — bump it together with package/com.unity.pipeline/package.json
 // (see package/ADAPTATION-2022.md upgrade flow, step 3).
-const VendoredPkgRef = "0.6.0-2022.18"
+const VendoredPkgRef = "0.6.0-2022.19"
 
 // VendoredPkgSource is where the adapted package comes from.
 const VendoredPkgSource = "github.com/Kayungko/unity-pipe"

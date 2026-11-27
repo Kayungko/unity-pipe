@@ -1550,32 +1550,35 @@ namespace Unity.Pipeline
         }
 
         /// <summary>Serialize one job record to the wire shape shared by the job endpoints.</summary>
-        private object BuildJobResponse(PipelineJobRecord record, string warning = null)
+        private object BuildJobResponse(PipelineJobRecord record, string warning, bool omitNulls, long? logAfter = null)
         {
             lock (record.Gate)
             {
                 var running = record.State == PipelineJobState.Running;
-                var progress = running ? BuildProgressPayload(Progress.Current) : null;
-
-                return new
+                var snapshot = new Dictionary<string, object>
                 {
-                    jobId = record.Id,
-                    command = record.Command,
-                    state = record.State.ToString().ToLowerInvariant(),
-                    cancellationRequested = record.CancellationRequested,
-                    enqueuedAt = record.EnqueuedAt,
-                    startedAt = record.StartedAt,
-                    completedAt = record.CompletedAt,
-                    result = record.Result,
-                    error = record.Error,
-                    errorDetails = record.ErrorDetails,
-                    errorCode = record.ErrorCode,
-                    logs = record.Logs,
-                    progress,
-                    // Corrective guidance for the caller (e.g. an unparseable omit_nulls value);
-                    // null when there is nothing to say.
-                    warnings = warning == null ? null : new[] { warning }
+                    ["jobId"] = record.Id,
+                    ["command"] = record.Command,
+                    ["state"] = record.State.ToString().ToLowerInvariant(),
+                    ["cancellationRequested"] = record.CancellationRequested,
+                    ["enqueuedAt"] = record.EnqueuedAt,
+                    ["startedAt"] = record.StartedAt,
+                    ["completedAt"] = record.CompletedAt,
+                    ["result"] = record.Result,
+                    ["error"] = record.Error,
+                    ["errorDetails"] = record.ErrorDetails,
+                    ["errorCode"] = record.ErrorCode,
+                    ["logs"] = logAfter.HasValue ? null : record.Logs,
+                    ["progress"] = running ? BuildProgressPayload(Progress.Current) : null,
+                    ["warnings"] = warning == null ? null : new[] { warning }
                 };
+                if (logAfter.HasValue)
+                    snapshot["logPage"] = record.ReadLogPage(logAfter.Value);
+
+                // Json.NET's null omission applies to properties but not dictionary entries.
+                if (omitNulls)
+                    return snapshot.Where(entry => entry.Value != null).ToDictionary(entry => entry.Key, entry => entry.Value);
+                return snapshot;
             }
         }
 
@@ -1593,14 +1596,27 @@ namespace Unity.Pipeline
                     await SendStatusResponse(response, 400, "Bad Request", "Query parameter 'id' is required");
                     return;
                 }
+                var cursor = request.QueryString["log_after"];
+                var after = 0L;
+                if (cursor != null && (!long.TryParse(cursor, System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out after) || after < 0))
+                {
+                    await SendStatusResponse(response, 400, "Bad Request", "'log_after' must be a non-negative integer");
+                    return;
+                }
                 if (!JobRegistry.TryGet(id, out var record))
                 {
-                    await SendStatusResponse(response, 404, "Job Not Found", $"No job with id '{id}' (jobs do not survive domain reloads and are pruned after retention)");
+                    var message = $"No job with id '{id}' (jobs do not survive domain reloads and are pruned after retention)";
+                    if (cursor != null)
+                        await SendJsonResponse(response, 200, new { jobId = id, state = "unavailable", error = message, errorCode = "JOB_UNAVAILABLE" });
+                    else
+                        await SendStatusResponse(response, 404, "Job Not Found", message);
                     return;
                 }
 
                 var omitNulls = ParseOmitNulls(request, out var omitNullsWarning);
-                await SendJsonResponse(response, 200, BuildJobResponse(record, omitNullsWarning), omitNulls);
+                await SendJsonResponse(response, 200,
+                    BuildJobResponse(record, omitNullsWarning, omitNulls, cursor == null ? (long?)null : after), omitNulls);
             }
             catch (Exception ex)
             {
@@ -1669,7 +1685,7 @@ namespace Unity.Pipeline
                 }
 
                 var omitNulls = ParseOmitNulls(request, out var omitNullsWarning);
-                await SendJsonResponse(response, 200, BuildJobResponse(record, omitNullsWarning), omitNulls);
+                await SendJsonResponse(response, 200, BuildJobResponse(record, omitNullsWarning, omitNulls), omitNulls);
             }
             catch (Exception ex)
             {

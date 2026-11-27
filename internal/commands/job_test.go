@@ -132,3 +132,39 @@ func TestJobCancelSendsIdNotJobId(t *testing.T) {
 		t.Fatalf("id = %q, want j1 (server reads parsed[\"id\"])", body["id"])
 	}
 }
+
+func TestJobLogCursorAdvancesAcrossPolls(t *testing.T) {
+	response := func(body string) protocol.Response {
+		return protocol.Response{StatusCode: 200, Body: []byte(body)}
+	}
+	st := &scriptedTransport{steps: []protocol.Response{
+		response(`{"jobId":"j1","state":"running","logPage":{"nextCursor":8,"dropped":1,"entries":[{"sequence":8,"level":"debug","message":"step"}]}}`),
+		response(`{"jobId":"j1","state":"completed","logPage":{"nextCursor":9,"dropped":0,"entries":[{"sequence":9,"level":"debug","message":"done"}]}}`),
+	}}
+	out, err := JobCommand().Run(newJobRuntime(st, 0), []string{"j1", "--log-after", "6"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.last.Path, "log_after=8") || strings.Contains(string(mustMarshal(out)), "logPage") {
+		t.Fatalf("cursor or stdout envelope incorrect: %s %#v", st.last.Path, out)
+	}
+}
+
+func TestJobLogResumeRequiresCursorSupport(t *testing.T) {
+	st := &scriptedTransport{steps: []protocol.Response{jobBody("completed")}}
+	_, err := JobCommand().Run(newJobRuntime(st, 0), []string{"j1", "--log-after", "0", "--no-wait"})
+	if err == nil || protocol.AsUpipeError(err).Code != protocol.ExitProtocol {
+		t.Fatalf("explicit resume against older server: %v", err)
+	}
+}
+
+func TestJobLogPageRejectsWrongSequence(t *testing.T) {
+	reply := &protocol.JobResponse{LogPage: &protocol.JobLogPage{
+		NextCursor: 5,
+		Entries:    []protocol.CommandLog{{Level: "info", Sequence: 6}},
+	}}
+	cursor, err := consumeJobLogs(reply, 4, true, nil)
+	if cursor != 4 || err == nil || protocol.AsUpipeError(err).Code != protocol.ExitProtocol {
+		t.Fatalf("wrong log sequence advanced cursor: %d %v", cursor, err)
+	}
+}

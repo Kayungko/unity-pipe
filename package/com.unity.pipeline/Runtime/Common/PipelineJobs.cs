@@ -37,6 +37,64 @@ namespace Unity.Pipeline
 
         /// <summary>Guards State/Result/Error/timestamps; reads and writes cross threads.</summary>
         public readonly object Gate = new object();
+
+        private const int MaxLogEntries = 256;
+        private const int MaxLogMessageChars = 4096;
+        private readonly Queue<CommandLog> m_LogEntries = new Queue<CommandLog>();
+        private long m_LogCursor;
+
+        internal bool TryLog(CommandLog entry)
+        {
+            lock (Gate)
+            {
+                if (State != PipelineJobState.Running)
+                    return false;
+                AppendLog(entry);
+                return true;
+            }
+        }
+
+        // Called with Gate held so readers see the terminal state and its final logs together.
+        internal void SetTerminalLogs(IReadOnlyList<CommandLog> logs)
+        {
+            Logs = logs;
+            if (logs == null)
+                return;
+            foreach (var log in logs)
+                AppendLog(log);
+        }
+
+        private void AppendLog(CommandLog entry)
+        {
+            if (entry == null)
+                return;
+            if (m_LogEntries.Count == MaxLogEntries)
+                m_LogEntries.Dequeue();
+            if (entry.Message.Length > MaxLogMessageChars)
+            {
+                var length = MaxLogMessageChars - 1;
+                if (char.IsHighSurrogate(entry.Message[length - 1]))
+                    length--;
+                entry = new CommandLog(entry.Level, entry.Message.Substring(0, length) + "…");
+            }
+            m_LogEntries.Enqueue(entry);
+            m_LogCursor++;
+        }
+
+        // Called with Gate held. A cursor is exclusive, and entries are copied before serialization.
+        internal object ReadLogPage(long after)
+        {
+            var first = m_LogCursor - m_LogEntries.Count + 1;
+            var entries = m_LogEntries.Select((entry, offset) => new
+                {
+                    sequence = first + offset,
+                    level = entry.Level,
+                    message = entry.Message
+                })
+                .Where(entry => entry.sequence > after)
+                .ToArray();
+            return new { nextCursor = m_LogCursor, dropped = Math.Max(0, first - 1 - after), entries };
+        }
     }
 
     /// <summary>
@@ -142,7 +200,7 @@ namespace Unity.Pipeline
             {
                 record.State = PipelineJobState.Completed;
                 record.Result = result;
-                record.Logs = logs;
+                record.SetTerminalLogs(logs);
                 record.CompletedAt = DateTime.UtcNow;
             }
             ClearCurrent(record);
@@ -158,7 +216,7 @@ namespace Unity.Pipeline
                 record.ErrorDetails = details;
                 record.ErrorCode = errorCode;
                 record.Result = result;
-                record.Logs = logs;
+                record.SetTerminalLogs(logs);
                 record.CompletedAt = DateTime.UtcNow;
             }
             ClearCurrent(record);
@@ -169,7 +227,7 @@ namespace Unity.Pipeline
             lock (record.Gate)
             {
                 record.State = PipelineJobState.Canceled;
-                record.Logs = logs;
+                record.SetTerminalLogs(logs);
                 record.CompletedAt = DateTime.UtcNow;
             }
             ClearCurrent(record);
@@ -236,6 +294,17 @@ namespace Unity.Pipeline
             m_Jobs.Clear();
             m_CurrentRunning = null;
         }
+    }
+
+    /// <summary>Write leveled logs for the detached command on the current execution context.</summary>
+    public static class PipelineJobLog
+    {
+        /// <summary>
+        /// Publish a log for the current detached job, including after an await.
+        /// Returns false outside a running detached job.
+        /// </summary>
+        public static bool TryWrite(CommandLogLevel level, string message) =>
+            BasePipelineServer.CurrentJob?.TryLog(new CommandLog(level, message)) == true;
     }
 
     /// <summary>

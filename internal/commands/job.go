@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"flag"
+	"fmt"
 	"time"
 
 	"github.com/Kayungko/unity-pipe/internal/options"
@@ -12,12 +14,13 @@ import (
 func JobCommand() SubCommand {
 	return SubCommand{
 		Name: "job",
-		Synopsis: "inspect a detached job: upipe job <id> [--no-wait | --stdout] " +
+		Synopsis: "inspect a detached job: upipe job <id> [--no-wait | --stdout] [--log-after N] " +
 			"(long builds/bakes: raise the wait budget with --timeout, e.g. --timeout 45m; default 10m)",
 		Run: func(rt *Runtime, args []string) (any, error) {
 			fs := newFlagSet("upipe job")
 			noWait := fs.Bool("no-wait", false, "single snapshot instead of waiting for terminal state")
 			stdout := fs.Bool("stdout", false, "write raw binary command output to stdout on success")
+			logAfter := fs.Int64("log-after", 0, "resume job logs after this sequence (shown by --log-format json)")
 			logs := attachCommandLogFlags(fs)
 			attachShared(fs, rt.Opts)
 			rest, err := parseArgs(fs, args)
@@ -34,17 +37,41 @@ func JobCommand() SubCommand {
 			if *stdout && (rt.Opts.JSONOut || *noWait) {
 				return nil, usageErr("job: --stdout cannot be combined with --json or --no-wait")
 			}
+			if *logAfter < 0 {
+				return nil, usageErr("job: --log-after must be non-negative")
+			}
+			var resume bool
+			fs.Visit(func(f *flag.Flag) {
+				if f.Name == "log-after" {
+					resume = true
+				}
+			})
+
 			job := rest[0]
+			cursor := *logAfter
+			fetch := func(timeout time.Duration) (*protocol.JobResponse, error) {
+				return rt.Client.GetJobWithLogs(job, cursor, timeout)
+			}
+			consume := func(reply *protocol.JobResponse) error {
+				next, err := consumeJobLogs(reply, cursor, resume, logs)
+				if err != nil {
+					return err
+				}
+				cursor = next
+				reply.Logs, reply.LogPage = nil, nil
+				return nil
+			}
 			if *noWait {
-				reply, err := rt.Client.GetJob(job)
+				reply, err := fetch(rt.Opts.Timeout)
 				if err != nil {
 					return nil, err
 				}
-				logs.write(reply.Logs)
-				reply.Logs = nil
+				if err := consume(reply); err != nil {
+					return nil, err
+				}
 				return reply, nil
 			}
-			getJob := rt.Client.GetJob
+			getJob := func() (*protocol.JobResponse, error) { return fetch(0) }
 			var sleep protocol.SleepFunc
 			if *stdout {
 				budget := rt.Opts.Timeout
@@ -52,12 +79,12 @@ func JobCommand() SubCommand {
 					budget = options.DefaultTimeout
 				}
 				deadline := time.Now().Add(budget)
-				getJob = func(job string) (*protocol.JobResponse, error) {
+				getJob = func() (*protocol.JobResponse, error) {
 					remaining := time.Until(deadline)
 					if remaining <= 0 {
 						return nil, protocol.ErrTimeout("deadline exceeded waiting for binary output")
 					}
-					reply, err := rt.Client.GetJobWithin(job, remaining)
+					reply, err := fetch(remaining)
 					if time.Until(deadline) <= 0 {
 						return nil, protocol.ErrTimeout("deadline exceeded waiting for binary output")
 					}
@@ -68,12 +95,13 @@ func JobCommand() SubCommand {
 				}
 			}
 			result, err := protocol.Poll(func() (protocol.PollStep, error) {
-				jr, err := getJob(job)
+				jr, err := getJob()
 				if err != nil {
 					return protocol.PollStep{}, err
 				}
-				logs.write(jr.Logs)
-				jr.Logs = nil
+				if err := consume(jr); err != nil {
+					return protocol.PollStep{}, err
+				}
 				if jr.State == "failed" && jr.ErrorCode == protocol.ReportedCommandFailure {
 					return protocol.PollStep{}, protocol.ErrCommandFailed(&protocol.ExecResponse{Error: jr.Error, Result: jr.Result})
 				}
@@ -107,6 +135,46 @@ func JobCommand() SubCommand {
 			return jsonRaw(result.Body), nil
 		},
 	}
+}
+
+func consumeJobLogs(reply *protocol.JobResponse, after int64, resume bool, logs *commandLogFlags) (int64, error) {
+	if reply.ErrorCode == protocol.JobUnavailable {
+		return after, &protocol.UpipeError{
+			Code:    protocol.ExitProtocol,
+			Kind:    "JobUnavailable",
+			Message: reply.Error,
+			Data:    reply,
+		}
+	}
+	page := reply.LogPage
+	if page == nil {
+		if resume || after > 0 {
+			return after, protocol.ErrProtocol("this Pipeline instance did not return a resumable job log")
+		}
+		logs.write(reply.Logs)
+		return after, nil
+	}
+	if page.NextCursor < after {
+		return after, usageErr("job: --log-after is ahead of the job's last log sequence")
+	}
+	if page.Dropped < 0 || page.Dropped > page.NextCursor-after ||
+		int64(len(page.Entries)) != page.NextCursor-after-page.Dropped {
+		return after, protocol.ErrProtocol("invalid job log page")
+	}
+	for index, entry := range page.Entries {
+		if entry.Sequence != after+page.Dropped+int64(index)+1 {
+			return after, protocol.ErrProtocol("job log page is out of sequence")
+		}
+	}
+	if page.Dropped > 0 {
+		logs.write([]protocol.CommandLog{{
+			Level:   "warning",
+			Message: fmt.Sprintf("job log retention skipped %d entries", page.Dropped),
+			Dropped: page.Dropped,
+		}})
+	}
+	logs.write(page.Entries)
+	return page.NextCursor, nil
 }
 
 // JobCancelCommand cancels a detached job (POST /api/job/cancel).
