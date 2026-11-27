@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/Kayungko/unity-pipe/internal/options"
 	"github.com/Kayungko/unity-pipe/internal/protocol"
 )
 
@@ -46,5 +48,23 @@ func TestBatchLogNeverOverwritesAnExistingFile(t *testing.T) {
 	fresh, err := reserveLog(project, "")
 	if err != nil || filepath.Dir(fresh) != filepath.Join(project, "Logs") {
 		t.Fatalf("default log location %s: %v", fresh, err)
+	}
+}
+
+func TestSupervisedBuildCancellationKeepsSubmittedBuildID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rt := &Runtime{
+		Opts:   &options.Options{},
+		Client: &protocol.PipelineClient{Context: ctx},
+	}
+	_, err := rt.waitForBuild("build_owned")
+	failure := protocol.AsUpipeError(err)
+	if failure == nil || failure.Code != protocol.ExitJobCancelled {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	if fields, ok := failure.Data.(map[string]any); !ok || fields["buildId"] != "build_owned" ||
+		fields["outcome"] != "unknown" {
+		t.Fatalf("lost build status on cancellation: %#v", failure.Data)
 	}
 }

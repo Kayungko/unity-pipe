@@ -36,16 +36,17 @@
 
 ## 无常驻 Editor 的 CI
 
-项目安装 Pipeline 包后，`upipe run` 可启动临时 batchmode Editor，执行一次命令或测试并退出。
+项目安装 Pipeline 包后，`upipe run` 可启动临时 batchmode Editor，执行一次命令、测试或 Player 构建并退出。
 
 ```text
 upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --timeout 5m --json -- exec my_command --set count=3
 upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --log-file editor-ci.log --timeout 10m --json -- test --mode all --nunit tests.xml
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --log-file build-ci.log --timeout 15m --json -- build --confirm --target StandaloneWindows64 --output-path Builds/QA.exe
 ```
 
-使用双横线分隔启动参数与 `exec` 或 `test` 参数。Editor 使用 `-batchmode -nographics`，项目内运行时依赖由 Unity 正常加载。`--log-file` 必须是新路径，省略时在项目的 `Logs` 目录创建独立日志。执行失败时，`error.data` 也会给出日志路径和执行阶段，已有测试结果放在 `error.data.result`。
+使用双横线分隔启动参数与 `exec`、`test` 或 `build` 参数。Editor 使用 `-batchmode -nographics`，项目内运行时依赖由 Unity 正常加载。`--log-file` 必须是新路径，省略时在项目的 `Logs` 目录创建独立日志。执行失败时，`error.data` 也会给出日志路径和执行阶段，已有测试结果放在 `error.data.result`。
 
-`--timeout` 覆盖启动与执行。取消或超时后回收本次启动的 Editor，已有 Editor 保持独立。写操作要在命令中显式保存。当前入口覆盖单个前台命令和等待终态的测试，支持 NUnit XML。构建、二进制管道和后台任务留给常驻 Editor 的原有入口。
+`--timeout` 覆盖启动与执行。取消或超时后回收本次启动的 Editor，已有 Editor 保持独立。写操作要在命令中显式保存。测试支持 NUnit XML。构建使用 `--dry-run` 预检或 `--confirm` 执行，按构建 ID 等到 BuildReport。已提交的构建被中断时返回最后一次观察到的状态，输出目录可能包含不完整的文件。二进制管道和后台任务可用常驻 Editor 的原有入口。
 
 ## 快速开始
 

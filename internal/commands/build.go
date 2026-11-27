@@ -135,7 +135,10 @@ func (rt *Runtime) waitForBuild(id string) (any, error) {
 	}, protocol.PollConfig{TerminalOK: []string{"completed"}, Deadline: rt.Opts.Timeout}, nil, nil)
 	if err != nil {
 		failure := protocol.AsUpipeError(err)
-		if failure.Code == protocol.ExitTimeout {
+		if rt.Client.Context != nil && rt.Client.Context.Err() != nil &&
+			(failure.Code == protocol.ExitTimeout || failure.Code == protocol.ExitJobCancelled) {
+			failure.Data = map[string]any{"buildId": id, "lastStatus": lastBody, "outcome": "unknown"}
+		} else if failure.Code == protocol.ExitTimeout {
 			failure.Data = map[string]any{"buildId": id, "lastStatus": lastBody}
 			failure.Message += "; the Editor may still be building"
 		}
