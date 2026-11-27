@@ -70,10 +70,15 @@ func (t *HTTPTransport) Do(req protocol.Request) (protocol.Response, error) {
 	if len(req.Body) > 0 {
 		body = bytes.NewReader(req.Body)
 	}
-	httpReq, err := http.NewRequest(req.Method, url, body)
+	parent := req.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	httpReq, err := http.NewRequestWithContext(parent, req.Method, url, body)
 	if err != nil {
 		return protocol.Response{}, &protocol.RequestNotSent{Cause: fmt.Errorf("build request: %w", err)}
 	}
+	httpReq.Close = req.CloseConnection
 	ctx, cancel := context.WithTimeout(httpReq.Context(), timeout)
 	defer cancel()
 	var acquired atomic.Bool

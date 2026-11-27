@@ -69,7 +69,11 @@ func assetDeadline(rt *Runtime) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
-	return context.WithTimeout(context.Background(), timeout)
+	parent := context.Background()
+	if rt.Client != nil && rt.Client.Context != nil {
+		parent = rt.Client.Context
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func assetError(ctx context.Context, err error) error {

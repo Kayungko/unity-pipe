@@ -34,6 +34,19 @@
 
 > 📌 本仓库为**私有仓库**：下载安装包前需先获得仓库所有者的 GitHub 访问授权。
 
+## 无常驻 Editor 的 CI
+
+项目安装 Pipeline 包后，`upipe run` 可启动临时 batchmode Editor，执行一次命令或测试并退出。
+
+```text
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --timeout 5m --json -- exec my_command --set count=3
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --log-file editor-ci.log --timeout 10m --json -- test --mode all --nunit tests.xml
+```
+
+使用双横线分隔启动参数与 `exec` 或 `test` 参数。Editor 使用 `-batchmode -nographics`，项目内运行时依赖由 Unity 正常加载。`--log-file` 必须是新路径，省略时在项目的 `Logs` 目录创建独立日志。执行失败时，`error.data` 也会给出日志路径和执行阶段，已有测试结果放在 `error.data.result`。
+
+`--timeout` 覆盖启动与执行。取消或超时后回收本次启动的 Editor，已有 Editor 保持独立。写操作要在命令中显式保存。当前入口覆盖单个前台命令和等待终态的测试，支持 NUnit XML。构建、二进制管道和后台任务留给常驻 Editor 的原有入口。
+
 ## 快速开始
 
 ### 前置条件

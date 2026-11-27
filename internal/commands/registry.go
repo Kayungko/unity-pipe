@@ -35,6 +35,7 @@ func All() []SubCommand {
 		CommandsCommand(),
 		CommandHelp(),
 		ExecCommand(),
+		RunCommand(),
 		EvalCommand(),
 		EvalFileCommand(),
 		RecompileCommand(),

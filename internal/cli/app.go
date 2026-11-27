@@ -91,6 +91,9 @@ func Main(argv []string) int {
 			return render(&protocol.UpipeError{Code: protocol.ExitUsage, Kind: "Usage", Message: "--player-path is supported with status, commands, exec, help, job, and job-cancel"}, &subOpts)
 		}
 	}
+	if sub.Name == "run" && subOpts.ProjectPath == "" {
+		return render(&protocol.UpipeError{Code: protocol.ExitUsage, Kind: "Usage", Message: "run: --project-path is required"}, &subOpts)
+	}
 	if !sub.NoRuntime {
 		r, err := newRuntime(&subOpts)
 		if err != nil {

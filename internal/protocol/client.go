@@ -19,6 +19,7 @@ type DescriptorSource func() (*InstanceDescriptor, error)
 // all requests carry a freshly fetched descriptor so a mid-session domain
 // reload is followed transparently.
 type PipelineClient struct {
+	Context   context.Context // optional lifetime for temporary Editor runs
 	Transport Transport
 	Source    DescriptorSource
 	Sleep     SleepFunc // injectable; defaults to time.Sleep
@@ -40,6 +41,12 @@ func (c *PipelineClient) do(method, path string, body []byte, timeout time.Durat
 }
 
 func (c *PipelineClient) exchange(req Request, operation string) (Response, error) {
+	if c.Context != nil {
+		if err := c.Context.Err(); err != nil {
+			return Response{}, stoppedRequest(err)
+		}
+		req.Context = c.Context
+	}
 	d, err := c.Source()
 	if err != nil {
 		return Response{}, ErrNoInstance(err.Error())
@@ -49,6 +56,14 @@ func (c *PipelineClient) exchange(req Request, operation string) (Response, erro
 	resp, err := c.Transport.Do(req)
 	if err != nil {
 		var notSent *RequestNotSent
+		if c.Context != nil && c.Context.Err() != nil {
+			failure := stoppedRequest(c.Context.Err())
+			if operation != "" && !errors.As(err, &notSent) {
+				unknown := unknownOutcome(ExitConnectionLost, operation, failure.Message)
+				failure.Message, failure.Data = unknown.Message, unknown.Data
+			}
+			return Response{}, failure
+		}
 		if req.ReportTimeout && errors.Is(err, context.DeadlineExceeded) {
 			timeout := ErrTimeout("binary command request deadline exceeded")
 			timeout.Retryable = false
@@ -88,6 +103,15 @@ func (c *PipelineClient) exchange(req Request, operation string) (Response, erro
 			Data: json.RawMessage(resp.Body)}
 	}
 	return resp, nil
+}
+
+func stoppedRequest(err error) *UpipeError {
+	if err == context.DeadlineExceeded {
+		failure := ErrTimeout("the client deadline expired")
+		failure.Retryable = false
+		return failure
+	}
+	return ErrJobCancelled("the client stopped waiting for the Editor")
 }
 
 func replayableCommand(command string, detached bool) bool {
@@ -132,7 +156,12 @@ func (c *PipelineClient) getJSON(path string, out any, timeout time.Duration) er
 // Status returns GET /api/status as a raw JSON object (shape varies by
 // package version; kept generic on purpose).
 func (c *PipelineClient) Status() (json.RawMessage, error) {
-	resp, err := c.do(http.MethodGet, "/api/status", nil, 0)
+	return c.StatusWithin(0)
+}
+
+// StatusWithin limits a startup probe without changing other client timeouts.
+func (c *PipelineClient) StatusWithin(timeout time.Duration) (json.RawMessage, error) {
+	resp, err := c.do(http.MethodGet, "/api/status", nil, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -284,6 +313,7 @@ func (c *PipelineClient) Exec(command string, opts ExecOptions) (*ExecResponse, 
 	}
 	resp, err := c.exchange(Request{
 		Method: http.MethodPost, Path: "/api/exec", Body: raw, Timeout: roundTrip, ReportTimeout: opts.BinaryIO,
+		CloseConnection: c.Context != nil && command == "editor_quit",
 	}, operation)
 	if err != nil {
 		return nil, err
