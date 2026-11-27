@@ -8,6 +8,10 @@ using System.Linq;
 using System.Threading.Tasks;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
+
+// A preview-only host can have no scene reference to this assembly. Let UnityLinker
+// process its runtime initialization callback even when Pipeline networking is disabled.
+[assembly: UnityEngine.Scripting.AlwaysLinkAssembly]
 #endif
 
 namespace Unity.Pipeline.Preview

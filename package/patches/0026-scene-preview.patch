@@ -265,10 +265,10 @@ index 0000000..b4eb1fc
 +  assetBundleVariant: 
 diff --git a/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
 new file mode 100644
-index 0000000..590cd9f
+index 0000000..f14fcb6
 --- /dev/null
 +++ b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,229 @@
 +#if UNITY_EDITOR || (UPIPE_SCENE_PREVIEW && DEVELOPMENT_BUILD && UNITY_STANDALONE_WIN)
 +using System;
 +using System.IO;
@@ -279,6 +279,10 @@ index 0000000..590cd9f
 +using System.Threading.Tasks;
 +using UnityEngine.Rendering;
 +using UnityEngine.SceneManagement;
++
++// A preview-only host can have no scene reference to this assembly. Let UnityLinker
++// process its runtime initialization callback even when Pipeline networking is disabled.
++[assembly: UnityEngine.Scripting.AlwaysLinkAssembly]
 +#endif
 +
 +namespace Unity.Pipeline.Preview

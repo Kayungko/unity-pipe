@@ -396,10 +396,15 @@ func captureStderrCLI(t *testing.T, args ...string) (int, string) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	captured := make(chan []byte, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		captured <- out
+	}()
 	code := cli.Main(args)
 	os.Stderr = old
 	_ = w.Close()
-	out, _ := io.ReadAll(r)
+	out := <-captured
 	_ = r.Close()
 	return code, string(out)
 }
@@ -415,6 +420,7 @@ func TestTopLevelHelpShowsCommandTable(t *testing.T) {
 		"Commands:",
 		"eval-file",   // registry entry
 		"pkg-install", // registry entry
+		"preview",     // registry entry
 		"-project-path",
 	} {
 		if !strings.Contains(out, want) {
