@@ -43,7 +43,9 @@ namespace Unity.Pipeline.Editor.BuildProcessors
         public string GenerateAdditionalLinkXmlFile(BuildReport report, UnityLinkerBuildPipelineData data)
         {
             // The preview host uses the bundle manifest and has no runtime hot-reload server.
-            if (BuildCommand.IsBuildingPreviewPlayer || report == null || !report.summary.options.HasFlag(BuildOptions.Development))
+            if (BuildCommand.IsBuildingPreviewPlayer)
+                return ScenePreviewCommand.GenerateImageLinkXml();
+            if (report == null || !report.summary.options.HasFlag(BuildOptions.Development))
                 return string.Empty;
 
             // The managed assemblies staged for this player build — the universe for the wholesale

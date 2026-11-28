@@ -29,8 +29,12 @@ namespace Unity.Pipeline.Preview
         public string projectGuid;
         public string asset;
         public string replacementKind;
+        public bool imageReplacement;
         public string bundle;
         public string[] dependencies;
+
+        // UGUI remains optional in projects that only use the Renderer or Prefab preview.
+        internal static Type FindImageType() => Type.GetType("UnityEngine.UI.Image, UnityEngine.UI");
 
         public static PreviewPackage Read(string directory)
         {
@@ -101,10 +105,11 @@ namespace Unity.Pipeline.Preview
             var slot = 0;
             if (node != null && !int.TryParse(args[index + 6], out slot))
                 slot = -1;
-            _ = Run(args[index + 1], args[index + 2], width, height, node, slot);
+            var image = args.Length > index + 7 && args[index + 7] == "image";
+            _ = Run(args[index + 1], args[index + 2], width, height, node, slot, image);
         }
 
-        private static async Task Run(string directory, string output, int width, int height, string node, int slot)
+        private static async Task Run(string directory, string output, int width, int height, string node, int slot, bool image)
         {
             Result result = node == null ? new Result() : new ReplacementResult();
             result.stage = "validate";
@@ -134,7 +139,7 @@ namespace Unity.Pipeline.Preview
                 var root = await LoadBundle(directory, package.bundle, bundles);
                 if (node != null)
                 {
-                    await RenderReplacement(host, root, package, node, slot, output, (ReplacementResult)result);
+                    await RenderReplacement(host, root, package, node, slot, output, (ReplacementResult)result, image);
                 }
                 else
                 {
@@ -233,7 +238,7 @@ namespace Unity.Pipeline.Preview
         }
 
         private static async Task RenderReplacement(Scene host, AssetBundle bundle, PreviewPackage package, string node,
-            int slot, string output, ReplacementResult result)
+            int slot, string output, ReplacementResult result, bool image)
         {
             result.renderMode = "sceneReplacement";
             result.node = node;
@@ -246,12 +251,13 @@ namespace Unity.Pipeline.Preview
             var target = FindNode(host, node);
             if (!target.activeInHierarchy)
                 throw new InvalidOperationException("Target node is inactive: " + node);
-            var cameras = Camera.allCameras.Where(camera => camera.gameObject.scene == host).ToArray();
-            var main = cameras.Where(camera => camera.CompareTag("MainCamera")).ToArray();
-            var candidates = main.Length > 0 ? main : cameras;
-            if (candidates.Length != 1)
-                throw new InvalidOperationException("The host scene needs one enabled MainCamera or one enabled camera");
-            var camera = candidates[0];
+            if (image)
+            {
+                result.stage = "replacement";
+                await RenderImageReplacement(host, target, bundle, package, output, result);
+                return;
+            }
+            var camera = FindHostCamera(host);
             result.stage = "replacement";
             if (package.replacementKind == "sprite")
             {
@@ -261,13 +267,8 @@ namespace Unity.Pipeline.Preview
                 if (renderers.Length != 1 || !renderers[0].enabled)
                     throw new InvalidOperationException("Target node needs exactly one enabled SpriteRenderer");
                 var renderer = renderers[0];
-                var load = bundle.LoadAssetWithSubAssetsAsync<Sprite>(package.asset);
-                await Wait(load);
-                var sprites = load.allAssets.OfType<Sprite>().ToArray();
-                if (sprites.Length != 1)
-                    throw new InvalidDataException("Expected exactly one Sprite in the preview bundle");
+                var replacement = await LoadReplacementSprite(bundle, package.asset);
                 var original = renderer.sprite;
-                var replacement = sprites[0];
                 result.component = nameof(SpriteRenderer);
                 result.beforeAsset = original != null ? original.name : null;
                 result.afterAsset = replacement.name;
@@ -298,6 +299,88 @@ namespace Unity.Pipeline.Preview
             else
             {
                 throw new InvalidDataException("Unknown replacement kind in the preview bundle");
+            }
+        }
+
+        private static async Task<Sprite> LoadReplacementSprite(AssetBundle bundle, string asset)
+        {
+            var load = bundle.LoadAssetWithSubAssetsAsync<Sprite>(asset);
+            await Wait(load);
+            var sprites = load.allAssets.OfType<Sprite>().ToArray();
+            if (sprites.Length != 1)
+                throw new InvalidDataException("Expected exactly one Sprite in the preview bundle");
+            return sprites[0];
+        }
+
+        private static Camera FindHostCamera(Scene host)
+        {
+            var cameras = Camera.allCameras.Where(camera => camera.gameObject.scene == host).ToArray();
+            var main = cameras.Where(camera => camera.CompareTag("MainCamera")).ToArray();
+            var candidates = main.Length > 0 ? main : cameras;
+            if (candidates.Length != 1)
+                throw new InvalidOperationException("The host scene needs one enabled MainCamera or one enabled camera");
+            return candidates[0];
+        }
+
+        private static async Task RenderImageReplacement(Scene host, GameObject target, AssetBundle bundle,
+            PreviewPackage package, string output, ReplacementResult result)
+        {
+            var imageType = PreviewPackage.FindImageType();
+            if (imageType == null)
+                throw new InvalidOperationException("UGUI Image is unavailable in this preview Player");
+            var images = target.GetComponents(imageType);
+            if (images.Length != 1 || !(images[0] is Behaviour image) || !image.isActiveAndEnabled)
+                throw new InvalidOperationException("Target node needs exactly one enabled UGUI Image");
+            var canvas = image.GetComponentInParent<Canvas>()?.rootCanvas;
+            if (canvas == null || !canvas.isActiveAndEnabled)
+                throw new InvalidOperationException("The UGUI Image needs an enabled root Canvas");
+            var camera = canvas.renderMode == RenderMode.ScreenSpaceCamera ? canvas.worldCamera : FindHostCamera(host);
+            if (camera == null || !camera.isActiveAndEnabled || camera.gameObject.scene != host)
+                throw new InvalidOperationException("The UGUI Canvas needs an enabled camera in the host scene");
+
+            if (package.replacementKind != "sprite")
+                throw new InvalidDataException("UGUI Image preview requires a Sprite bundle");
+            var replacement = await LoadReplacementSprite(bundle, package.asset);
+            var property = imageType.GetProperty("overrideSprite");
+            var original = (Sprite)property.GetValue(image);
+            // overrideSprite reads the effective sprite even when there is no override.
+            var baseSprite = (Sprite)imageType.GetProperty("sprite").GetValue(image);
+            var restore = original == baseSprite ? null : original;
+            result.component = "Image";
+            result.beforeAsset = original != null ? original.name : null;
+            result.afterAsset = replacement.name;
+            CaptureImageReplacement(host, camera, output, result,
+                () => property.SetValue(image, replacement), () => property.SetValue(image, restore));
+        }
+
+        private static void CaptureImageReplacement(Scene host, Camera camera, string output, ReplacementResult result,
+            Action replace, Action restore)
+        {
+            var overlays = UnityEngine.Object.FindObjectsOfType<Canvas>()
+                .Where(canvas => canvas.isActiveAndEnabled && canvas.isRootCanvas && canvas.gameObject.scene == host &&
+                    canvas.renderMode == RenderMode.ScreenSpaceOverlay && canvas.targetDisplay == camera.targetDisplay)
+                .Select(canvas => (canvas, canvas.worldCamera, canvas.planeDistance)).ToArray();
+            try
+            {
+                // Screen-space Overlay is composed after camera rendering. Use the same temporary
+                // camera binding for both captures so the selected display's UI stays in the shot.
+                foreach (var overlay in overlays)
+                {
+                    overlay.canvas.renderMode = RenderMode.ScreenSpaceCamera;
+                    overlay.canvas.worldCamera = camera;
+                    overlay.canvas.planeDistance = camera.nearClipPlane +
+                        Mathf.Min(0.01f, (camera.farClipPlane - camera.nearClipPlane) * 0.5f);
+                }
+                CaptureReplacement(camera, output, result, replace, restore);
+            }
+            finally
+            {
+                foreach (var overlay in overlays)
+                {
+                    overlay.canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                    overlay.canvas.worldCamera = overlay.worldCamera;
+                    overlay.canvas.planeDistance = overlay.planeDistance;
+                }
             }
         }
 

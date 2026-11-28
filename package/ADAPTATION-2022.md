@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本为 **0.6.0-2022.24**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
+本仓库 vendored 版本为 **0.6.0-2022.25**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
@@ -36,6 +36,7 @@
 | 屏幕空间 Canvas 预览 | `patches/0027-canvas-preview.patch` | 专用 Player 中渲染 UI Prefab，支持横竖屏 PNG | 回归 Overlay、Camera、嵌套 Canvas、错误回传及 3D 默认预览 |
 | World Space Canvas 预览 | `patches/0028-world-canvas-preview.patch` | 按画布世界坐标和预览宽高比取景 | 复测旋转、缩放、多个独立画布和零面积失败回传 |
 | 场景替换预览 | `patches/0029-scene-replacement-preview.patch` | 运行时替换 SpriteRenderer 或 Renderer 材质槽并同帧截图 | 验证 Built-in 场景、目标与周边像素、序列化资产哈希和进程回收 |
+| UGUI Image 替换预览 | `patches/0030-ugui-image-preview.patch` | 为专用 Player 保留可选 UGUI 替换入口，复用场景预览和同帧截图 | 验证 Overlay、Camera Canvas、遮罩和九宫格，以及未安装 UGUI 工程的编译 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

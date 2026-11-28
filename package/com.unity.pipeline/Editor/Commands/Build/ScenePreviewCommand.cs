@@ -119,6 +119,27 @@ namespace Unity.Pipeline.Editor.Commands.Build
                 throw new FileNotFoundException("The Unity AssetBundle build manifest is missing", manifest);
             return manifest;
         }
+
+        internal static void WritePlayerMetadata(string manifest, string outputPath)
+        {
+            var package = PreviewPackage.Read(Path.GetDirectoryName(manifest));
+            package.imageReplacement = PreviewPackage.FindImageType() != null;
+            using var output = new FileStream(outputPath + ".scene-preview.json", FileMode.CreateNew);
+            using var writer = new StreamWriter(output);
+            writer.Write(JsonUtility.ToJson(package));
+        }
+
+        internal static string GenerateImageLinkXml()
+        {
+            if (PreviewPackage.FindImageType() == null)
+                return string.Empty;
+            var path = Path.GetFullPath(FileUtil.GetUniqueTempPathInProject() + "-preview-ui.link.xml");
+            File.WriteAllText(path,
+                "<linker><assembly fullname=\"UnityEngine.UI\" ignoreIfMissing=\"1\">" +
+                "<type fullname=\"UnityEngine.UI.Image\"><property name=\"sprite\" accessors=\"get\" />" +
+                "<property name=\"overrideSprite\" /></type></assembly></linker>");
+            return path;
+        }
     }
 }
 #endif

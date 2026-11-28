@@ -415,8 +415,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
             }
             if (previewManifest != null && report.summary.result == BuildResult.Succeeded)
             {
-                var metadata = Path.Combine(Path.GetDirectoryName(previewManifest), PreviewPackage.FileName);
-                File.Copy(metadata, outputPath + ".scene-preview.json", false);
+                ScenePreviewCommand.WritePlayerMetadata(previewManifest, outputPath);
             }
             WriteStatusJson(Project(buildId, report));
         }

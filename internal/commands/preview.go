@@ -47,17 +47,19 @@ func previewPackCommand() SubCommand {
 }
 
 type previewMetadata struct {
-	Schema          int    `json:"schema"`
-	Target          string `json:"target"`
-	UnityVersion    string `json:"unityVersion"`
-	ProjectGUID     string `json:"projectGuid"`
-	ReplacementKind string `json:"replacementKind"`
+	Schema           int    `json:"schema"`
+	Target           string `json:"target"`
+	UnityVersion     string `json:"unityVersion"`
+	ProjectGUID      string `json:"projectGuid"`
+	ReplacementKind  string `json:"replacementKind"`
+	ImageReplacement bool   `json:"imageReplacement"`
 }
 
 type previewReplacement struct {
 	Node         string
 	BeforePath   string
 	MaterialSlot int
+	Image        bool
 }
 
 type previewResult struct {
@@ -82,6 +84,7 @@ func PreviewCommand() SubCommand {
 			node := fs.String("node", "", "absolute scene hierarchy path for replacement (e.g. /Stage/Target)")
 			before := fs.String("before-path", "", "new PNG path for the scene before replacement")
 			slot := fs.Int("material-slot", 0, "zero-based Renderer material slot")
+			component := fs.String("component", "", "use image to target a UGUI Image")
 			width := fs.Int("width", 768, "PNG width in pixels (64–4096)")
 			height := fs.Int("height", 768, "PNG height in pixels (64–4096)")
 			log := fs.String("log-file", "", "new Player log path (default: <output-path>.player.log)")
@@ -101,7 +104,10 @@ func PreviewCommand() SubCommand {
 				(*node != "" && (!strings.HasPrefix(*node, "/") || strings.HasSuffix(*node, "/") || strings.Contains(*node, "//"))) {
 				return nil, usageErr("preview: use an absolute --node with --before-path and a nonnegative material slot")
 			}
-			replacement := previewReplacement{Node: *node, BeforePath: *before, MaterialSlot: *slot}
+			if *component != "" && (*component != "image" || *node == "" || *slot != 0) {
+				return nil, usageErr("preview: --component image requires --node and does not use a material slot")
+			}
+			replacement := previewReplacement{Node: *node, BeforePath: *before, MaterialSlot: *slot, Image: *component == "image"}
 			return renderPreview(*executable, *bundle, *image, *log, *width, *height, rt.Opts.Timeout, replacement)
 		},
 	}
@@ -149,6 +155,9 @@ func renderPreview(executable, bundle, image, log string, width, height int, bud
 	}
 	if host.Target != pack.Target || host.UnityVersion != pack.UnityVersion || host.ProjectGUID != pack.ProjectGUID {
 		return failed("preview Player and package differ in target, Unity version or project")
+	}
+	if replacement.Image && !host.ImageReplacement {
+		return failed("preview Player does not advertise UGUI Image replacement; build it with UGUI and the current Pipeline package")
 	}
 	if (pack.ReplacementKind == "") != (replacement.Node == "") {
 		return failed("a scene replacement requires a Sprite or Material bundle and a target node")
@@ -208,6 +217,9 @@ func renderPreview(executable, bundle, image, log string, width, height int, bud
 		"-upipe-scene-preview", bundle, staging, imageWidth, imageHeight}
 	if replacement.Node != "" {
 		playerArgs = append(playerArgs, replacement.Node, strconv.Itoa(replacement.MaterialSlot))
+		if replacement.Image {
+			playerArgs = append(playerArgs, "image")
+		}
 	}
 	cmd := exec.Command(executable, playerArgs...)
 	cmd.Dir = staging
@@ -253,6 +265,7 @@ func renderPreview(executable, bundle, image, log string, width, height int, bud
 		Stage           string `json:"stage"`
 		Node            string `json:"node"`
 		ReplacementKind string `json:"replacementKind"`
+		Component       string `json:"component"`
 	}
 	if readErr != nil || json.Unmarshal(data, &receipt) != nil || receipt.Stage == "" {
 		return failed("preview Player exited without a valid result; check the Player log")
@@ -264,7 +277,8 @@ func renderPreview(executable, bundle, image, log string, width, height int, bud
 	if err != nil || code != 0 || receipt.Stage != "completed" {
 		return failed("preview Player did not complete cleanly")
 	}
-	if receipt.Node != replacement.Node || receipt.ReplacementKind != pack.ReplacementKind {
+	if receipt.Node != replacement.Node || receipt.ReplacementKind != pack.ReplacementKind ||
+		(replacement.Image && receipt.Component != "Image") {
 		return failed("preview result differs from the requested replacement; rebuild the preview Player")
 	}
 	out.Stage = "output"
