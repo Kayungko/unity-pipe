@@ -84,6 +84,10 @@ upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI
 
 Camera Canvas 使用其配置的场景相机。预览会临时把该显示器上的 Overlay Canvas 绑定到捕获相机，让前后截图使用同一套布局和遮罩，随后恢复 Canvas 设置。使用支持 UGUI 遮罩的材质时，九宫格、Stencil Mask 和 RectMask2D 由 UGUI 绘制。
 
+### URP 14 场景替换
+
+URP 14 工程可沿用 SpriteRenderer 和 Renderer 材质槽的场景替换命令。场景须有一个启用的 Base 相机，或用 `MainCamera` 标签选定一个 Base 相机。截图使用该相机和它的 Overlay 堆栈，结果回传 `renderPipeline` 与 `camera`。Prefab 与 UGUI Image 预览的支持范围是 Built-in。
+
 ## 快速开始
 
 ### 前置条件

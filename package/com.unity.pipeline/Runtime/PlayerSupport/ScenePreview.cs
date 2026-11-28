@@ -74,7 +74,7 @@ namespace Unity.Pipeline.Preview
         }
 
         [Serializable]
-        private sealed class ReplacementResult : Result
+        private class ReplacementResult : Result
         {
             public string scene;
             public string node;
@@ -85,6 +85,13 @@ namespace Unity.Pipeline.Preview
             public int materialSlot;
             public int beforeFrame;
             public int afterFrame;
+        }
+
+        [Serializable]
+        private sealed class UrpReplacementResult : ReplacementResult
+        {
+            public string renderPipeline = "URP";
+            public string camera;
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -111,7 +118,10 @@ namespace Unity.Pipeline.Preview
 
         private static async Task Run(string directory, string output, int width, int height, string node, int slot, bool image)
         {
-            Result result = node == null ? new Result() : new ReplacementResult();
+            var pipeline = GraphicsSettings.currentRenderPipeline;
+            var urp = pipeline != null &&
+                pipeline.GetType().FullName == "UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset";
+            Result result = node == null ? new Result() : urp ? new UrpReplacementResult() : new ReplacementResult();
             result.stage = "validate";
             result.graphicsDevice = SystemInfo.graphicsDeviceType.ToString();
             result.width = width;
@@ -126,8 +136,12 @@ namespace Unity.Pipeline.Preview
                 result.asset = package.asset;
                 if (package.target != PreviewPackage.WindowsTarget || package.unityVersion != Application.unityVersion)
                     throw new InvalidDataException("Preview package target or Unity version does not match this Player");
-                if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || GraphicsSettings.currentRenderPipeline != null)
-                    throw new InvalidOperationException("Scene Preview requires the Built-in Render Pipeline and a graphics device");
+                if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                    throw new InvalidOperationException("Scene Preview requires a graphics device");
+                if (pipeline != null && !urp)
+                    throw new InvalidOperationException("Scene Preview requires the Built-in Render Pipeline or URP");
+                if (urp && (node == null || image))
+                    throw new InvalidOperationException("URP preview supports scene SpriteRenderer and Renderer replacements. Prefab and UGUI Image preview require the Built-in Render Pipeline.");
                 if (string.IsNullOrEmpty(package.replacementKind) != (node == null))
                     throw new ArgumentException("A scene replacement requires a Sprite or Material bundle and a target node");
 
@@ -257,7 +271,10 @@ namespace Unity.Pipeline.Preview
                 await RenderImageReplacement(host, target, bundle, package, output, result);
                 return;
             }
-            var camera = FindHostCamera(host);
+            var urp = result as UrpReplacementResult;
+            var camera = FindHostCamera(host, urp != null);
+            if (urp != null)
+                urp.camera = camera.name;
             result.stage = "replacement";
             if (package.replacementKind == "sprite")
             {
@@ -318,14 +335,32 @@ namespace Unity.Pipeline.Preview
             return material;
         }
 
-        private static Camera FindHostCamera(Scene host)
+        private static Camera FindHostCamera(Scene host, bool urp = false)
         {
-            var cameras = Camera.allCameras.Where(camera => camera.gameObject.scene == host).ToArray();
+            var hostCameras = Camera.allCameras.Where(camera => camera.gameObject.scene == host);
+            var cameras = urp ? FindUrpBaseCameras(hostCameras) : hostCameras.ToArray();
             var main = cameras.Where(camera => camera.CompareTag("MainCamera")).ToArray();
             var candidates = main.Length > 0 ? main : cameras;
             if (candidates.Length != 1)
-                throw new InvalidOperationException("The host scene needs one enabled MainCamera or one enabled camera");
+                throw new InvalidOperationException(urp
+                    ? "The host scene needs one enabled URP Base camera tagged MainCamera or exactly one enabled Base camera"
+                    : "The host scene needs one enabled MainCamera or one enabled camera");
             return candidates[0];
+        }
+
+        private static Camera[] FindUrpBaseCameras(IEnumerable<Camera> cameras)
+        {
+            var cameraDataType = Type.GetType(
+                "UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime");
+            var renderType = cameraDataType?.GetProperty("renderType");
+            if (renderType == null)
+                throw new InvalidOperationException("Could not determine the URP camera render type in this Player");
+            return cameras.Where(camera =>
+            {
+                // URP treats a camera without additional camera data as a Base camera.
+                var data = camera.GetComponent(cameraDataType);
+                return data == null || renderType.GetValue(data)?.ToString() == "Base";
+            }).ToArray();
         }
 
         private static async Task RenderImageReplacement(Scene host, GameObject target, AssetBundle bundle,
@@ -430,13 +465,14 @@ namespace Unity.Pipeline.Preview
         {
             result.stage = "render";
             result.beforeFrame = Time.frameCount;
-            var before = Capture(camera, result.width, result.height);
+            var urp = result is UrpReplacementResult;
+            var before = Capture(camera, result.width, result.height, urp);
             byte[] after;
             try
             {
                 replace();
                 result.afterFrame = Time.frameCount;
-                after = Capture(camera, result.width, result.height);
+                after = Capture(camera, result.width, result.height, urp);
             }
             finally
             {
@@ -524,7 +560,7 @@ namespace Unity.Pipeline.Preview
             return count;
         }
 
-        private static byte[] Capture(Camera camera, int width, int height)
+        private static byte[] Capture(Camera camera, int width, int height, bool urp = false)
         {
             var target = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
             var previous = RenderTexture.active;
@@ -532,9 +568,19 @@ namespace Unity.Pipeline.Preview
             var pixels = new Texture2D(width, height, TextureFormat.RGB24, false);
             try
             {
-                camera.targetTexture = target;
-                Canvas.ForceUpdateCanvases();
-                camera.Render();
+                if (urp)
+                {
+                    var request = new RenderPipeline.StandardRequest { destination = target };
+                    if (!RenderPipeline.SupportsRenderRequest(camera, request))
+                        throw new InvalidOperationException("The URP Base camera does not support a full camera stack render request");
+                    RenderPipeline.SubmitRenderRequest(camera, request);
+                }
+                else
+                {
+                    camera.targetTexture = target;
+                    Canvas.ForceUpdateCanvases();
+                    camera.Render();
+                }
                 RenderTexture.active = target;
                 pixels.ReadPixels(new Rect(0, 0, width, height), 0, 0);
                 return ImageConversion.EncodeToPNG(pixels);
