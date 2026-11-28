@@ -92,17 +92,21 @@ namespace Unity.Pipeline.HotReload
         {
             var tree = CSharpSyntaxTree.ParseText(source,
                 RoslynCompilationService.ProjectParseOptions(preprocessorSymbols));
+            classDecl = tree.GetRoot().DescendantNodes()
+                .OfType<ClassDeclarationSyntax>()
+                .FirstOrDefault(c => c.Identifier.ValueText == typeName);
+            return BuildSemanticModel(tree);
+        }
+
+        internal static SemanticModel BuildSemanticModel(SyntaxTree tree)
+        {
             var compilation = CSharpCompilation.Create(
                 "HotReloadInPlaceTransform",
                 new[] { tree },
                 RoslynCompilationService.GetMetadataReferences(),
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                     .WithMetadataImportOptions(MetadataImportOptions.All));
-            var model = compilation.GetSemanticModel(tree);
-            classDecl = tree.GetRoot().DescendantNodes()
-                .OfType<ClassDeclarationSyntax>()
-                .FirstOrDefault(c => c.Identifier.ValueText == typeName);
-            return model;
+            return compilation.GetSemanticModel(tree);
         }
 
         /// <summary>
@@ -159,7 +163,7 @@ namespace Unity.Pipeline.HotReload
                 sb.AppendLine($"public static class {originalTypeName}HotReloadOverrides");
                 sb.AppendLine("{");
 
-                foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
+                foreach (var method in GetDeclaredMethods(classDecl))
                 {
                     var methodName = method.Identifier.ValueText;
                     var isOverride = methodBodies.ContainsKey(methodName) && method.Body != null;
@@ -233,14 +237,75 @@ namespace Unity.Pipeline.HotReload
             }
         }
 
+        internal static IEnumerable<MethodDeclarationSyntax> GetDeclaredMethods(ClassDeclarationSyntax declaration)
+        {
+            if (!declaration.Modifiers.Any(SyntaxKind.PartialKeyword) ||
+                declaration.Ancestors().OfType<TypeDeclarationSyntax>().Any())
+                return declaration.Members.OfType<MethodDeclarationSyntax>();
+
+            var namespaceName = GetNamespace(declaration);
+            var arity = declaration.TypeParameterList?.Parameters.Count ?? 0;
+            return declaration.SyntaxTree.GetRoot().DescendantNodes()
+                .OfType<ClassDeclarationSyntax>()
+                .Where(part => part.Identifier.ValueText == declaration.Identifier.ValueText &&
+                    part.Modifiers.Any(SyntaxKind.PartialKeyword) &&
+                    (part.TypeParameterList?.Parameters.Count ?? 0) == arity &&
+                    !part.Ancestors().OfType<TypeDeclarationSyntax>().Any() &&
+                    GetNamespace(part) == namespaceName)
+                .SelectMany(part => part.Members.OfType<MethodDeclarationSyntax>());
+        }
+
         private static string GetNamespace(SyntaxNode node)
         {
-            for (var current = node.Parent; current != null; current = current.Parent)
+            return string.Join(".", node.Ancestors().OfType<NamespaceDeclarationSyntax>()
+                .Reverse().Select(ns => string.Concat(ns.Name.DescendantTokens().Select(token => token.ValueText))));
+        }
+
+        internal static string FindChangedSignature(SemanticModel model, ClassDeclarationSyntax declaration)
+        {
+            var compiledType = FindCompiledType(model.Compilation, model.GetDeclaredSymbol(declaration));
+            if (compiledType == null)
+                return null;
+
+            foreach (var method in GetDeclaredMethods(declaration).Where(InPlaceReloadProcessor.HasHotReloadAttribute))
             {
-                if (current is NamespaceDeclarationSyntax ns)
-                    return ns.Name.ToString();
+                var source = model.GetDeclaredSymbol(method);
+                if (source == null)
+                    continue;
+                var candidates = compiledType.GetMembers(source.Name).OfType<IMethodSymbol>().ToList();
+                if (candidates.Count > 0 && !candidates.Any(compiled => MatchesSignature(source, compiled)))
+                    return source.Name;
             }
+
             return null;
+        }
+
+        private static bool MatchesSignature(IMethodSymbol source, IMethodSymbol compiled)
+        {
+            if (source.IsStatic != compiled.IsStatic || source.Arity != compiled.Arity ||
+                source.ReturnsByRef != compiled.ReturnsByRef ||
+                source.ReturnsByRefReadonly != compiled.ReturnsByRefReadonly ||
+                source.Parameters.Length != compiled.Parameters.Length ||
+                !SameType(source.ReturnType, compiled.ReturnType))
+                return false;
+
+            for (var i = 0; i < source.Parameters.Length; i++)
+            {
+                var parameter = source.Parameters[i];
+                var original = compiled.Parameters[i];
+                if (parameter.RefKind != original.RefKind || !SameType(parameter.Type, original.Type))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static bool SameType(ITypeSymbol source, ITypeSymbol compiled)
+        {
+            // The type being edited exists as a source symbol and a distinct metadata symbol.
+            return SymbolEqualityComparer.Default.Equals(source, compiled) ||
+                source.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ==
+                compiled.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
         }
 
         /// <summary>
@@ -259,7 +324,7 @@ namespace Unity.Pipeline.HotReload
             if (compiledType == null && !wholeTypeIsNew)
                 return result;
 
-            foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
+            foreach (var method in GetDeclaredMethods(classDecl))
             {
                 if (method.Body == null && method.ExpressionBody == null)
                     continue;

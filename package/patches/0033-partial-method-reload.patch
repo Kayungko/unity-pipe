@@ -1,0 +1,247 @@
+diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
+index 10f3c6c..b11da79 100644
+--- a/com.unity.pipeline/CHANGELOG.md
++++ b/com.unity.pipeline/CHANGELOG.md
+@@ -5,7 +5,11 @@ All notable changes to this package will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+ 
+-## [0.6.0-2022.27] - Local candidate
++## [0.6.0-2022.28] - Local candidate
++
++- Reload tagged methods in any same-file declaration of a partial class. Reject signature changes against the Editor's compiled project before applying local overrides or pushing to a Player.
++
++## [0.6.0-2022.27] - 2026-11-28
+ 
+ - Capture scene SpriteRenderer and Renderer replacements in URP using a Base camera render request, including its Overlay stack.
+ 
+diff --git a/com.unity.pipeline/Documentation~/hot-reload.md b/com.unity.pipeline/Documentation~/hot-reload.md
+index db4558e..46dc19f 100644
+--- a/com.unity.pipeline/Documentation~/hot-reload.md
++++ b/com.unity.pipeline/Documentation~/hot-reload.md
+@@ -167,6 +167,8 @@ The workflow: start the watch, enter Play Mode, edit `[HotReload]` bodies, save.
+ 
+ - **Auto-refresh is off while watching**, so a save hot-reloads instead of triggering a domain reload. Other assets won't import until you refresh manually (Cmd/Ctrl+R). **Stop Watching** restores your setting.
+ - Only methods that **changed since the watch started** reload; untouched ones keep running compiled.
++- A source file may contain multiple declarations of the same top-level partial class. Method Reload considers tagged methods in all those declarations. Reload each source file separately when a partial class spans files.
++- The Editor compares tagged method signatures with its compiled project before applying or pushing overrides. Recompile scripts for signature edits and rebuild the target Player from the matching project before pushing again.
+ - The watch **survives domain reloads**, re-applies overrides that a Play-Mode reload wiped, and re-pushes state to a player that reconnects (a restarted player boots the original code) — governed by the **Re-push On Connect** setting.
+ - The inspector shows liveness: watcher event count, last apply, and the resolved target. Compile errors and binding warnings land in the Console.
+ 
+diff --git a/com.unity.pipeline/Runtime/HotReload/AccessibilityValidator.cs b/com.unity.pipeline/Runtime/HotReload/AccessibilityValidator.cs
+index ae1b2ee..bddbb97 100644
+--- a/com.unity.pipeline/Runtime/HotReload/AccessibilityValidator.cs
++++ b/com.unity.pipeline/Runtime/HotReload/AccessibilityValidator.cs
+@@ -51,7 +51,7 @@ namespace Unity.Pipeline.HotReload
+             {
+                 var classSymbol = model.GetDeclaredSymbol(classDecl);
+ 
+-                foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
++                foreach (var method in SourceCodeTransformer.GetDeclaredMethods(classDecl))
+                 {
+                     var methodName = method.Identifier.ValueText;
+                     if (!methodBodies.ContainsKey(methodName) || method.Body == null)
+diff --git a/com.unity.pipeline/Runtime/HotReload/InPlaceReloadProcessor.cs b/com.unity.pipeline/Runtime/HotReload/InPlaceReloadProcessor.cs
+index f7b9b6b..e355ff6 100644
+--- a/com.unity.pipeline/Runtime/HotReload/InPlaceReloadProcessor.cs
++++ b/com.unity.pipeline/Runtime/HotReload/InPlaceReloadProcessor.cs
+@@ -203,11 +203,13 @@ namespace Unity.Pipeline.HotReload
+ 
+             // Build one compilation + semantic model for the transform, so Roslyn's metadata bind
+             // is paid once per reload (shared with the string TransformMethodBodies overload).
+-            var model = SourceCodeTransformer.BuildSemanticModel(
+-                sourceCode, extraction.TypeName, out var classDecl, preprocessorSymbols);
+-            if (classDecl == null)
++            var classDecl = extraction.Declaration;
++            var model = SourceCodeTransformer.BuildSemanticModel(classDecl.SyntaxTree);
++            var signatureChange = SourceCodeTransformer.FindChangedSignature(model, classDecl);
++            if (signatureChange != null)
+             {
+-                prep.Error = $"Could not find class '{extraction.TypeName}' in source.";
++                prep.Error = $"Signature changed for '{extraction.TypeName}.{signatureChange}'. " +
++                    "Recompile the Editor scripts or rebuild the Player before reloading this method.";
+                 return prep;
+             }
+ 
+@@ -381,7 +383,9 @@ namespace Unity.Pipeline.HotReload
+                     return result;
+                 }
+ 
++                result.Declaration = classDeclaration;
+                 result.TypeName = classDeclaration.Identifier.ValueText;
++                var declaredMethods = SourceCodeTransformer.GetDeclaredMethods(classDeclaration).ToList();
+ 
+                 // The transform lifts bodies into ONE override class for the top-level type chosen
+                 // above. Tagged methods anywhere else in the file — in a NESTED type (which the
+@@ -393,7 +397,7 @@ namespace Unity.Pipeline.HotReload
+                              .OfType<MethodDeclarationSyntax>().Where(HasHotReloadAttribute))
+                 {
+                     var owner = method.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
+-                    if (owner == null || owner == classDeclaration)
++                    if (owner == null || declaredMethods.Contains(method))
+                         continue;
+                     var ownerChain = string.Join(".", method.Ancestors()
+                         .OfType<TypeDeclarationSyntax>().Reverse().Select(t => t.Identifier.ValueText));
+@@ -404,9 +408,7 @@ namespace Unity.Pipeline.HotReload
+                           $"type with [HotReload] methods, '{result.TypeName}', is reloaded per file; split the file)");
+                 }
+ 
+-                var hotReloadableMethods = classDeclaration.Members
+-                    .OfType<MethodDeclarationSyntax>()
+-                    .Where(HasHotReloadAttribute);
++                var hotReloadableMethods = declaredMethods.Where(HasHotReloadAttribute);
+ 
+                 foreach (var method in hotReloadableMethods)
+                 {
+@@ -582,6 +584,8 @@ namespace Unity.Pipeline.HotReload
+         /// </summary>
+         private class HotReloadableExtractionResult
+         {
++            public ClassDeclarationSyntax Declaration { get; set; }
++
+             /// <summary>
+             /// Name of the class containing [HotReloadWithOverrides] methods.
+             /// </summary>
+diff --git a/com.unity.pipeline/Runtime/HotReload/SourceCodeTransformer.cs b/com.unity.pipeline/Runtime/HotReload/SourceCodeTransformer.cs
+index a1f9705..35e7f3e 100644
+--- a/com.unity.pipeline/Runtime/HotReload/SourceCodeTransformer.cs
++++ b/com.unity.pipeline/Runtime/HotReload/SourceCodeTransformer.cs
+@@ -92,17 +92,21 @@ namespace Unity.Pipeline.HotReload
+         {
+             var tree = CSharpSyntaxTree.ParseText(source,
+                 RoslynCompilationService.ProjectParseOptions(preprocessorSymbols));
++            classDecl = tree.GetRoot().DescendantNodes()
++                .OfType<ClassDeclarationSyntax>()
++                .FirstOrDefault(c => c.Identifier.ValueText == typeName);
++            return BuildSemanticModel(tree);
++        }
++
++        internal static SemanticModel BuildSemanticModel(SyntaxTree tree)
++        {
+             var compilation = CSharpCompilation.Create(
+                 "HotReloadInPlaceTransform",
+                 new[] { tree },
+                 RoslynCompilationService.GetMetadataReferences(),
+                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                     .WithMetadataImportOptions(MetadataImportOptions.All));
+-            var model = compilation.GetSemanticModel(tree);
+-            classDecl = tree.GetRoot().DescendantNodes()
+-                .OfType<ClassDeclarationSyntax>()
+-                .FirstOrDefault(c => c.Identifier.ValueText == typeName);
+-            return model;
++            return compilation.GetSemanticModel(tree);
+         }
+ 
+         /// <summary>
+@@ -159,7 +163,7 @@ namespace Unity.Pipeline.HotReload
+                 sb.AppendLine($"public static class {originalTypeName}HotReloadOverrides");
+                 sb.AppendLine("{");
+ 
+-                foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
++                foreach (var method in GetDeclaredMethods(classDecl))
+                 {
+                     var methodName = method.Identifier.ValueText;
+                     var isOverride = methodBodies.ContainsKey(methodName) && method.Body != null;
+@@ -233,16 +237,77 @@ namespace Unity.Pipeline.HotReload
+             }
+         }
+ 
++        internal static IEnumerable<MethodDeclarationSyntax> GetDeclaredMethods(ClassDeclarationSyntax declaration)
++        {
++            if (!declaration.Modifiers.Any(SyntaxKind.PartialKeyword) ||
++                declaration.Ancestors().OfType<TypeDeclarationSyntax>().Any())
++                return declaration.Members.OfType<MethodDeclarationSyntax>();
++
++            var namespaceName = GetNamespace(declaration);
++            var arity = declaration.TypeParameterList?.Parameters.Count ?? 0;
++            return declaration.SyntaxTree.GetRoot().DescendantNodes()
++                .OfType<ClassDeclarationSyntax>()
++                .Where(part => part.Identifier.ValueText == declaration.Identifier.ValueText &&
++                    part.Modifiers.Any(SyntaxKind.PartialKeyword) &&
++                    (part.TypeParameterList?.Parameters.Count ?? 0) == arity &&
++                    !part.Ancestors().OfType<TypeDeclarationSyntax>().Any() &&
++                    GetNamespace(part) == namespaceName)
++                .SelectMany(part => part.Members.OfType<MethodDeclarationSyntax>());
++        }
++
+         private static string GetNamespace(SyntaxNode node)
+         {
+-            for (var current = node.Parent; current != null; current = current.Parent)
++            return string.Join(".", node.Ancestors().OfType<NamespaceDeclarationSyntax>()
++                .Reverse().Select(ns => string.Concat(ns.Name.DescendantTokens().Select(token => token.ValueText))));
++        }
++
++        internal static string FindChangedSignature(SemanticModel model, ClassDeclarationSyntax declaration)
++        {
++            var compiledType = FindCompiledType(model.Compilation, model.GetDeclaredSymbol(declaration));
++            if (compiledType == null)
++                return null;
++
++            foreach (var method in GetDeclaredMethods(declaration).Where(InPlaceReloadProcessor.HasHotReloadAttribute))
+             {
+-                if (current is NamespaceDeclarationSyntax ns)
+-                    return ns.Name.ToString();
++                var source = model.GetDeclaredSymbol(method);
++                if (source == null)
++                    continue;
++                var candidates = compiledType.GetMembers(source.Name).OfType<IMethodSymbol>().ToList();
++                if (candidates.Count > 0 && !candidates.Any(compiled => MatchesSignature(source, compiled)))
++                    return source.Name;
+             }
++
+             return null;
+         }
+ 
++        private static bool MatchesSignature(IMethodSymbol source, IMethodSymbol compiled)
++        {
++            if (source.IsStatic != compiled.IsStatic || source.Arity != compiled.Arity ||
++                source.ReturnsByRef != compiled.ReturnsByRef ||
++                source.ReturnsByRefReadonly != compiled.ReturnsByRefReadonly ||
++                source.Parameters.Length != compiled.Parameters.Length ||
++                !SameType(source.ReturnType, compiled.ReturnType))
++                return false;
++
++            for (var i = 0; i < source.Parameters.Length; i++)
++            {
++                var parameter = source.Parameters[i];
++                var original = compiled.Parameters[i];
++                if (parameter.RefKind != original.RefKind || !SameType(parameter.Type, original.Type))
++                    return false;
++            }
++
++            return true;
++        }
++
++        private static bool SameType(ITypeSymbol source, ITypeSymbol compiled)
++        {
++            // The type being edited exists as a source symbol and a distinct metadata symbol.
++            return SymbolEqualityComparer.Default.Equals(source, compiled) ||
++                source.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ==
++                compiled.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
++        }
++
+         /// <summary>
+         /// Names of methods the edited source declares but the COMPILED type doesn't — methods the
+         /// user added since the last compile. Their call sites can't bind to the host object, so
+@@ -259,7 +324,7 @@ namespace Unity.Pipeline.HotReload
+             if (compiledType == null && !wholeTypeIsNew)
+                 return result;
+ 
+-            foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
++            foreach (var method in GetDeclaredMethods(classDecl))
+             {
+                 if (method.Body == null && method.ExpressionBody == null)
+                     continue;
+diff --git a/com.unity.pipeline/package.json b/com.unity.pipeline/package.json
+index e54c0bb..0e56229 100644
+--- a/com.unity.pipeline/package.json
++++ b/com.unity.pipeline/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "com.unity.pipeline",
+   "displayName": "Unity Pipeline",
+-  "version": "0.6.0-2022.27",
++  "version": "0.6.0-2022.28",
+   "unity": "2022.3",
+   "category": "Pipeline",
+   "description": "This package allows application (cli, agent or other) to connect to the editor or a running game and execute commands (build, run_tests, play/pause, hotreload)",

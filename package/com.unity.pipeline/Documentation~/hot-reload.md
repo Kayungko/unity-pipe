@@ -167,6 +167,8 @@ The workflow: start the watch, enter Play Mode, edit `[HotReload]` bodies, save.
 
 - **Auto-refresh is off while watching**, so a save hot-reloads instead of triggering a domain reload. Other assets won't import until you refresh manually (Cmd/Ctrl+R). **Stop Watching** restores your setting.
 - Only methods that **changed since the watch started** reload; untouched ones keep running compiled.
+- A source file may contain multiple declarations of the same top-level partial class. Method Reload considers tagged methods in all those declarations. Reload each source file separately when a partial class spans files.
+- The Editor compares tagged method signatures with its compiled project before applying or pushing overrides. Recompile scripts for signature edits and rebuild the target Player from the matching project before pushing again.
 - The watch **survives domain reloads**, re-applies overrides that a Play-Mode reload wiped, and re-pushes state to a player that reconnects (a restarted player boots the original code) — governed by the **Re-push On Connect** setting.
 - The inspector shows liveness: watcher event count, last apply, and the resolved target. Compile errors and binding warnings land in the Console.
 

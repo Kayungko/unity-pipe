@@ -2,7 +2,7 @@
 
 上游基线：`com.unity.pipeline` **0.6.0-exp.1**（Unity Registry tgz，upstream revision `27af91a943315a5702ac7679241399b649d6a20d`），官方要求 Unity 6.0+。扫描证据：`.tmpfiles/upstream-0.6-scan/`（registry `dist-tags.latest` = 0.6.0-exp.1，2026-09-02）。
 
-本仓库 vendored 版本为 **0.6.0-2022.27**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
+本仓库 vendored 版本为 **0.6.0-2022.28**，适配 Unity 2022.3.23f1。回移功能以官方 1.0.1 为参照，基线仍是 0.6.0-exp.1。
 
 版本命名依据：SemVer 比较预发布版本时，纯数字标识符的优先级低于非数字标识符。`2022.2` 低于 `exp.1`。适配包通过 `pkg-install` 写入工程的 `Packages/com.unity.pipeline/`，UPM 使用这个 embedded 包。
 
@@ -39,6 +39,7 @@
 | UGUI Image 替换预览 | `patches/0030-ugui-image-preview.patch` | 为专用 Player 保留可选 UGUI 替换入口，复用场景预览和同帧截图 | 验证 Overlay、Camera Canvas、遮罩和九宫格，以及未安装 UGUI 工程的编译 |
 | Editor 截图与缩略图等待 | `patches/0031-editor-capture-readiness.patch` | 按需打开 Game View，校验截图对应的视图和显示器，限时等待缩略图 | 复测窗口关闭、严格新帧、首次缩略图和超时后的文件状态 |
 | URP 场景替换预览 | `patches/0032-urp-scene-preview.patch` | 用 URP StandardRequest 渲染 Base 和 Overlay 堆栈，无需给 Built-in 工程添加 URP 依赖 | 验证单相机、相机堆栈、替换前后 PNG、旧入口和 Player 回收 |
+| Method Reload partial 类 | `patches/0033-partial-method-reload.patch` | 收集合并声明的方法，按已编译签名阻止不兼容重载 | 验收 Editor Mono、Editor Interpreter、IL2CPP 开发 Player 的按需重载和回滚 |
 
 守门：根级 `patches_sync_test.go` 断言「upstream+patches 与 vendored 树的实际差异文件集合」完全登记在 patch 链中——改了 vendored 而不重新生成快照会 fail build（对齐 `recipes_sync_test.go` 的治理模式）。
 

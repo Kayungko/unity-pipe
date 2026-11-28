@@ -5,7 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0-2022.27] - Local candidate
+## [0.6.0-2022.28] - Local candidate
+
+- Reload tagged methods in any same-file declaration of a partial class. Reject signature changes against the Editor's compiled project before applying local overrides or pushing to a Player.
+
+## [0.6.0-2022.27] - 2026-11-28
 
 - Capture scene SpriteRenderer and Renderer replacements in URP using a Base camera render request, including its Overlay stack.
 

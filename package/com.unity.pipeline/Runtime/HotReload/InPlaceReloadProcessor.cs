@@ -203,11 +203,13 @@ namespace Unity.Pipeline.HotReload
 
             // Build one compilation + semantic model for the transform, so Roslyn's metadata bind
             // is paid once per reload (shared with the string TransformMethodBodies overload).
-            var model = SourceCodeTransformer.BuildSemanticModel(
-                sourceCode, extraction.TypeName, out var classDecl, preprocessorSymbols);
-            if (classDecl == null)
+            var classDecl = extraction.Declaration;
+            var model = SourceCodeTransformer.BuildSemanticModel(classDecl.SyntaxTree);
+            var signatureChange = SourceCodeTransformer.FindChangedSignature(model, classDecl);
+            if (signatureChange != null)
             {
-                prep.Error = $"Could not find class '{extraction.TypeName}' in source.";
+                prep.Error = $"Signature changed for '{extraction.TypeName}.{signatureChange}'. " +
+                    "Recompile the Editor scripts or rebuild the Player before reloading this method.";
                 return prep;
             }
 
@@ -381,7 +383,9 @@ namespace Unity.Pipeline.HotReload
                     return result;
                 }
 
+                result.Declaration = classDeclaration;
                 result.TypeName = classDeclaration.Identifier.ValueText;
+                var declaredMethods = SourceCodeTransformer.GetDeclaredMethods(classDeclaration).ToList();
 
                 // The transform lifts bodies into ONE override class for the top-level type chosen
                 // above. Tagged methods anywhere else in the file — in a NESTED type (which the
@@ -393,7 +397,7 @@ namespace Unity.Pipeline.HotReload
                              .OfType<MethodDeclarationSyntax>().Where(HasHotReloadAttribute))
                 {
                     var owner = method.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
-                    if (owner == null || owner == classDeclaration)
+                    if (owner == null || declaredMethods.Contains(method))
                         continue;
                     var ownerChain = string.Join(".", method.Ancestors()
                         .OfType<TypeDeclarationSyntax>().Reverse().Select(t => t.Identifier.ValueText));
@@ -404,9 +408,7 @@ namespace Unity.Pipeline.HotReload
                           $"type with [HotReload] methods, '{result.TypeName}', is reloaded per file; split the file)");
                 }
 
-                var hotReloadableMethods = classDeclaration.Members
-                    .OfType<MethodDeclarationSyntax>()
-                    .Where(HasHotReloadAttribute);
+                var hotReloadableMethods = declaredMethods.Where(HasHotReloadAttribute);
 
                 foreach (var method in hotReloadableMethods)
                 {
@@ -582,6 +584,8 @@ namespace Unity.Pipeline.HotReload
         /// </summary>
         private class HotReloadableExtractionResult
         {
+            public ClassDeclarationSyntax Declaration { get; set; }
+
             /// <summary>
             /// Name of the class containing [HotReloadWithOverrides] methods.
             /// </summary>

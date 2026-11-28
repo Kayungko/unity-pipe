@@ -51,7 +51,7 @@ namespace Unity.Pipeline.HotReload
             {
                 var classSymbol = model.GetDeclaredSymbol(classDecl);
 
-                foreach (var method in classDecl.Members.OfType<MethodDeclarationSyntax>())
+                foreach (var method in SourceCodeTransformer.GetDeclaredMethods(classDecl))
                 {
                     var methodName = method.Identifier.ValueText;
                     if (!methodBodies.ContainsKey(methodName) || method.Body == null)
