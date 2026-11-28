@@ -32,6 +32,8 @@
 
 **v0.1.50**（2026-11-28，`4a093a5`）已发布。隔离 Unity 2022.3.23f1 Built-in IL2CPP Player 验证了 SpriteRenderer 的 Sprite 和 Renderer 材质槽替换、同帧截图及进程回收。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.50)
 
+**v0.1.51**（2026-11-28，`3280850`）已发布。隔离 Unity 2022.3.23f1 Built-in IL2CPP 工程验证了 UGUI Image 的 Sprite 和 Material 替换、Overlay 与 Camera Canvas、嵌套遮罩、九宫格和进程回收。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.51)
+
 ## 开发顺序与验收
 
 未发布版本号为计划，按顺序推进。各版用隔离的 Unity 2022.3.23f1 工程或对应版本生成的快照验收。GPU 继续暂缓，SGAME 先不动。

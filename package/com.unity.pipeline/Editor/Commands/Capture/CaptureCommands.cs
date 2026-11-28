@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Unity.Pipeline.Commands;
 using Unity.Pipeline.Editor.Authoring;
@@ -13,6 +14,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.UIElements;
 using Object = UnityEngine.Object;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 namespace Unity.Pipeline.Editor.Commands.Capture
 {
@@ -30,9 +32,13 @@ namespace Unity.Pipeline.Editor.Commands.Capture
     static class CaptureCommands
     {
         private const int MaxDimension = 4096;
+        private const int GameViewOpenWaitMs = 1500;
+        private const int CapturePollMs = 50;
+        private const int MaxThumbnailWaitMs = 10000;
+        private const string MissingGameViewFrame = "The Game view has no readable frame. Let it render before retrying source=screen.";
 
         [CliCommand("capture_game_view", "Render the game view to a PNG. source=camera (default) renders a camera and misses Screen Space - Overlay UI; source=screen captures the composited backbuffer incl. overlay canvases (Play Mode only). Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Effect = CommandEffect.Destructive, Tags = new[] { "capture" })]
-        public static CaptureResult CaptureGameView(
+        public static async Task<CaptureResult> CaptureGameViewCommand(
             [CliArg("width", "Output width in px (default 1280; capped 4096).")] int width = 1280,
             [CliArg("height", "Output height in px (default 720; capped 4096).")] int height = 720,
             [CliArg("camera", "Optional camera name (source=camera only); defaults to Camera.main, else the first enabled camera.")] string camera = null,
@@ -40,7 +46,55 @@ namespace Unity.Pipeline.Editor.Commands.Capture
             [CliArg("include_inline_image", "Also return the image inline as base64 when save_path is set (default false: path-only result). Only meaningful together with save_path.")] bool includeInlineImage = false,
             [CliArg("max_resolution", "Cap on the inline image's longest edge (e.g. 512). Only applies when an inline image is returned (no save_path, or save_path + include_inline_image=true); the save_path file keeps the requested resolution.")] int maxResolution = 0,
             [CliArg("source", "What to capture: 'camera' (default) renders a camera (misses Screen Space - Overlay UI); 'screen' captures the composited game view incl. overlay canvases (HUDs), Play Mode only.")] string source = "camera",
-            [CliArg("require_fresh_frame", "For source=screen, fail before saving or returning an image if a fresh Game view render cannot be verified.")] bool requireFreshFrame = false)
+            [CliArg("require_fresh_frame", "For source=screen, fail before saving or returning an image if a fresh Game view render cannot be verified.")] bool requireFreshFrame = false,
+            [CliArg("allow_camera_fallback", "Allow a camera capture when source=screen has no readable frame. Never used with require_fresh_frame.")] bool allowCameraFallback = false)
+        {
+            if (!string.Equals(source?.Trim(), "screen", StringComparison.OrdinalIgnoreCase))
+                return CaptureGameView(width, height, camera, savePath, includeInlineImage, maxResolution, source, requireFreshFrame);
+
+            RequireScreenCapture();
+            var view = FindPlayModeView();
+            var opened = view == null;
+            if (opened)
+            {
+                var gameViewType = Type.GetType("UnityEditor.GameView,UnityEditor");
+                if (gameViewType != null)
+                    view = EditorWindow.GetWindow(gameViewType, false, null, false);
+            }
+
+            var clock = Stopwatch.StartNew();
+            var (target, status) = ProbeScreenCapture(view);
+            // A new Game view may need an editor update before its view and render target exist.
+            while (opened && view != null && (target == null || (requireFreshFrame && status != "fresh")) &&
+                Application.isPlaying && clock.ElapsedMilliseconds < GameViewOpenWaitMs)
+            {
+                await Task.Delay(CapturePollMs);
+                PipelineCancellation.ThrowIfCancellationRequested();
+                (target, status) = ProbeScreenCapture(view);
+            }
+            RequireScreenCapture();
+            PipelineCancellation.ThrowIfCancellationRequested();
+
+            if (target != null)
+            {
+                var result = CaptureScreen(target, status, width, height, savePath, includeInlineImage, maxResolution, requireFreshFrame);
+                result.GameViewOpened = opened ? true : (bool?)null;
+                return result;
+            }
+            if (!allowCameraFallback || requireFreshFrame)
+                throw new InvalidOperationException(MissingGameViewFrame);
+
+            var fallback = CaptureGameView(width, height, camera, savePath, includeInlineImage, maxResolution);
+            fallback.FrameStatus = "unavailable";
+            fallback.Warning = MissingGameViewFrame + " Used a camera capture without Screen Space - Overlay UI.";
+            fallback.GameViewOpened = opened && view != null ? true : (bool?)null;
+            return fallback;
+        }
+
+        // Used by wait's synchronous same-update capture. It never opens a window or waits a frame.
+        public static CaptureResult CaptureGameView(int width = 1280, int height = 720, string camera = null,
+            string savePath = null, bool includeInlineImage = false, int maxResolution = 0, string source = "camera",
+            bool requireFreshFrame = false)
         {
             var src = (source ?? "camera").Trim().ToLowerInvariant();
             switch (src)
@@ -58,33 +112,42 @@ namespace Unity.Pipeline.Editor.Commands.Capture
                 }
                 case "screen":
                 {
-                    // Overlay UI only composites to the backbuffer at runtime, so screen capture is a
-                    // Play-Mode operation; guard before touching the GPU so the message is deterministic.
-                    if (!Application.isPlaying)
-                        throw new InvalidOperationException(
-                            "capture_game_view with source=\"screen\" requires Play Mode: Screen Space - Overlay UI only composites to the backbuffer at runtime. Use source=\"camera\" in Edit Mode.");
-
-                    GuardHasGpu();
-
-                    var (target, frameStatus) = PrepareScreenCapture();
-                    var warning = frameStatus switch
-                    {
-                        "fresh" => null,
-                        "cached" => "The Game view did not redraw for this capture. The image is its last rendered frame.",
-                        _ => "A fresh Game view render could not be verified. The image may be from an earlier frame."
-                    };
-                    if (requireFreshFrame && warning != null)
-                        throw new InvalidOperationException(warning + " Make the Game view visible and let it render before retrying.");
-
-                    var result = Capture((w, h) => EncodeScreenToPng(target, w, h), "screen",
-                        width, height, savePath, includeInlineImage, maxResolution);
-                    result.FrameStatus = frameStatus;
-                    result.Warning = warning;
-                    return result;
+                    RequireScreenCapture();
+                    var (target, status) = ProbeScreenCapture(FindPlayModeView());
+                    if (target == null)
+                        throw new InvalidOperationException(MissingGameViewFrame);
+                    return CaptureScreen(target, status, width, height, savePath, includeInlineImage, maxResolution, requireFreshFrame);
                 }
                 default:
                     throw new ArgumentException($"Unknown source '{source}'. Use 'camera' or 'screen'.");
             }
+        }
+
+        private static void RequireScreenCapture()
+        {
+            if (!Application.isPlaying)
+                throw new InvalidOperationException(
+                    "capture_game_view with source=\"screen\" requires Play Mode: Screen Space - Overlay UI only composites to the backbuffer at runtime. Use source=\"camera\" in Edit Mode.");
+            GuardHasGpu();
+        }
+
+        private static CaptureResult CaptureScreen(RenderTexture target, string frameStatus, int width, int height,
+            string savePath, bool includeInlineImage, int maxResolution, bool requireFreshFrame)
+        {
+            var warning = frameStatus switch
+            {
+                "fresh" => null,
+                "cached" => "The Game view did not redraw for this capture. The image is its last rendered frame.",
+                _ => "A fresh Game view render could not be verified. The image may be from an earlier frame."
+            };
+            if (requireFreshFrame && warning != null)
+                throw new InvalidOperationException(warning + " Make the Game view visible and let it render before retrying.");
+
+            var result = Capture((w, h) => EncodeScreenToPng(target, w, h), "screen",
+                width, height, savePath, includeInlineImage, maxResolution);
+            result.FrameStatus = frameStatus;
+            result.Warning = warning;
+            return result;
         }
 
         [CliCommand("capture_scene_view", "Capture the active Scene View to PNG. Use source=screen for its displayed window with gizmos and toolbars. Returns it inline as base64, unless save_path is set (path-only result; pass include_inline_image=true to get both).", Effect = CommandEffect.Destructive, Tags = new[] { "capture" })]
@@ -198,23 +261,45 @@ namespace Unity.Pipeline.Editor.Commands.Capture
         }
 
         [CliCommand("capture_asset_preview", "Capture an imported texture or Unity-generated asset thumbnail to PNG.", Tags = new[] { "capture", "assets" })]
-        public static CaptureResult CaptureAssetPreview(
+        public static async Task<CaptureResult> CaptureAssetPreview(
             [CliArg("asset", "Asset reference by path, global ID or GUID.", Required = true)] ObjectRef asset,
             [CliArg("save_path", "Optional project-relative PNG path.")] string savePath = null,
             [CliArg("include_inline_image", "Also return the image inline when saving.")] bool includeInlineImage = false,
-            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0)
+            [CliArg("max_resolution", "Maximum inline image edge.")] int maxResolution = 0,
+            [CliArg("wait_ms", "Wait up to this many milliseconds for Unity to generate a thumbnail (0 checks once).")] int waitMs = 1500)
         {
+            if (waitMs < 0 || waitMs > MaxThumbnailWaitMs)
+                throw new ArgumentOutOfRangeException(nameof(waitMs), $"wait_ms must be between 0 and {MaxThumbnailWaitMs}.");
             GuardHasGpu();
             if (!ObjectResolver.TryResolve(asset, out var obj, out var error))
                 throw new ArgumentException(error);
             if (!EditorUtility.IsPersistent(obj))
                 throw new ArgumentException("Expected an imported asset.");
+            var clock = Stopwatch.StartNew();
             var preview = obj as Texture2D ?? AssetPreview.GetAssetPreview(obj);
-            if (preview == null)
-                throw new InvalidOperationException("Unity has no rendered preview yet. Retry after the preview has loaded.");
+            var waited = preview == null && waitMs > 0;
+            while (preview == null)
+            {
+                var remaining = waitMs - clock.ElapsedMilliseconds;
+                if (remaining <= 0)
+                    throw new InvalidOperationException(waitMs == 0
+                        ? "Unity has no rendered preview yet. Increase wait_ms to let the thumbnail load."
+                        : $"Unity did not provide an asset preview within {waitMs} ms.");
+                await Task.Delay((int)Math.Min(CapturePollMs, remaining));
+                PipelineCancellation.ThrowIfCancellationRequested();
+                if (obj == null)
+                    throw new InvalidOperationException("The requested asset was unloaded while waiting for its preview.");
+                if (clock.ElapsedMilliseconds <= waitMs)
+                    preview = AssetPreview.GetAssetPreview(obj);
+            }
+            PipelineCancellation.ThrowIfCancellationRequested();
+            var elapsed = clock.ElapsedMilliseconds;
             var (width, height) = ClampToLongEdge(preview.width, preview.height, MaxDimension);
-            return Capture((w, h) => EncodeTextureRegion(preview, new Rect(0, 0, 1, 1), w, h),
+            var result = Capture((w, h) => EncodeTextureRegion(preview, new Rect(0, 0, 1, 1), w, h),
                 $"asset:{AssetDatabase.GetAssetPath(obj)}", width, height, savePath, includeInlineImage, maxResolution);
+            if (waited)
+                result.PreviewWaitMs = elapsed;
+            return result;
         }
 
         private static byte[] EncodeTextureRegion(Texture source, Rect crop, int width, int height)
@@ -624,30 +709,33 @@ namespace Unity.Pipeline.Editor.Commands.Capture
         /// Get the main Game view's target after attempting a synchronous repaint.
         /// Never activate a background tab on the caller's behalf.
         /// </summary>
-        private static (RenderTexture target, string frameStatus) PrepareScreenCapture()
+        private static Type PlayModeViewType => Type.GetType("UnityEditor.PlayModeView,UnityEditor");
+
+        private static EditorWindow FindPlayModeView()
         {
             const BindingFlags staticFlags = BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public;
-            const BindingFlags instanceFlags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-            const string missingFrame = "The Game view has no readable frame. Open the Game view and let it render before retrying source=screen.";
-            var playModeView = Type.GetType("UnityEditor.PlayModeView,UnityEditor");
-            EditorWindow view;
-            FieldInfo targetField;
             try
             {
-                view = playModeView?.GetMethod("GetMainPlayModeView", staticFlags)?.Invoke(null, null) as EditorWindow;
-                targetField = playModeView?.GetField("m_TargetTexture", instanceFlags);
+                return PlayModeViewType?.GetMethod("GetMainPlayModeView", staticFlags)?.Invoke(null, null) as EditorWindow;
             }
             catch (TargetInvocationException ex)
             {
-                throw new InvalidOperationException(missingFrame, ex);
+                throw new InvalidOperationException(MissingGameViewFrame, ex);
             }
+        }
+
+        private static (RenderTexture target, string frameStatus) ProbeScreenCapture(EditorWindow view)
+        {
+            const BindingFlags instanceFlags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+            var playModeView = PlayModeViewType;
+            var targetField = playModeView?.GetField("m_TargetTexture", instanceFlags);
             if (view == null || targetField == null)
-                throw new InvalidOperationException(missingFrame);
+                return (null, "unavailable");
 
             var frameStatus = RepaintGameView(view, playModeView);
             var target = targetField.GetValue(view) as RenderTexture;
             if (target == null || !target.IsCreated())
-                throw new InvalidOperationException(missingFrame);
+                return (null, "unavailable");
             return (target, frameStatus);
         }
 
@@ -674,10 +762,17 @@ namespace Unity.Pipeline.Editor.Commands.Capture
                 if (renderNeeded is bool needed && !needed)
                     return "cached";
 
+                var renderingView = playModeView.GetMethod("GetRenderingView", staticFlags);
+                var display = playModeView.GetProperty("targetDisplay", instanceFlags)?.GetValue(view);
+                if (renderingView == null || !(display is int targetDisplay))
+                    return "unknown";
                 var rendered = false;
-                void OnCameraRendered(Camera camera) => rendered |= camera != null && camera.cameraType == CameraType.Game;
+                bool IsScreenCamera(Camera camera) => camera != null && camera.cameraType == CameraType.Game &&
+                    camera.targetTexture == null && camera.targetDisplay == targetDisplay;
+                bool IsCapturedView() => ReferenceEquals(renderingView.Invoke(null, null), view);
+                void OnCameraRendered(Camera camera) => rendered |= IsScreenCamera(camera) && IsCapturedView();
                 void OnFrameRendered(ScriptableRenderContext context, Camera[] cameras)
-                    => rendered |= cameras.Any(camera => camera != null && camera.cameraType == CameraType.Game);
+                    => rendered |= cameras.Any(IsScreenCamera) && IsCapturedView();
 
                 Camera.onPostRender += OnCameraRendered;
                 RenderPipelineManager.endFrameRendering += OnFrameRendered;
@@ -764,6 +859,14 @@ namespace Unity.Pipeline.Editor.Commands.Capture
         /// <summary>Why the capture could contain an earlier frame.</summary>
         [JsonProperty("warning", NullValueHandling = NullValueHandling.Ignore)]
         public string Warning { get; set; }
+
+        /// <summary>True when the command opened a Game view on demand.</summary>
+        [JsonProperty("gameViewOpened", NullValueHandling = NullValueHandling.Ignore)]
+        public bool? GameViewOpened { get; set; }
+
+        /// <summary>Time spent obtaining a thumbnail when it was not immediately available.</summary>
+        [JsonProperty("previewWaitMs", NullValueHandling = NullValueHandling.Ignore)]
+        public long? PreviewWaitMs { get; set; }
 
         /// <summary>Project-relative path the PNG was also written to, or null.</summary>
         [JsonProperty("savedPath")]

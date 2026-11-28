@@ -5,7 +5,11 @@ All notable changes to this package will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0-2022.25] - Local candidate
+## [0.6.0-2022.26] - Local candidate
+
+- Open a Game view on demand, verify fresh captures against the captured view and display, and wait for cold asset thumbnails within a configurable budget.
+
+## [0.6.0-2022.25] - 2026-11-28
 
 - Preview Sprite and Material replacements on UGUI Images in Built-in host scenes with same-frame PNGs.
 

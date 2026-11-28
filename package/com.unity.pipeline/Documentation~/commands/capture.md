@@ -7,22 +7,23 @@ Render the game view to a PNG. Returns it inline as base64, unless `save_path` i
 
 `source` selects what is captured. `camera` (default) renders a camera and **does not include Screen Space - Overlay UI** (HUDs, menus, damage numbers on overlay canvases) — overlay canvases composite straight to the screen and never render through a camera. `screen` captures the composited game view backbuffer, so overlay UI is included; because overlay UI only exists at runtime, `source=screen` **requires Play Mode** (in Edit Mode it returns a clear error — use `source=camera`). The screen capture reads the game view at its true pixel resolution — independent of OS display scaling — and preserves the on-screen color tone, so the PNG matches what the Game window shows.
 
-Parameter interactions: `include_inline_image` is only meaningful together with `save_path` (without one, the inline image is always returned). `max_resolution` only applies when an inline image is actually returned — i.e. no `save_path`, or `save_path` + `include_inline_image=true`; it has **no effect** when `save_path` is set without `include_inline_image=true`. `camera` is ignored when `source=screen`.
+Parameter interactions: `include_inline_image` is only meaningful together with `save_path` (without one, the inline image is always returned). `max_resolution` only applies when an inline image is actually returned — i.e. no `save_path`, or `save_path` + `include_inline_image=true`; it has **no effect** when `save_path` is set without `include_inline_image=true`. `camera` selects a camera for direct camera output or an explicitly enabled fallback.
 
-Screen captures report `frameStatus`: `fresh` when the command observed a new render during the Game view repaint, `cached` when the view skipped repainting, or `unknown` when the command could not confirm a new render. Cached and unknown results also carry a `warning`. The command leaves the active tab alone. If the Game view has no readable frame, the command fails.
+Screen captures report `frameStatus`. The value is `fresh` when the captured Game view rendered its display during the repaint, `cached` when it skipped rendering, or `unknown` when a new render could not be confirmed. Cached and unknown results carry a `warning`. If no Game view exists, the command opens one in Play Mode, allows up to 1.5 seconds for its first capture, and includes `gameViewOpened: true` on success. With `allow_camera_fallback=true`, a missing screen buffer can return camera output with `frameStatus: "unavailable"` and a warning.
 
-For visual verification, set `require_fresh_frame=true`. A cached or unverified frame then fails the command before returning an image or touching `save_path`. A fresh render can still represent the same simulation step while Play Mode is paused.
+For visual verification, set `require_fresh_frame=true`. A cached, unverified or unavailable frame then fails before returning an image or touching `save_path`, including when camera fallback was requested. A fresh render can still represent the same simulation step while Play Mode is paused. Wait's same-update capture uses an existing view.
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `width` | no | `1280` | Output width in px (default 1280; capped 4096). |
 | `height` | no | `720` | Output height in px (default 720; capped 4096). |
-| `camera` | no | `–` | Optional camera name (`source=camera` only); defaults to Camera.main, else the first enabled camera. |
+| `camera` | no | `–` | Optional camera name for direct or fallback camera output. Defaults to Camera.main, then the first enabled camera. |
 | `save_path` | no | `–` | Optional project-relative path to write the PNG (e.g. Screenshots/foo.png). When set, the result omits the inline base64 image unless `include_inline_image=true`. |
 | `include_inline_image` | no | `false` | Also return the image inline as base64 when `save_path` is set. |
 | `max_resolution` | no | `0` | Cap on the inline image's longest edge (e.g. 512), preserving aspect ratio. No effect when `save_path` is set without `include_inline_image=true`. The `save_path` file keeps the requested resolution; a downscaled inline copy is reported via `inlineWidth`/`inlineHeight`. |
 | `source` | no | `camera` | `camera` renders a camera (misses Screen Space - Overlay UI); `screen` captures the composited game view incl. overlay canvases (**Play Mode only**). |
 | `require_fresh_frame` | no | `false` | Require a verified new render when `source=screen`. |
+| `allow_camera_fallback` | no | `false` | Use the named or default camera if the screen buffer is unavailable and strict freshness is disabled. |
 
 **Returns:** `CaptureResult`
 
@@ -58,7 +59,7 @@ Crop the visible portion of a UI Toolkit element from a drawn Editor window. The
 
 ### `capture_asset_preview`
 
-Pass an imported asset reference as `asset` to capture its texture or Unity-generated preview. For previews generated asynchronously, retry after Unity loads the thumbnail. The standard `save_path`, `include_inline_image` and `max_resolution` arguments apply.
+Pass an imported asset reference as `asset` to capture its texture or Unity-generated preview. For a cold thumbnail, `wait_ms` controls how long the command lets the Editor generate it. The range is 0 to 10000 ms and the default is 1500 ms. Use 0 to check once. A thumbnail obtained after waiting includes `previewWaitMs`. If no preview becomes available within the budget, the command fails before writing the PNG. The standard `save_path`, `include_inline_image` and `max_resolution` arguments apply.
 
 ### `capture_runtime_element`
 Capture a UI Toolkit VisualElement (by selector) from a live runtime panel (UIDocument or PanelRenderer) to a PNG; returns path + base64.
