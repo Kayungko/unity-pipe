@@ -1,5 +1,5 @@
 diff --git a/com.unity.pipeline/CHANGELOG.md b/com.unity.pipeline/CHANGELOG.md
-index 9d7b84a..42ed238 100644
+index 9d7b84a..f70ef92 100644
 --- a/com.unity.pipeline/CHANGELOG.md
 +++ b/com.unity.pipeline/CHANGELOG.md
 @@ -5,7 +5,11 @@ All notable changes to this package will be documented in this file.
@@ -9,7 +9,7 @@ index 9d7b84a..42ed238 100644
 -## [0.6.0-2022.24] - Local candidate
 +## [0.6.0-2022.25] - Local candidate
 +
-+- Preview Sprite replacements on UGUI Images in Built-in host scenes.
++- Preview Sprite and Material replacements on UGUI Images in Built-in host scenes with same-frame PNGs.
 +
 +## [0.6.0-2022.24] - 2026-11-28
  
@@ -45,7 +45,7 @@ index 605dc13..9b3d5fa 100644
              WriteStatusJson(Project(buildId, report));
          }
 diff --git a/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs b/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs
-index 830257e..45ac7cd 100644
+index 830257e..e857ed0 100644
 --- a/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs
 +++ b/com.unity.pipeline/Editor/Commands/Build/ScenePreviewCommand.cs
 @@ -119,6 +119,27 @@ namespace Unity.Pipeline.Editor.Commands.Build
@@ -70,14 +70,14 @@ index 830257e..45ac7cd 100644
 +            File.WriteAllText(path,
 +                "<linker><assembly fullname=\"UnityEngine.UI\" ignoreIfMissing=\"1\">" +
 +                "<type fullname=\"UnityEngine.UI.Image\"><property name=\"sprite\" accessors=\"get\" />" +
-+                "<property name=\"overrideSprite\" /></type></assembly></linker>");
++                "<property name=\"overrideSprite\" /><property name=\"material\" /></type></assembly></linker>");
 +            return path;
 +        }
      }
  }
  #endif
 diff --git a/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
-index 297f783..d77f721 100644
+index 297f783..ea69c1d 100644
 --- a/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
 +++ b/com.unity.pipeline/Runtime/PlayerSupport/ScenePreview.cs
 @@ -29,9 +29,13 @@ namespace Unity.Pipeline.Preview
@@ -161,7 +161,20 @@ index 297f783..d77f721 100644
                  result.component = nameof(SpriteRenderer);
                  result.beforeAsset = original != null ? original.name : null;
                  result.afterAsset = replacement.name;
-@@ -301,6 +302,88 @@ namespace Unity.Pipeline.Preview
+@@ -279,11 +280,7 @@ namespace Unity.Pipeline.Preview
+                 if (renderers.Length != 1 || !renderers[0].enabled)
+                     throw new InvalidOperationException("Target node needs exactly one enabled Renderer");
+                 var renderer = renderers[0];
+-                var load = bundle.LoadAssetAsync<Material>(package.asset);
+-                await Wait(load);
+-                var replacement = load.asset as Material;
+-                if (replacement == null)
+-                    throw new InvalidDataException("Material is absent from the preview bundle");
++                var replacement = await LoadReplacementMaterial(bundle, package.asset);
+                 var original = renderer.sharedMaterials;
+                 if (slot < 0 || slot >= original.Length)
+                     throw new ArgumentOutOfRangeException(nameof(slot), "Material slot is outside the renderer's material array");
+@@ -301,6 +298,114 @@ namespace Unity.Pipeline.Preview
              }
          }
  
@@ -173,6 +186,16 @@ index 297f783..d77f721 100644
 +            if (sprites.Length != 1)
 +                throw new InvalidDataException("Expected exactly one Sprite in the preview bundle");
 +            return sprites[0];
++        }
++
++        private static async Task<Material> LoadReplacementMaterial(AssetBundle bundle, string asset)
++        {
++            var load = bundle.LoadAssetAsync<Material>(asset);
++            await Wait(load);
++            var material = load.asset as Material;
++            if (material == null)
++                throw new InvalidDataException("Material is absent from the preview bundle");
++            return material;
 +        }
 +
 +        private static Camera FindHostCamera(Scene host)
@@ -201,19 +224,35 @@ index 297f783..d77f721 100644
 +            if (camera == null || !camera.isActiveAndEnabled || camera.gameObject.scene != host)
 +                throw new InvalidOperationException("The UGUI Canvas needs an enabled camera in the host scene");
 +
-+            if (package.replacementKind != "sprite")
-+                throw new InvalidDataException("UGUI Image preview requires a Sprite bundle");
-+            var replacement = await LoadReplacementSprite(bundle, package.asset);
-+            var property = imageType.GetProperty("overrideSprite");
-+            var original = (Sprite)property.GetValue(image);
-+            // overrideSprite reads the effective sprite even when there is no override.
-+            var baseSprite = (Sprite)imageType.GetProperty("sprite").GetValue(image);
-+            var restore = original == baseSprite ? null : original;
 +            result.component = "Image";
-+            result.beforeAsset = original != null ? original.name : null;
-+            result.afterAsset = replacement.name;
-+            CaptureImageReplacement(host, camera, output, result,
-+                () => property.SetValue(image, replacement), () => property.SetValue(image, restore));
++            if (package.replacementKind == "sprite")
++            {
++                var replacement = await LoadReplacementSprite(bundle, package.asset);
++                var property = imageType.GetProperty("overrideSprite");
++                var original = (Sprite)property.GetValue(image);
++                // overrideSprite reads the effective sprite even when there is no override.
++                var baseSprite = (Sprite)imageType.GetProperty("sprite").GetValue(image);
++                var restore = original == baseSprite ? null : original;
++                result.beforeAsset = original != null ? original.name : null;
++                result.afterAsset = replacement.name;
++                CaptureImageReplacement(host, camera, output, result,
++                    () => property.SetValue(image, replacement), () => property.SetValue(image, restore));
++            }
++            else if (package.replacementKind == "material")
++            {
++                var replacement = await LoadReplacementMaterial(bundle, package.asset);
++                var property = imageType.GetProperty("material");
++                var original = (Material)property.GetValue(image);
++                result.beforeAsset = original != null ? original.name : null;
++                result.afterAsset = replacement.name;
++                // Let UGUI derive the stencil material from Image.material on each rebuild.
++                CaptureImageReplacement(host, camera, output, result,
++                    () => property.SetValue(image, replacement), () => property.SetValue(image, original));
++            }
++            else
++            {
++                throw new InvalidDataException("Unknown replacement kind in the preview bundle");
++            }
 +        }
 +
 +        private static void CaptureImageReplacement(Scene host, Camera camera, string output, ReplacementResult result,

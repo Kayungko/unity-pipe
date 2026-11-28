@@ -76,6 +76,14 @@ upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI
 
 材质槽从 0 开始。替换 Sprite 时用 `--replacement-kind sprite` 打包只含一个 Sprite 的资源，并指定带 `SpriteRenderer` 的节点。前后画面在同一帧由同一台场景相机分别渲染，替换只发生在专用 Player 内存中。回传包含场景、节点、组件、前后资源名、帧号、两张 PNG 和 Player 日志路径。
 
+要预览 UGUI `Image`，在有 UGUI 的工程用当前 UPM 包构建专用 Player，打包 Sprite 或 Material，再加 `--component image`。Material 替换的是 Image 的材质属性，省略 `--material-slot`。
+
+```powershell
+upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI/green-content" --node "/Canvas/Panel/Thumbnail" --component image --before-path "D:/CI/Thumbnail-before.png" --output-path "D:/CI/Thumbnail-after.png" --json
+```
+
+Camera Canvas 使用其配置的场景相机。预览会临时把该显示器上的 Overlay Canvas 绑定到捕获相机，让前后截图使用同一套布局和遮罩，随后恢复 Canvas 设置。使用支持 UGUI 遮罩的材质时，九宫格、Stencil Mask 和 RectMask2D 由 UGUI 绘制。
+
 ## 快速开始
 
 ### 前置条件

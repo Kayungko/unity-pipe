@@ -10,7 +10,7 @@
 
 ## [0.1.51] - 本地候选
 
-- `upipe preview --component image` 支持 Built-in 宿主场景中 UGUI Image 的 Sprite 替换。UPM 更新至 `0.6.0-2022.25`。
+- `upipe preview --component image` 支持 Built-in 宿主场景中 UGUI Image 的 Sprite 或 Material 替换，输出同帧前后截图。UPM 更新至 `0.6.0-2022.25`。
 
 ## [0.1.50] - 2026-11-28
 

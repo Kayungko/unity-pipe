@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0-2022.25] - Local candidate
 
-- Preview Sprite replacements on UGUI Images in Built-in host scenes.
+- Preview Sprite and Material replacements on UGUI Images in Built-in host scenes with same-frame PNGs.
 
 ## [0.6.0-2022.24] - 2026-11-28
 

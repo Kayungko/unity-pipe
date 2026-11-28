@@ -137,7 +137,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
             File.WriteAllText(path,
                 "<linker><assembly fullname=\"UnityEngine.UI\" ignoreIfMissing=\"1\">" +
                 "<type fullname=\"UnityEngine.UI.Image\"><property name=\"sprite\" accessors=\"get\" />" +
-                "<property name=\"overrideSprite\" /></type></assembly></linker>");
+                "<property name=\"overrideSprite\" /><property name=\"material\" /></type></assembly></linker>");
             return path;
         }
     }

@@ -280,11 +280,7 @@ namespace Unity.Pipeline.Preview
                 if (renderers.Length != 1 || !renderers[0].enabled)
                     throw new InvalidOperationException("Target node needs exactly one enabled Renderer");
                 var renderer = renderers[0];
-                var load = bundle.LoadAssetAsync<Material>(package.asset);
-                await Wait(load);
-                var replacement = load.asset as Material;
-                if (replacement == null)
-                    throw new InvalidDataException("Material is absent from the preview bundle");
+                var replacement = await LoadReplacementMaterial(bundle, package.asset);
                 var original = renderer.sharedMaterials;
                 if (slot < 0 || slot >= original.Length)
                     throw new ArgumentOutOfRangeException(nameof(slot), "Material slot is outside the renderer's material array");
@@ -310,6 +306,16 @@ namespace Unity.Pipeline.Preview
             if (sprites.Length != 1)
                 throw new InvalidDataException("Expected exactly one Sprite in the preview bundle");
             return sprites[0];
+        }
+
+        private static async Task<Material> LoadReplacementMaterial(AssetBundle bundle, string asset)
+        {
+            var load = bundle.LoadAssetAsync<Material>(asset);
+            await Wait(load);
+            var material = load.asset as Material;
+            if (material == null)
+                throw new InvalidDataException("Material is absent from the preview bundle");
+            return material;
         }
 
         private static Camera FindHostCamera(Scene host)
@@ -338,19 +344,35 @@ namespace Unity.Pipeline.Preview
             if (camera == null || !camera.isActiveAndEnabled || camera.gameObject.scene != host)
                 throw new InvalidOperationException("The UGUI Canvas needs an enabled camera in the host scene");
 
-            if (package.replacementKind != "sprite")
-                throw new InvalidDataException("UGUI Image preview requires a Sprite bundle");
-            var replacement = await LoadReplacementSprite(bundle, package.asset);
-            var property = imageType.GetProperty("overrideSprite");
-            var original = (Sprite)property.GetValue(image);
-            // overrideSprite reads the effective sprite even when there is no override.
-            var baseSprite = (Sprite)imageType.GetProperty("sprite").GetValue(image);
-            var restore = original == baseSprite ? null : original;
             result.component = "Image";
-            result.beforeAsset = original != null ? original.name : null;
-            result.afterAsset = replacement.name;
-            CaptureImageReplacement(host, camera, output, result,
-                () => property.SetValue(image, replacement), () => property.SetValue(image, restore));
+            if (package.replacementKind == "sprite")
+            {
+                var replacement = await LoadReplacementSprite(bundle, package.asset);
+                var property = imageType.GetProperty("overrideSprite");
+                var original = (Sprite)property.GetValue(image);
+                // overrideSprite reads the effective sprite even when there is no override.
+                var baseSprite = (Sprite)imageType.GetProperty("sprite").GetValue(image);
+                var restore = original == baseSprite ? null : original;
+                result.beforeAsset = original != null ? original.name : null;
+                result.afterAsset = replacement.name;
+                CaptureImageReplacement(host, camera, output, result,
+                    () => property.SetValue(image, replacement), () => property.SetValue(image, restore));
+            }
+            else if (package.replacementKind == "material")
+            {
+                var replacement = await LoadReplacementMaterial(bundle, package.asset);
+                var property = imageType.GetProperty("material");
+                var original = (Material)property.GetValue(image);
+                result.beforeAsset = original != null ? original.name : null;
+                result.afterAsset = replacement.name;
+                // Let UGUI derive the stencil material from Image.material on each rebuild.
+                CaptureImageReplacement(host, camera, output, result,
+                    () => property.SetValue(image, replacement), () => property.SetValue(image, original));
+            }
+            else
+            {
+                throw new InvalidDataException("Unknown replacement kind in the preview bundle");
+            }
         }
 
         private static void CaptureImageReplacement(Scene host, Camera camera, string output, ReplacementResult result,
