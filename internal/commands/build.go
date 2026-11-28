@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ func BuildCommand() SubCommand {
 			fs := newFlagSet("upipe build")
 			target := fs.String("target", "", "Unity BuildTarget name (default: active target)")
 			output := fs.String("output-path", "", "Player output path, relative to the project or absolute")
+			config := fs.String("config", "", "named configuration from the project\x27s .upipe/builds.json")
 			profile := fs.String("profile", "", "Build Profile name (requires Unity 6)")
 			preview := fs.String("scene-preview-bundle", "", "build a dedicated Development Player for this preview bundle directory")
 			confirm := fs.Bool("confirm", false, "allow the Editor to build the Player")
@@ -34,6 +36,27 @@ func BuildCommand() SubCommand {
 			}
 			if len(rest) != 0 {
 				return nil, usageErr("build: unexpected positional arguments")
+			}
+			var configSet bool
+			var conflictingFlags []string
+			fs.Visit(func(f *flag.Flag) {
+				switch f.Name {
+				case "config":
+					configSet = true
+				case "target", "output-path", "scene", "option", "profile", "scene-preview-bundle":
+					conflictingFlags = append(conflictingFlags, "--"+f.Name)
+				}
+			})
+			if configSet {
+				if len(conflictingFlags) > 0 {
+					return nil, usageErr("build: --config cannot be combined with " + strings.Join(conflictingFlags, ", "))
+				}
+				build, err := loadNamedBuild(rt.ProjectPath, *config)
+				if err != nil {
+					return nil, usageErr("build: " + err.Error())
+				}
+				*target, *output = build.Target, build.OutputPath
+				scenes, buildOptions = build.Scenes, build.Options
 			}
 			params := map[string]any{
 				"target": *target, "outputPath": *output, "profileName": *profile,

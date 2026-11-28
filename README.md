@@ -46,6 +46,35 @@ upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --l
 
 使用双横线分隔启动参数与 `exec`、`test` 或 `build` 参数。Editor 使用 `-batchmode -nographics`，项目内运行时依赖由 Unity 正常加载。`--log-file` 必须是新路径，省略时在项目的 `Logs` 目录创建独立日志。执行失败时，`error.data` 也会给出日志路径和执行阶段，已有测试结果放在 `error.data.result`。
 
+项目可以在 `.upipe/builds.json` 保存供 CI 复用的命名配置。路径相对于 Unity 项目根，配置名称区分大小写。
+
+```json
+{
+  "version": 1,
+  "builds": {
+    "windows-qa": {
+      "target": "StandaloneWindows64",
+      "outputPath": "Builds/QA/Game.exe",
+      "scenes": ["Assets/Scenes/QA.unity"],
+      "options": ["Development", "DetailedBuildReport"]
+    },
+    "windows-release": {
+      "target": "StandaloneWindows64",
+      "outputPath": "Builds/Release/Game.exe",
+      "scenes": ["Assets/Scenes/Main.unity"],
+      "options": ["CompressWithLz4HC", "StrictMode"]
+    }
+  }
+}
+```
+
+```powershell
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --timeout 5m --json -- build --config windows-qa --dry-run
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --timeout 15m --json -- build --config windows-release --confirm
+```
+
+每套配置须指定目标、输出路径和至少一个场景，按数组顺序打包。省略 `options` 或传空数组时，使用现有默认值 `DetailedBuildReport`。配置字段只传给本次构建。使用 `--config` 时仍可指定 `--dry-run` 或 `--confirm`。`--target`、`--scene`、`--option`、`--output-path`、`--profile` 和 `--scene-preview-bundle` 与 `--config` 互斥。文件格式或配置名错误返回退出码 `2`，Unity 预检发现无效目标、场景或选项时返回 `20`。常驻 Editor 的 `upipe build` 也接受同一配置。
+
 `--timeout` 覆盖启动与执行。取消或超时后回收本次启动的 Editor，已有 Editor 保持独立。写操作要在命令中显式保存。测试支持 NUnit XML。构建使用 `--dry-run` 预检或 `--confirm` 执行，按构建 ID 等到 BuildReport。已提交的构建被中断时返回最后一次观察到的状态，输出目录可能包含不完整的文件。二进制管道和后台任务可用常驻 Editor 的原有入口。
 
 Windows Runner 可使用 [GitHub Actions 模板](examples/ci/unity-windows.yml) 和 [PowerShell 脚本](scripts/run-unity-ci.ps1) 执行测试、可选 Player 构建和结果留档。见 [Windows Runner CI 用法](docs/CI-WINDOWS.md)。

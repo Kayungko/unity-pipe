@@ -36,6 +36,10 @@
 
 **v0.1.52**（2026-11-28，`e2dbefd`）已发布。隔离 Unity 2022.3.23f1 图形 Editor 验证了 Game View 按需捕获、资产缩略图等待和严格新帧检查。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.52)
 
+**v0.1.53**（2026-11-28，`cc2bd9f`）已发布。隔离 Unity 2022.3.23f1 工程验证了 URP 14 单 Base 相机及 Base/Overlay 堆栈的场景替换预览。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.53)
+
+**v0.1.54**（2026-11-28，`5261d86`）已发布。Editor Mono、Editor Interpreter 和 Windows IL2CPP 开发 Player 验证了同文件 partial 类、未改方法、签名拒绝及回滚。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.54)
+
 ## 开发顺序与验收
 
 未发布版本号为计划，按顺序推进。各版用隔离的 Unity 2022.3.23f1 工程或对应版本生成的快照验收。GPU 继续暂缓，SGAME 先不动。
@@ -62,7 +66,7 @@
 | v0.1.52 | Editor 截图支持按需打开 Game View，资产缩略图支持限时等待。 | 验证 Game View 关闭、暂停无新帧、冷启动缩略图生成和超时。回传来源与帧状态，回归严格新帧选项。 |
 | v0.1.53 | URP 14 场景预览先支持 SpriteRenderer 和 Renderer 材质槽替换。URP 的 UGUI 与 Prefab 预览单独验证。 | 新建隔离 2022.3.23f1 工程验收单 Base 相机、Base/Overlay 堆栈、两种替换和目标外像素，回归 Built-in。验收后按 `AGENTS.md` 归档并清理工程与 Unity Hub 条目。 |
 | v0.1.54 | Method Reload 兼容修复，沿用现有 HotReload 入口。 | Editor 和 IL2CPP 开发 Player 分别验证 partial 类、未改方法、签名变化拒绝及恢复。 |
-| v0.1.55 | batchmode 命名构建配置，保存目标、场景与构建选项。 | 验证两套配置的实际构建、预检解析值、无效配置拒绝及构建后设置回读。 |
+| v0.1.55 | batchmode 构建通过 `--config` 从项目的 `.upipe/builds.json` 读取目标、场景、选项与输出路径。 | 两套配置实际构建并启动 Player 核对启动场景和开发标志。验证预检解析值、配置语法或 Unity 校验失败时的 JSON 和退出码，以及构建前后 Editor 设置回读。 |
 | 暂缓 | GPU 计数器和耗时分析。 | 恢复前先确认目标开发 Player 能稳定采到 GPU 数据，再检验单位以及零值和缺测的区分。 |
 
 ### Scene Preview 可行性记录
