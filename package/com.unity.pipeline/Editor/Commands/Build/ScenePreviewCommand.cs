@@ -15,15 +15,17 @@ namespace Unity.Pipeline.Editor.Commands.Build
         private const string BundleName = "preview-prefab";
         private const string DependencyName = "preview-dependencies";
 
-        [CliCommand("pack_scene_preview", "Package one saved Prefab and its dependencies for a local preview Player.",
+        [CliCommand("pack_scene_preview", "Package a saved Prefab, Sprite or Material and its dependencies for a local preview Player.",
             MainThreadRequired = true, Effect = CommandEffect.Destructive, Tags = new[] { "build", "preview" })]
-        public static PipelineCommandResult Pack(string asset, string output_dir, bool confirm = false)
+        public static PipelineCommandResult Pack(string asset, string output_dir, bool confirm = false, string replacement_kind = "")
         {
             if (!confirm)
                 return PipelineCommandResult.Fail("Packaging requires confirm=true", new { stage = "validate" });
-            if (!asset.StartsWith("Assets/", StringComparison.Ordinal) || !asset.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) ||
-                AssetDatabase.LoadAssetAtPath<GameObject>(asset) == null)
-                return PipelineCommandResult.Fail("Expected a saved Prefab under Assets/", new { stage = "validate", asset });
+            if (string.IsNullOrEmpty(asset) || !asset.StartsWith("Assets/", StringComparison.Ordinal))
+                return PipelineCommandResult.Fail("Expected a saved asset under Assets/", new { stage = "validate", asset });
+            var invalidAsset = ValidateAsset(asset, replacement_kind);
+            if (invalidAsset != null)
+                return PipelineCommandResult.Fail(invalidAsset, new { stage = "validate", asset });
             if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling ||
                 BuildPipeline.isBuildingPlayer || EditorUserBuildSettings.activeBuildTarget != BuildTarget.StandaloneWindows64)
                 return PipelineCommandResult.Fail("Use an idle Editor with StandaloneWindows64 active", new { stage = "validate" });
@@ -68,6 +70,7 @@ namespace Unity.Pipeline.Editor.Commands.Build
                     unityVersion = Application.unityVersion,
                     projectGuid = PlayerSettings.productGUID.ToString(),
                     asset = asset,
+                    replacementKind = replacement_kind,
                     bundle = BundleName,
                     dependencies = catalog.GetAllDependencies(BundleName)
                 };
@@ -84,6 +87,23 @@ namespace Unity.Pipeline.Editor.Commands.Build
             {
                 if (staging != null && Directory.Exists(staging))
                     Directory.Delete(staging, true);
+            }
+        }
+
+        private static string ValidateAsset(string asset, string kind)
+        {
+            switch (kind)
+            {
+                case "":
+                    return asset.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) &&
+                        AssetDatabase.LoadAssetAtPath<GameObject>(asset) != null ? null : "Expected a saved Prefab under Assets/";
+                case "sprite":
+                    return AssetDatabase.LoadAllAssetsAtPath(asset).OfType<Sprite>().Count() == 1 ?
+                        null : "Expected exactly one Sprite at the asset path";
+                case "material":
+                    return AssetDatabase.LoadMainAssetAtPath(asset) is Material ? null : "Expected a saved Material";
+                default:
+                    return "replacement_kind must be sprite or material";
             }
         }
 

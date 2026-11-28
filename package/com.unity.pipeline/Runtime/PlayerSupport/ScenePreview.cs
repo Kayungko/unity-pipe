@@ -28,6 +28,7 @@ namespace Unity.Pipeline.Preview
         public string unityVersion;
         public string projectGuid;
         public string asset;
+        public string replacementKind;
         public string bundle;
         public string[] dependencies;
 
@@ -52,7 +53,7 @@ namespace Unity.Pipeline.Preview
         private const int PreviewLayer = 31;
 
         [Serializable]
-        private sealed class Result
+        private class Result
         {
             public bool success;
             public string stage;
@@ -66,6 +67,20 @@ namespace Unity.Pipeline.Preview
             public int renderers;
             public int missingScripts;
             public string[] behaviourTypes;
+        }
+
+        [Serializable]
+        private sealed class ReplacementResult : Result
+        {
+            public string scene;
+            public string node;
+            public string component;
+            public string replacementKind;
+            public string beforeAsset;
+            public string afterAsset;
+            public int materialSlot;
+            public int beforeFrame;
+            public int afterFrame;
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -82,15 +97,20 @@ namespace Unity.Pipeline.Preview
                 int.TryParse(args[index + 3], out width);
                 int.TryParse(args[index + 4], out height);
             }
-            _ = Run(args[index + 1], args[index + 2], width, height);
+            var node = args.Length > index + 6 ? args[index + 5] : null;
+            var slot = 0;
+            if (node != null && !int.TryParse(args[index + 6], out slot))
+                slot = -1;
+            _ = Run(args[index + 1], args[index + 2], width, height, node, slot);
         }
 
-        private static async Task Run(string directory, string output, int width, int height)
+        private static async Task Run(string directory, string output, int width, int height, string node, int slot)
         {
-            var result = new Result
-            {
-                stage = "validate", graphicsDevice = SystemInfo.graphicsDeviceType.ToString(), width = width, height = height
-            };
+            Result result = node == null ? new Result() : new ReplacementResult();
+            result.stage = "validate";
+            result.graphicsDevice = SystemInfo.graphicsDeviceType.ToString();
+            result.width = width;
+            result.height = height;
             var bundles = new List<AssetBundle>();
             var scene = default(Scene);
             try
@@ -103,68 +123,30 @@ namespace Unity.Pipeline.Preview
                     throw new InvalidDataException("Preview package target or Unity version does not match this Player");
                 if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null || GraphicsSettings.currentRenderPipeline != null)
                     throw new InvalidOperationException("Scene Preview requires the Built-in Render Pipeline and a graphics device");
+                if (string.IsNullOrEmpty(package.replacementKind) != (node == null))
+                    throw new ArgumentException("A scene replacement requires a Sprite or Material bundle and a target node");
 
+                var host = SceneManager.GetSceneByBuildIndex(0);
                 result.stage = "dependency";
                 foreach (var dependency in package.dependencies)
                     await LoadBundle(directory, dependency, bundles);
                 result.stage = "bundle";
                 var root = await LoadBundle(directory, package.bundle, bundles);
-                var load = root.LoadAssetAsync<GameObject>(package.asset);
-                await Wait(load);
-                var prefab = load.asset as GameObject;
-                if (prefab == null)
-                    throw new InvalidDataException("Preview Prefab is absent from its bundle");
-
-                result.stage = "scene";
-                scene = SceneManager.CreateScene("UPipe Scene Preview", new CreateSceneParameters(LocalPhysicsMode.Physics3D));
-                var stage = CreateRoot("Preview", scene);
-                stage.SetActive(false);
-                var clone = UnityEngine.Object.Instantiate(prefab, stage.transform, false);
-                foreach (var transform in clone.GetComponentsInChildren<Transform>(true))
-                    transform.gameObject.layer = PreviewLayer;
-                var behaviours = clone.GetComponentsInChildren<MonoBehaviour>(true);
-                result.behaviourTypes = behaviours.Where(item => item != null).Select(item => item.GetType().FullName).Distinct().ToArray();
-                result.missingScripts = behaviours.Count(item => item == null);
-                if (result.missingScripts > 0)
-                    throw new InvalidDataException("Prefab contains missing Player script types");
-                stage.SetActive(true);
-                await Task.Yield();
-
-                result.stage = "render";
-                var rootCanvases = clone.GetComponentsInChildren<Canvas>()
-                    .Where(canvas => canvas.isActiveAndEnabled && canvas.isRootCanvas)
-                    .ToArray();
-                var screenCanvases = rootCanvases.Where(canvas => canvas.renderMode != RenderMode.WorldSpace).ToArray();
-                var camera = CreateCamera(scene, width, height);
-                if (screenCanvases.Length > 0)
+                if (node != null)
                 {
-                    result.renderMode = "canvas";
-                    result.canvases = screenCanvases.Length;
-                    foreach (var canvas in screenCanvases)
-                    {
-                        canvas.renderMode = RenderMode.ScreenSpaceCamera;
-                        canvas.worldCamera = camera;
-                        canvas.targetDisplay = 0;
-                        canvas.planeDistance = 0.5f;
-                    }
+                    await RenderReplacement(host, root, package, node, slot, output, (ReplacementResult)result);
                 }
                 else
                 {
-                    var renderers = clone.GetComponentsInChildren<Renderer>().Where(item => item.enabled).ToArray();
-                    if (renderers.Length > 0)
-                    {
-                        result.renderMode = "mesh";
-                        result.renderers = renderers.Length;
-                        FrameMesh(camera, scene, renderers);
-                    }
-                    else
-                    {
-                        result.renderMode = "worldCanvas";
-                        Canvas.ForceUpdateCanvases();
-                        result.canvases = FrameWorldCanvases(camera, rootCanvases);
-                    }
+                    var load = root.LoadAssetAsync<GameObject>(package.asset);
+                    await Wait(load);
+                    var prefab = load.asset as GameObject;
+                    if (prefab == null)
+                        throw new InvalidDataException("Preview Prefab is absent from its bundle");
+                    result.stage = "scene";
+                    scene = SceneManager.CreateScene("UPipe Scene Preview", new CreateSceneParameters(LocalPhysicsMode.Physics3D));
+                    await RenderPrefab(scene, prefab, output, result);
                 }
-                File.WriteAllBytes(Path.Combine(output, "preview.png"), Capture(camera, width, height));
                 result.success = true;
                 result.stage = "completed";
             }
@@ -196,6 +178,167 @@ namespace Unity.Pipeline.Preview
                     Application.Quit(result.success ? 0 : 1);
                 }
             }
+        }
+
+        private static async Task RenderPrefab(Scene scene, GameObject prefab, string output, Result result)
+        {
+            var stage = CreateRoot("Preview", scene);
+            stage.SetActive(false);
+            var clone = UnityEngine.Object.Instantiate(prefab, stage.transform, false);
+            foreach (var transform in clone.GetComponentsInChildren<Transform>(true))
+                transform.gameObject.layer = PreviewLayer;
+            var behaviours = clone.GetComponentsInChildren<MonoBehaviour>(true);
+            result.behaviourTypes = behaviours.Where(item => item != null).Select(item => item.GetType().FullName).Distinct().ToArray();
+            result.missingScripts = behaviours.Count(item => item == null);
+            if (result.missingScripts > 0)
+                throw new InvalidDataException("Prefab contains missing Player script types");
+            stage.SetActive(true);
+            await Task.Yield();
+
+            result.stage = "render";
+            var rootCanvases = clone.GetComponentsInChildren<Canvas>()
+                .Where(canvas => canvas.isActiveAndEnabled && canvas.isRootCanvas)
+                .ToArray();
+            var screenCanvases = rootCanvases.Where(canvas => canvas.renderMode != RenderMode.WorldSpace).ToArray();
+            var camera = CreateCamera(scene, result.width, result.height);
+            if (screenCanvases.Length > 0)
+            {
+                result.renderMode = "canvas";
+                result.canvases = screenCanvases.Length;
+                foreach (var canvas in screenCanvases)
+                {
+                    canvas.renderMode = RenderMode.ScreenSpaceCamera;
+                    canvas.worldCamera = camera;
+                    canvas.targetDisplay = 0;
+                    canvas.planeDistance = 0.5f;
+                }
+            }
+            else
+            {
+                var renderers = clone.GetComponentsInChildren<Renderer>().Where(item => item.enabled).ToArray();
+                if (renderers.Length > 0)
+                {
+                    result.renderMode = "mesh";
+                    result.renderers = renderers.Length;
+                    FrameMesh(camera, scene, renderers);
+                }
+                else
+                {
+                    result.renderMode = "worldCanvas";
+                    Canvas.ForceUpdateCanvases();
+                    result.canvases = FrameWorldCanvases(camera, rootCanvases);
+                }
+            }
+            File.WriteAllBytes(Path.Combine(output, "preview.png"), Capture(camera, result.width, result.height));
+        }
+
+        private static async Task RenderReplacement(Scene host, AssetBundle bundle, PreviewPackage package, string node,
+            int slot, string output, ReplacementResult result)
+        {
+            result.renderMode = "sceneReplacement";
+            result.node = node;
+            result.replacementKind = package.replacementKind;
+            result.stage = "scene";
+            if (!host.IsValid() || !host.isLoaded)
+                throw new InvalidOperationException("The preview host scene is not loaded");
+            result.scene = host.path;
+
+            var target = FindNode(host, node);
+            if (!target.activeInHierarchy)
+                throw new InvalidOperationException("Target node is inactive: " + node);
+            var cameras = Camera.allCameras.Where(camera => camera.gameObject.scene == host).ToArray();
+            var main = cameras.Where(camera => camera.CompareTag("MainCamera")).ToArray();
+            var candidates = main.Length > 0 ? main : cameras;
+            if (candidates.Length != 1)
+                throw new InvalidOperationException("The host scene needs one enabled MainCamera or one enabled camera");
+            var camera = candidates[0];
+            result.stage = "replacement";
+            if (package.replacementKind == "sprite")
+            {
+                if (slot != 0)
+                    throw new ArgumentException("Material slots only apply to Material replacement");
+                var renderers = target.GetComponents<SpriteRenderer>();
+                if (renderers.Length != 1 || !renderers[0].enabled)
+                    throw new InvalidOperationException("Target node needs exactly one enabled SpriteRenderer");
+                var renderer = renderers[0];
+                var load = bundle.LoadAssetWithSubAssetsAsync<Sprite>(package.asset);
+                await Wait(load);
+                var sprites = load.allAssets.OfType<Sprite>().ToArray();
+                if (sprites.Length != 1)
+                    throw new InvalidDataException("Expected exactly one Sprite in the preview bundle");
+                var original = renderer.sprite;
+                var replacement = sprites[0];
+                result.component = nameof(SpriteRenderer);
+                result.beforeAsset = original != null ? original.name : null;
+                result.afterAsset = replacement.name;
+                CaptureReplacement(camera, output, result, () => renderer.sprite = replacement, () => renderer.sprite = original);
+            }
+            else if (package.replacementKind == "material")
+            {
+                var renderers = target.GetComponents<Renderer>();
+                if (renderers.Length != 1 || !renderers[0].enabled)
+                    throw new InvalidOperationException("Target node needs exactly one enabled Renderer");
+                var renderer = renderers[0];
+                var load = bundle.LoadAssetAsync<Material>(package.asset);
+                await Wait(load);
+                var replacement = load.asset as Material;
+                if (replacement == null)
+                    throw new InvalidDataException("Material is absent from the preview bundle");
+                var original = renderer.sharedMaterials;
+                if (slot < 0 || slot >= original.Length)
+                    throw new ArgumentOutOfRangeException(nameof(slot), "Material slot is outside the renderer's material array");
+                var updated = (Material[])original.Clone();
+                updated[slot] = replacement;
+                result.component = renderer.GetType().Name;
+                result.materialSlot = slot;
+                result.beforeAsset = original[slot] != null ? original[slot].name : null;
+                result.afterAsset = replacement.name;
+                CaptureReplacement(camera, output, result, () => renderer.sharedMaterials = updated, () => renderer.sharedMaterials = original);
+            }
+            else
+            {
+                throw new InvalidDataException("Unknown replacement kind in the preview bundle");
+            }
+        }
+
+        private static GameObject FindNode(Scene host, string path)
+        {
+            var parts = path.Split('/');
+            if (parts.Length < 2 || parts[0] != "" || parts.Skip(1).Any(string.IsNullOrEmpty))
+                throw new ArgumentException("Expected an absolute node path such as /Stage/Target");
+            var siblings = host.GetRootGameObjects().Select(root => root.transform);
+            Transform current = null;
+            foreach (var part in parts.Skip(1))
+            {
+                var matches = siblings.Where(item => item.name == part).Take(2).ToArray();
+                if (matches.Length == 0)
+                    throw new InvalidOperationException("Target node was not found: " + path);
+                if (matches.Length > 1)
+                    throw new InvalidOperationException("Target node path is ambiguous at: " + part);
+                current = matches[0];
+                siblings = current.Cast<Transform>();
+            }
+            return current.gameObject;
+        }
+
+        private static void CaptureReplacement(Camera camera, string output, ReplacementResult result, Action replace, Action restore)
+        {
+            result.stage = "render";
+            result.beforeFrame = Time.frameCount;
+            var before = Capture(camera, result.width, result.height);
+            byte[] after;
+            try
+            {
+                replace();
+                result.afterFrame = Time.frameCount;
+                after = Capture(camera, result.width, result.height);
+            }
+            finally
+            {
+                restore();
+            }
+            File.WriteAllBytes(Path.Combine(output, "before.png"), before);
+            File.WriteAllBytes(Path.Combine(output, "preview.png"), after);
         }
 
         private static GameObject CreateRoot(string name, Scene scene)
@@ -280,6 +423,7 @@ namespace Unity.Pipeline.Preview
         {
             var target = RenderTexture.GetTemporary(width, height, 24, RenderTextureFormat.ARGB32);
             var previous = RenderTexture.active;
+            var previousTarget = camera.targetTexture;
             var pixels = new Texture2D(width, height, TextureFormat.RGB24, false);
             try
             {
@@ -292,7 +436,7 @@ namespace Unity.Pipeline.Preview
             }
             finally
             {
-                camera.targetTexture = null;
+                camera.targetTexture = previousTarget;
                 RenderTexture.active = previous;
                 RenderTexture.ReleaseTemporary(target);
                 UnityEngine.Object.Destroy(pixels);

@@ -64,6 +64,18 @@ upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI
 
 屏幕空间 Canvas 统一由预览相机渲染，Overlay 和 Camera 模式都可用。只有 World Space Canvas 的 Prefab 按首个有效根画布的朝向取景，范围包含所有有效根画布。带 3D Renderer 的 Prefab 仍按模型范围取景。PNG 默认 `768×768`，可用 `--width 720 --height 1280` 指定尺寸，宽高各支持 64 至 4096 像素。请用当前 UPM 包构建专用 Player，构建会关闭 Runtime Pipeline 服务。
 
+### 场景内 Sprite 和 Material 替换预览
+
+用实际要预览的 Built-in 场景构建专用 Player。场景需有唯一启用的 `MainCamera` 或仅一台启用的相机。CLI 按完整层级路径定位目标，同级重名导致歧义时会报错。
+
+```powershell
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --json -- preview-pack --asset Assets/Materials/Green.mat --replacement-kind material --output-dir "D:/CI/green-content" --confirm
+upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --json -- build --target StandaloneWindows64 --option Development --scene Assets/PreviewHost.unity --scene-preview-bundle "D:/CI/green-content" --output-path "D:/CI/PreviewPlayer/Preview.exe" --confirm
+upipe preview --player-exe "D:/CI/PreviewPlayer/Preview.exe" --bundle-dir "D:/CI/green-content" --node "/Stage/Target" --material-slot 0 --before-path "D:/CI/Target-before.png" --output-path "D:/CI/Target-after.png" --json
+```
+
+材质槽从 0 开始。替换 Sprite 时用 `--replacement-kind sprite` 打包只含一个 Sprite 的资源，并指定带 `SpriteRenderer` 的节点。前后画面在同一帧由同一台场景相机分别渲染，替换只发生在专用 Player 内存中。回传包含场景、节点、组件、前后资源名、帧号、两张 PNG 和 Player 日志路径。
+
 ## 快速开始
 
 ### 前置条件
