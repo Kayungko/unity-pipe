@@ -204,6 +204,7 @@ upipe asset-blame --at REV --node '/Root/Same[2]' --component BoxCollider --fiel
 upipe asset-conflict --base BASE --ours OURS --theirs THEIRS Assets/UI/Screen.prefab --json
 upipe asset-diff --from OLD --to NEW Assets/UI/Screen.prefab --json
 upipe asset-diff --from OLD --to NEW Assets/Config/Weapons.asset --json
+upipe asset-merge-preview --project-path D:/Project --base BASE --ours OURS --theirs THEIRS --unity-yaml-merge "D:/Unity/Editor/Data/Tools/UnityYAMLMerge.exe" Assets/UI/Screen.prefab --json
 upipe asset-diff --include-inherited --from OLD --to NEW Assets/UI/Screen.prefab --json
 ```
 
@@ -226,6 +227,10 @@ GUID 解析范围为选定版本中纳管的 `Assets/` 和 `Packages/`。报告�
 `asset-blame` 从指定版本的文本 Prefab 或 Scene 追溯已序列化字段。使用 `asset-diff` 提供的节点路径、组件类型和字段 JSON Pointer。同名节点可用 `[1]`、`[2]` 或 `--node-id` 区分。同类型组件有多个时，返回候选 File ID，可用 `--component-id` 指定。追溯过程中使用组件 File ID 和资产 GUID，纯移动和其他字段修改不会覆盖目标字段的历史。嵌套 Prefab 的继承字段可在源 Prefab 中查询，已保存的覆盖可查询实例的序列化字段。
 
 `asset-diff` 和 `asset-summary` 支持文本 `.asset`。按文件内 File ID 匹配主对象与子对象，展开 YAML 序列中的索引和字段。Unity 打包成标量的原生数组保留序列化值。引用各侧提供 `target`，同文件引用显示对象名，外部引用显示各版本的路径及状态；JSON 中原有 `fileId` 和 `asset` 仍可读。目标移动或删除时，`asset-summary` 也会报告内容未编辑的文本 `.asset` 的引用变化。对二进制 `.asset`，`asset-diff` 返回 `20` 和格式提示，`asset-summary` 在覆盖范围中标记被跳过的版本并继续输出报告。
+
+`asset-merge-preview` 复用 `asset-conflict` 的三侧快照参数。传入本项目 Unity 版本附带的 UnityYAMLMerge。命令在独立临时目录运行，关闭外部 fallback。成功预演返回 `status: "merged"`、候选路径、SHA256 和相对双方的字段差异。可用 `--output-dir` 指定项目外的现有父目录，默认使用系统临时目录。
+
+冲突是预演结果，返回 `status: "conflicted"` 和退出码 `0`，并附三方分析及可用的原生冲突报告。只有通过工具和结构回读检查的结果才有 `candidate`。纯新增或纯删除无法交给原生三方工具，返回 `20`。参数错误返回 `2`，预演失败返回 `20`，超时返回 `21`。预演只输出候选文件，项目和版本库保持原状。
 
 成功定位时，`lastChange` 包含 Git 提交或 P4 Changelist、作者、UTC 时间、当时路径以及字段前后值。Git 沿第一父提交，使用作者时间。P4 沿选定 depot 路径下的已提交文件修订，使用提交用户和时间。浅克隆、耗尽 `--limit`（默认 256 步）或历史资产无法读取为 Unity 文本时，返回 `history_insufficient`。缺失字段返回 `field_not_found`，资产路径不存在返回 `asset_not_found`。这些查询状态返回退出码 `0`。
 

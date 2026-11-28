@@ -65,6 +65,8 @@ type conflictTree struct {
 	snapshot ConflictSnapshot
 	index    GuidIndex
 	nodes    map[string]*nodeGroup
+	data     []byte
+	docs     []document
 }
 
 // ExplainConflict compares three versioned text assets, without loading or
@@ -82,6 +84,11 @@ func ExplainConflict(ctx context.Context, base, ours, theirs *Version, name stri
 		}
 		sides[i] = side
 	}
+	return explainConflictTrees(ctx, sides, name)
+}
+
+func explainConflictTrees(ctx context.Context, sides [3]conflictTree, name string) (AssetConflictResult, error) {
+	result := AssetConflictResult{Path: name, Nodes: []ConflictNode{}}
 	result.Base, result.Ours, result.Theirs = sides[0].snapshot, sides[1].snapshot, sides[2].snapshot
 	if !result.Base.Exists && !result.Ours.Exists && !result.Theirs.Exists {
 		return result, fmt.Errorf("%s is absent in all three snapshots", name)
@@ -120,6 +127,7 @@ func readConflictTree(ctx context.Context, version *Version, name string) (confl
 	if err != nil {
 		return result, fmt.Errorf("%s at %s: %w", name, version.Revision, err)
 	}
+	result.data, result.docs = data, docs
 	result.index, err = version.readGUIDs(ctx, func(string) error { return nil })
 	if err != nil {
 		return result, err

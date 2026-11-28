@@ -26,6 +26,8 @@
 
 **v0.1.47**（2026-11-28，`f37bd52`）已发布。文本 `.asset` 对象、字段和引用变化已用隔离 Unity 2022.3.23f1 的 Git / P4 快照验收。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.47)
 
+**v0.1.48**（2026-11-28，`9e75763`）已发布。Windows Runner 模板和脚本已验证选测、失败留档、超时回收与 IL2CPP 恢复构建。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.48)
+
 ## 开发顺序与验收
 
 未发布版本号为计划，按顺序推进。各版用隔离的 Unity 2022.3.23f1 工程或对应版本生成的快照验收。GPU 继续暂缓，SGAME 先不动。
@@ -46,7 +48,7 @@
 | v0.1.46 | 本地 Scene Preview 支持独立 World Space Canvas。 | 隔离 Windows x64 IL2CPP 开发 Player 验证旋转、缩放、多个根画布和横竖屏取景，零面积返回 `20`。回归屏幕空间 Canvas、3D 和进程回收。 |
 | v0.1.47 | `asset-diff` 和 `asset-summary` 支持文本 `.asset` 的对象、字段、数组差异，以及各侧引用解释。 | 隔离 Unity 2022.3.23f1 生成同一批 Git / P4 快照，覆盖子对象、数组、同文件引用、目标移动和删除、真实二进制资产提示。回归旧 `--json` 和退出码。 |
 | v0.1.48 | Windows Runner CI 模板和结果留档，复用选测、NUnit XML 和 batchmode 构建。 | 验证零匹配、测试失败时仍归档结果和日志、构建失败退出码、超时回收。 |
-| v0.1.49 | 使用 Unity 2022.3 的 UnityYAMLMerge 预演 Prefab 和 Scene 三方合并。 | 在临时目录验证自动合并、同字段冲突和删除修改冲突，回读候选文件差异。 |
+| v0.1.49 | `asset-merge-preview` 使用 UnityYAMLMerge 预演 Prefab 和 Scene 三方合并。 | 用 Unity 2022.3.23f1 验证双方独立编辑和同值修改、同字段冲突、删除修改冲突。回读候选文件及相对双方的差异，核对源工作区状态。 |
 | v0.1.50 | 在隔离 Player 的场景上下文中预览 Sprite 或 Material 替换。 | Built-in 验证指定节点、替换前后截图和退出回收。URP 单独评估兼容性。 |
 | 暂缓 | GPU 计数器和耗时分析。 | 恢复前先确认目标开发 Player 能稳定采到 GPU 数据，再检验单位以及零值和缺测的区分。 |
 
