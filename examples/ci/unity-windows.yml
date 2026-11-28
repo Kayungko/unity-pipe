@@ -1,0 +1,64 @@
+name: Unity Windows CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Build a Windows Player after tests pass
+        type: boolean
+        default: true
+      require_match:
+        description: Fail the run if zero tests match
+        type: boolean
+        default: false
+      affected_from:
+        description: Baseline Git revision for affected test selection
+        type: string
+      affected_to:
+        description: Target Git revision for affected test selection
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  unity:
+    runs-on: [self-hosted, Windows, X64, unity-2022]
+    timeout-minutes: 55
+    env:
+      UNITY_EXE: ${{ vars.UNITY_EXE }}
+      UPIPE_EXE: ${{ vars.UPIPE_EXE }}
+      UNITY_PROJECT_PATH: ${{ vars.UNITY_PROJECT_PATH || '.' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select report directory
+        id: paths
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP "unity-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          "directory=$path" >> $env:GITHUB_OUTPUT
+      - name: Run Unity tests and build
+        shell: pwsh
+        env:
+          ARTIFACT_DIR: ${{ steps.paths.outputs.directory }}
+          BUILD_PLAYER: ${{ inputs.build }}
+          REQUIRE_MATCH: ${{ inputs.require_match }}
+          AFFECTED_FROM: ${{ inputs.affected_from }}
+          AFFECTED_TO: ${{ inputs.affected_to }}
+        run: |
+          ./scripts/run-unity-ci.ps1 -Upipe $env:UPIPE_EXE -Unity $env:UNITY_EXE `
+            -ProjectPath $env:UNITY_PROJECT_PATH -ArtifactDirectory $env:ARTIFACT_DIR `
+            -AffectedFrom $env:AFFECTED_FROM -AffectedTo $env:AFFECTED_TO `
+            -RequireMatch:($env:REQUIRE_MATCH -eq 'true') -Build:($env:BUILD_PLAYER -eq 'true')
+          exit $LASTEXITCODE
+      - name: Archive Unity reports
+        if: ${{ always() && steps.paths.outputs.directory != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: unity-windows-reports-${{ github.run_attempt }}
+          path: ${{ steps.paths.outputs.directory }}/reports/
+          retention-days: 14
+          if-no-files-found: warn

@@ -24,6 +24,8 @@
 
 **v0.1.46**（2026-11-28，`eaa6630`）已发布，包含 v0.1.43 至 v0.1.45。隔离 Unity 2022.3.23f1 验证了临时 batchmode Editor 构建，以及 Windows x64 IL2CPP 开发 Player 的 3D、屏幕空间和 World Space Canvas 预览。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.46)
 
+**v0.1.47**（2026-11-28，`f37bd52`）已发布。文本 `.asset` 对象、字段和引用变化已用隔离 Unity 2022.3.23f1 的 Git / P4 快照验收。11 个附件回下载后 SHA256 全部一致。 [发布记录](https://github.com/Kayungko/unity-pipe/releases/tag/v0.1.47)
+
 ## 开发顺序与验收
 
 未发布版本号为计划，按顺序推进。各版用隔离的 Unity 2022.3.23f1 工程或对应版本生成的快照验收。GPU 继续暂缓，SGAME 先不动。

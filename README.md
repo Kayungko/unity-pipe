@@ -48,6 +48,8 @@ upipe run --unity "D:/Unity/Editor/Unity.exe" --project-path "D:/CI/Project" --l
 
 `--timeout` 覆盖启动与执行。取消或超时后回收本次启动的 Editor，已有 Editor 保持独立。写操作要在命令中显式保存。测试支持 NUnit XML。构建使用 `--dry-run` 预检或 `--confirm` 执行，按构建 ID 等到 BuildReport。已提交的构建被中断时返回最后一次观察到的状态，输出目录可能包含不完整的文件。二进制管道和后台任务可用常驻 Editor 的原有入口。
 
+Windows Runner 可使用 [GitHub Actions 模板](examples/ci/unity-windows.yml) 和 [PowerShell 脚本](scripts/run-unity-ci.ps1) 执行测试、可选 Player 构建和结果留档。见 [Windows Runner CI 用法](docs/CI-WINDOWS.md)。
+
 ### 本地 Scene Preview
 
 在 Windows x64 上可为使用 Built-in Render Pipeline 的 Unity 工程预览带有 3D Renderer 或 Canvas 的 Prefab。先准备一个空场景作为预览宿主，再按顺序运行以下命令。
